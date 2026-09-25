@@ -48,6 +48,14 @@
   },
   "license": "MIT",
   "author": "grenaad",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/grenaad/storyink.git"
+  },
+  "homepage": "https://github.com/grenaad/storyink#readme",
+  "bugs": {
+    "url": "https://github.com/grenaad/storyink/issues"
+  },
   "keywords": [
     "diagram",
     "architecture",
