@@ -5,34 +5,209 @@
   "subtitle": "Authorization code flow for a single-page app",
   "autonumber": true,
   "participants": [
-    { "id": "user", "label": "User", "kind": "actor" },
-    { "id": "spa", "label": "Web app" },
-    { "id": "auth", "label": "Auth server", "kind": "service" },
-    { "id": "api", "label": "Resource API", "kind": "service" }
+    {
+      "id": "user",
+      "label": "User",
+      "kind": "actor"
+    },
+    {
+      "id": "spa",
+      "label": "Web app"
+    },
+    {
+      "id": "auth",
+      "label": "Auth server",
+      "kind": "service"
+    },
+    {
+      "id": "api",
+      "label": "Resource API",
+      "kind": "service"
+    }
   ],
   "messages": [
-    { "id": "click", "from": "user", "to": "spa", "label": "Sign in" },
-    { "id": "pkce", "from": "spa", "to": "spa", "label": "make verifier + challenge", "kind": "self" },
-    { "id": "authorize", "from": "spa", "to": "auth", "label": "GET /authorize?challenge" },
-    { "id": "login", "from": "auth", "to": "user", "label": "login + consent", "kind": "return" },
-    { "id": "grant", "from": "user", "to": "auth", "label": "approve" },
-    { "id": "code", "from": "auth", "to": "spa", "label": "redirect ?code", "kind": "return" },
-    { "id": "token", "from": "spa", "to": "auth", "label": "POST /token (code, verifier)" },
-    { "id": "tokens", "from": "auth", "to": "spa", "label": "access + refresh token", "kind": "return" },
-    { "id": "denied", "from": "auth", "to": "spa", "label": "invalid_grant", "kind": "return" },
-    { "id": "call", "from": "spa", "to": "api", "label": "GET /me (Bearer)" },
-    { "id": "audit", "from": "api", "to": "auth", "label": "token revoked?", "kind": "async" },
-    { "id": "me", "from": "api", "to": "spa", "label": "200 profile", "kind": "return" }
+    {
+      "id": "click",
+      "from": "user",
+      "to": "spa",
+      "label": "Sign in"
+    },
+    {
+      "id": "pkce",
+      "from": "spa",
+      "to": "spa",
+      "label": "make verifier + challenge",
+      "kind": "self"
+    },
+    {
+      "id": "authorize",
+      "from": "spa",
+      "to": "auth",
+      "label": "GET /authorize?challenge"
+    },
+    {
+      "id": "login",
+      "from": "auth",
+      "to": "user",
+      "label": "login + consent",
+      "kind": "return"
+    },
+    {
+      "id": "grant",
+      "from": "user",
+      "to": "auth",
+      "label": "approve"
+    },
+    {
+      "id": "code",
+      "from": "auth",
+      "to": "spa",
+      "label": "redirect ?code",
+      "kind": "return"
+    },
+    {
+      "id": "token",
+      "from": "spa",
+      "to": "auth",
+      "label": "POST /token (code, verifier)"
+    },
+    {
+      "id": "tokens",
+      "from": "auth",
+      "to": "spa",
+      "label": "access + refresh token",
+      "kind": "return"
+    },
+    {
+      "id": "denied",
+      "from": "auth",
+      "to": "spa",
+      "label": "invalid_grant",
+      "kind": "return"
+    },
+    {
+      "id": "call",
+      "from": "spa",
+      "to": "api",
+      "label": "GET /me (Bearer)"
+    },
+    {
+      "id": "audit",
+      "from": "api",
+      "to": "auth",
+      "label": "token revoked?",
+      "kind": "async"
+    },
+    {
+      "id": "me",
+      "from": "api",
+      "to": "spa",
+      "label": "200 profile",
+      "kind": "return"
+    }
   ],
   "activations": [
-    { "participant": "auth", "start": "authorize", "end": "tokens" },
-    { "participant": "api", "start": "call", "end": "me" }
+    {
+      "participant": "auth",
+      "start": "authorize",
+      "end": "tokens"
+    },
+    {
+      "participant": "api",
+      "start": "call",
+      "end": "me"
+    }
   ],
   "notes": [
-    { "text": "verifier never leaves the browser", "over": ["spa"], "after": "pkce" }
+    {
+      "text": "verifier never leaves the browser",
+      "over": [
+        "spa"
+      ],
+      "after": "pkce"
+    }
   ],
   "frames": [
-    { "kind": "alt", "label": "verifier matches", "start": "tokens", "end": "denied", "sections": [{ "label": "otherwise", "start": "denied" }] },
-    { "kind": "opt", "label": "every request", "start": "call", "end": "me" }
-  ]
+    {
+      "kind": "alt",
+      "label": "verifier matches",
+      "start": "tokens",
+      "end": "denied",
+      "sections": [
+        {
+          "label": "otherwise",
+          "start": "denied"
+        }
+      ]
+    },
+    {
+      "kind": "opt",
+      "label": "every request",
+      "start": "call",
+      "end": "me"
+    }
+  ],
+  "story": {
+    "steps": [
+      {
+        "at": 0.3,
+        "pulse": "click",
+        "caption": "The user starts sign-in",
+        "stop": "Start"
+      },
+      {
+        "at": "+0.1",
+        "pulse": "pkce",
+        "caption": "The app makes a one-time verifier and its hash"
+      },
+      {
+        "at": "+0.2",
+        "pulse": "authorize",
+        "caption": "Only the hash (challenge) goes to the auth server",
+        "stop": "Authorize"
+      },
+      {
+        "at": "+0.2",
+        "pulse": "login"
+      },
+      {
+        "at": "+0.1",
+        "pulse": "grant"
+      },
+      {
+        "at": "+0.1",
+        "pulse": "code",
+        "caption": "A short-lived code comes back via redirect"
+      },
+      {
+        "at": "+0.3",
+        "pulse": "token",
+        "caption": "Code + verifier are exchanged for tokens",
+        "stop": "Exchange"
+      },
+      {
+        "at": "+0.1",
+        "pulse": "tokens"
+      },
+      {
+        "at": "+0.1",
+        "pulse": "denied",
+        "caption": "A wrong verifier gets invalid_grant"
+      },
+      {
+        "at": "+0.4",
+        "pulse": "call",
+        "caption": "The access token calls the API",
+        "stop": "Use"
+      },
+      {
+        "at": "+0.1",
+        "pulse": "audit"
+      },
+      {
+        "at": "+0.1",
+        "pulse": "me"
+      }
+    ]
+  }
 }

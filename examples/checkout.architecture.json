@@ -47,7 +47,12 @@
       "label": "Orders",
       "kind": "service",
       "parent": "app",
-      "detail": "Go"
+      "detail": "Go",
+      "counter": {
+        "id": "orders",
+        "value": 0,
+        "label": "orders"
+      }
     },
     {
       "id": "payments",
@@ -134,5 +139,76 @@
       "to": "stripe",
       "label": "charge"
     }
-  ]
+  ],
+  "story": {
+    "steps": [
+      {
+        "at": 0.3,
+        "reveal": [
+          "web"
+        ],
+        "caption": "A shopper presses Pay",
+        "stop": "Request"
+      },
+      {
+        "at": "+0.2",
+        "pulse": "web->gateway"
+      },
+      {
+        "reveal": [
+          "gateway"
+        ],
+        "caption": "The gateway authenticates the session",
+        "highlight": [
+          "cache"
+        ]
+      },
+      {
+        "at": "+0.2",
+        "pulse": "gateway->orders"
+      },
+      {
+        "reveal": [
+          "orders"
+        ],
+        "counter": {
+          "id": "orders",
+          "to": 1
+        }
+      },
+      {
+        "at": "+0.2",
+        "pulse": "orders->payments",
+        "caption": "Orders asks Payments to charge the card",
+        "stop": "Charge"
+      },
+      {
+        "at": "+0",
+        "pulse": "payments->stripe"
+      },
+      {
+        "at": "+0.3",
+        "pulse": "orders->db",
+        "caption": "The order is stored and an event published",
+        "stop": "Persist"
+      },
+      {
+        "at": "+0",
+        "pulse": {
+          "route": [
+            "orders->events",
+            "events->receipts"
+          ]
+        }
+      },
+      {
+        "at": "+0.2",
+        "counter": {
+          "id": "orders",
+          "to": 128
+        },
+        "caption": "Every checkout runs the same path"
+      }
+    ]
+  }
 }
