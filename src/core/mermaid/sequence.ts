@@ -1,4 +1,4 @@
-import type { Activation, Frame, FrameKind, Message, MessageKind, Note, Participant, SequenceSpec } from "../spec.ts"
+import type { Activation, Band, Frame, FrameKind, Message, MessageKind, Note, Participant, ParticipantBox, SequenceSpec } from "../spec.ts"
 import type { Diagnostic } from "../validate.ts"
 import { cleanLabel } from "./flowchart.ts"
 
@@ -15,6 +15,12 @@ const ARROWS: [string, MessageKind][] = [
 const ARROW_RE = new RegExp(
   `^(.+?)\\s*(${ARROWS.map(([a]) => a.replace(/[-)>]/g, (c) => `\\${c}`)).join("|")})\\s*([+-]?)\\s*(.+?)\\s*:(.*)$`,
 )
+
+const COLOR_WORD = /^(rgba?\([^)]*\)|hsla?\([^)]*\)|#[0-9a-f]{3,8}|transparent|aqua|black|blue|fuchsia|gray|grey|green|lime|maroon|navy|olive|orange|purple|red|silver|teal|white|yellow|lightblue|lightgreen|lightgrey|lightyellow|pink|beige|ivory|lavender|wheat|khaki)\b\s*/i
+
+function stripColor(s: string): string {
+  return cleanLabel(s.trim().replace(COLOR_WORD, ""))
+}
 
 interface OpenFrame {
   kind: FrameKind | "rect" | "box"
@@ -33,6 +39,11 @@ export function parseSequence(src: string): { spec: SequenceSpec; diagnostics: D
   const activations: Activation[] = []
   const open = new Map<string, number[]>()
   const stack: OpenFrame[] = []
+  const bands: Band[] = []
+  const boxes: ParticipantBox[] = []
+  let openBox: ParticipantBox | undefined
+  // messages.length when the last block closed: a note right after `end` belongs outside it.
+  let endedAt = -1
   let autonumber = false
   let title: string | undefined
   let line = 0
@@ -47,6 +58,7 @@ export function parseSequence(src: string): { spec: SequenceSpec; diagnostics: D
       byId.set(key, p)
       participants.push(p)
     } else if (label) p.label = label
+    if (openBox && !openBox.participants.includes(key) && !boxes.some((b) => b.participants.includes(key))) openBox.participants.push(key)
     return key
   }
   const activate = (id: string, start: number) => {
@@ -115,13 +127,23 @@ export function parseSequence(src: string): { spec: SequenceSpec; diagnostics: D
       else if (where === "left of") note.left = ids[0]
       else note.right = ids[0]
       if (messages.length) note.after = messages.length - 1
+      if (endedAt === messages.length && messages.length) note.outside = true
       notes.push(note)
       continue
     }
-    if ((m = /^(loop|alt|opt|par|critical|break|rect|box)\b\s*(.*)$/.exec(s))) {
+    if ((m = /^box\b\s*(.*)$/.exec(s))) {
+      const label = stripColor(m[1])
+      openBox = { participants: [], ...(label ? { label } : {}) }
+      stack.push({ kind: "box", start: messages.length, sections: [] })
+      continue
+    }
+    if ((m = /^rect\b\s*(.*)$/.exec(s))) {
+      if (m[1].trim()) warn("rect colour is ignored; storyink uses a theme band")
+      stack.push({ kind: "rect", start: messages.length, sections: [] })
+      continue
+    }
+    if ((m = /^(loop|alt|opt|par|critical|break)\b\s*(.*)$/.exec(s))) {
       const kind = m[1] as OpenFrame["kind"]
-      if (kind === "rect") warn("\"rect\" highlight is ignored")
-      if (kind === "box") warn("participant \"box\" grouping is ignored")
       stack.push({ kind, label: m[2] ? cleanLabel(m[2]) : undefined, start: messages.length, sections: [] })
       continue
     }
@@ -137,7 +159,16 @@ export function parseSequence(src: string): { spec: SequenceSpec; diagnostics: D
         warn("\"end\" without an open block")
         continue
       }
-      if (top.kind === "rect" || top.kind === "box") continue
+      endedAt = messages.length
+      if (top.kind === "box") {
+        if (openBox?.participants.length) boxes.push(openBox)
+        openBox = undefined
+        continue
+      }
+      if (top.kind === "rect") {
+        if (messages.length - 1 >= top.start) bands.push({ start: top.start, end: messages.length - 1 })
+        continue
+      }
       const end = messages.length - 1
       if (end < top.start) {
         warn(`empty "${top.kind}" block is dropped`)
@@ -185,6 +216,8 @@ export function parseSequence(src: string): { spec: SequenceSpec; diagnostics: D
       activations,
       notes,
       frames,
+      bands,
+      boxes,
       autonumber,
     },
     diagnostics,

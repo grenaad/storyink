@@ -30,6 +30,9 @@ const KINDS: Record<string, KindStyle> = {
   final: { shape: "bullseye", accent: "plain", tag: "" },
   state: { shape: "panel", accent: "blue", tag: "" },
   composite: { shape: "panel", accent: "blue", tag: "" },
+  choice: { shape: "choice", accent: "gold", tag: "" },
+  fork: { shape: "bar", accent: "plain", tag: "" },
+  join: { shape: "bar", accent: "plain", tag: "" },
   // sequence participants
   participant: { shape: "panel", accent: "blue", tag: "" },
   actor: { shape: "actor", accent: "plain", tag: "actor" },
@@ -56,8 +59,10 @@ export interface NodeInput {
 export function sizeNode(n: NodeInput, opts: { tags: boolean }): SceneNode {
   const style = kindStyle(n.kind)
   const shape = style.shape
-  if (shape === "dot" || shape === "bullseye") {
-    const d = shape === "dot" ? 18 : 22
+  if (shape === "dot" || shape === "bullseye" || shape === "choice" || shape === "bar") {
+    const d = shape === "dot" ? 18 : shape === "choice" ? 26 : 22
+    const w = shape === "bar" ? 80 : d
+    const h = shape === "bar" ? 6 : d
     return {
       id: n.id,
       kind: n.kind,
@@ -68,9 +73,9 @@ export function sizeNode(n: NodeInput, opts: { tags: boolean }): SceneNode {
       tag: "",
       x: 0,
       y: 0,
-      w: d,
-      h: d,
-      text: { tagY: 0, labelY: [], detailY: [], cx: d / 2 },
+      w,
+      h,
+      text: { tagY: 0, labelY: [], detailY: [], cx: w / 2 },
     }
   }
   const maxChars = shape === "diamond" ? 18 : G.maxLabelChars

@@ -200,7 +200,7 @@ function parseStatement(ctx: Ctx, s: string) {
 
 export function parseFlowchart(src: string): { spec: GraphSpec; diagnostics: Diagnostic[] } {
   const ctx: Ctx = { nodes: new Map(), order: [], edges: [], groups: [], stack: [], diagnostics: [], line: 0 }
-  let direction: "TB" | "LR" = "TB"
+  let direction: "TB" | "BT" | "LR" | "RL" = "TB"
   let title: string | undefined
   const lines = src.split(/\r?\n/)
   let header = false
@@ -224,8 +224,7 @@ export function parseFlowchart(src: string): { spec: GraphSpec; diagnostics: Dia
       if (!header && hm) {
         header = true
         const d = (hm[2] ?? "TB").toUpperCase()
-        if (d === "LR" || d === "RL") direction = "LR"
-        if (d === "RL" || d === "BT") warn(ctx, `direction ${d} is drawn as ${d === "RL" ? "LR" : "TB"}`)
+        direction = d === "LR" || d === "RL" || d === "BT" ? d : "TB"
         continue
       }
       if (/^(classDef|class|style|linkStyle|click)\b/.test(stmt)) {
@@ -236,8 +235,13 @@ export function parseFlowchart(src: string): { spec: GraphSpec; diagnostics: Dia
         title = stmt.slice(6).trim()
         continue
       }
-      if (/^direction\s+\w+/.test(stmt)) {
-        warn(ctx, "per-subgraph direction is ignored")
+      const dm = /^direction\s+(\w+)/.exec(stmt)
+      if (dm) {
+        const d = dm[1].toUpperCase()
+        const g = ctx.groups.find((x) => x.id === ctx.stack[ctx.stack.length - 1])
+        const nd = d === "TD" ? "TB" : d
+        if (g && (nd === "TB" || nd === "BT" || nd === "LR" || nd === "RL")) g.direction = nd
+        else warn(ctx, `direction "${dm[1]}" ignored here`, "use it inside a subgraph, or in the header")
         continue
       }
       const sg = /^subgraph\b\s*(.*)$/.exec(stmt)

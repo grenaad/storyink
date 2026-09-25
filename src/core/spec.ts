@@ -3,13 +3,15 @@
 export const DIAGRAM_TYPES = ["architecture", "workflow", "sequence", "dataflow", "lifecycle"] as const
 export type DiagramType = (typeof DIAGRAM_TYPES)[number]
 
-export type Direction = "TB" | "LR"
+/** TB top-to-bottom, BT bottom-to-top, LR left-to-right, RL right-to-left. */
+export type Direction = "TB" | "BT" | "LR" | "RL"
+export const DIRECTIONS = ["TB", "BT", "LR", "RL"] as const
 
 export const GRAPH_NODE_KINDS = {
-  architecture: ["service", "database", "store", "queue", "client", "user", "external", "cache", "function"],
-  dataflow: ["service", "database", "store", "queue", "client", "user", "external", "cache", "function"],
-  workflow: ["start", "end", "step", "decision", "io"],
-  lifecycle: ["initial", "final", "state", "composite"],
+  architecture: ["service", "database", "store", "queue", "client", "user", "external", "cache", "function", "note"],
+  dataflow: ["service", "database", "store", "queue", "client", "user", "external", "cache", "function", "note"],
+  workflow: ["start", "end", "step", "decision", "io", "note"],
+  lifecycle: ["initial", "final", "state", "composite", "choice", "fork", "join", "note"],
 } as const
 
 export type ArchitectureKind = (typeof GRAPH_NODE_KINDS)["architecture"][number]
@@ -34,6 +36,7 @@ export type ArrowMode = (typeof ARROWS)[number]
 
 interface Common {
   $schema?: string
+  style?: StyleOptions
   type: DiagramType
   title: string
   subtitle?: string
@@ -51,6 +54,8 @@ export interface GraphNode {
   tag?: string
   /** Containing group id (or composite state id in lifecycle diagrams). */
   parent?: string
+  /** Composite states only: direction of their inner layout (best-effort). */
+  direction?: Direction
 }
 
 export interface GraphGroup {
@@ -59,6 +64,14 @@ export interface GraphGroup {
   /** Free-form flavour: vpc, cluster, tier, region, zone, boundary... */
   kind?: string
   parent?: string
+  /** Lay out this group's members in their own direction (best-effort). */
+  direction?: Direction
+}
+
+/** Diagram-level presentation options. */
+export interface StyleOptions {
+  /** Draw arrowheads on graph edges (default false: Kit style, ports at both ends). Sequences always have heads. */
+  arrowheads?: boolean
 }
 
 export interface GraphEdge {
@@ -72,6 +85,7 @@ export interface GraphEdge {
 
 export interface GraphSpec extends Common {
   type: "architecture" | "workflow" | "dataflow" | "lifecycle"
+  /** Omit to auto-pick TB or LR by aspect ratio (closest to 16:10). */
   direction?: Direction
   nodes: GraphNode[]
   edges?: GraphEdge[]
@@ -109,6 +123,24 @@ export interface Note {
   right?: string
   /** Place after this message; omit to place before the first message. */
   after?: MessageRef
+  /**
+   * By default a note stays inside the innermost frame that contains its anchor
+   * message. `outside: true` draws it after every frame that closes at the anchor.
+   */
+  outside?: boolean
+}
+
+/** A background band behind a range of messages (Mermaid `rect`). */
+export interface Band {
+  start: MessageRef
+  end: MessageRef
+  label?: string
+}
+
+/** A labelled group of adjacent participants (Mermaid `box`). */
+export interface ParticipantBox {
+  label?: string
+  participants: string[]
 }
 
 export interface FrameSection {
@@ -132,6 +164,8 @@ export interface SequenceSpec extends Common {
   activations?: Activation[]
   notes?: Note[]
   frames?: Frame[]
+  bands?: Band[]
+  boxes?: ParticipantBox[]
   autonumber?: boolean
 }
 

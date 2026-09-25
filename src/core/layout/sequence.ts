@@ -1,5 +1,5 @@
 import { geometry as G, type as T } from "../../theme/tokens.ts"
-import type { Box, Pt, Scene, SceneActivation, SceneEdge, SceneFrame, SceneLifeline, SceneNode } from "../scene.ts"
+import type { Box, Pt, Scene, SceneActivation, SceneBand, SceneBox, SceneEdge, SceneFrame, SceneLifeline, SceneNode } from "../scene.ts"
 import type { SequenceSpec } from "../spec.ts"
 import { r2, snap, textWidth } from "./measure.ts"
 import { sizeNode } from "./nodes.ts"
@@ -116,7 +116,16 @@ export function layoutSequence(spec: SequenceSpec): Scene {
   const allNotes = spec.notes ?? []
   const before = notesAfter(undefined)
   before.forEach((nt) => placeNote(nt, allNotes.indexOf(nt)))
+  const bands = spec.bands ?? []
+  const bandTop = new Map<number, number>()
+  const bandBottom = new Map<number, number>()
   for (let k = 0; k < messages.length; k++) {
+    bands.forEach((b, i) => {
+      if ((b.start as number) === k) {
+        bandTop.set(i, y - 4)
+        if (b.label) y += 16
+      }
+    })
     for (const { f, i } of byOuter)
       if (f.start === k) {
         frameTop.set(i, y)
@@ -136,14 +145,24 @@ export function layoutSequence(spec: SequenceSpec): Scene {
     const lh = labelOf(k) ? LABEL_H : 0
     lineY.push(r2(y + lh + 4))
     y += lh + 4 + (self ? 22 : 0) + 22
+    // Notes anchored to message k stay inside its frames unless marked outside.
+    notesAfter(k)
+      .filter((nt) => !nt.outside)
+      .forEach((nt) => placeNote(nt, allNotes.indexOf(nt)))
+    bands.forEach((b, i) => {
+      if ((b.end as number) === k) {
+        bandBottom.set(i, y - 6)
+      }
+    })
     const closing = byOuter.filter(({ f }) => f.end === k).reverse()
     for (const { i } of closing) {
       y += 8
       frameBottom.set(i, y)
       y += 10
     }
-    // Notes after message k follow any frames that close at k.
-    notesAfter(k).forEach((nt) => placeNote(nt, allNotes.indexOf(nt)))
+    notesAfter(k)
+      .filter((nt) => nt.outside)
+      .forEach((nt) => placeNote(nt, allNotes.indexOf(nt)))
   }
   const bottom = y + 10
 
@@ -262,6 +281,30 @@ export function layoutSequence(spec: SequenceSpec): Scene {
     }
   })
 
+  const colLo = (i: number) => xs[i] - parts[i].w / 2
+  const colHi = (i: number) => xs[i] + parts[i].w / 2
+  const sceneBands: SceneBand[] = bands.map((b, i) => ({
+    id: `band-${i}`,
+    ...(b.label ? { label: b.label } : {}),
+    x: r2(colLo(0) - 16),
+    y: r2(bandTop.get(i) ?? 0),
+    w: r2(colHi(n - 1) - colLo(0) + 32),
+    h: r2((bandBottom.get(i) ?? 0) - (bandTop.get(i) ?? 0)),
+  }))
+  const sceneBoxes: SceneBox[] = (spec.boxes ?? []).map((b, i) => {
+    const idx = b.participants.map((p) => col.get(p) ?? 0)
+    const lo = Math.min(...idx)
+    const hi = Math.max(...idx)
+    return {
+      id: `box-${i}`,
+      ...(b.label ? { label: b.label } : {}),
+      participants: b.participants,
+      x: r2(colLo(lo) - 10),
+      y: M + 2,
+      w: r2(colHi(hi) - colLo(lo) + 20),
+      h: r2(bottom + 6 - (M + 2)),
+    }
+  })
   const lifelines: SceneLifeline[] = parts.map((p, i) => ({
     id: `life-${p.id}`,
     participant: p.id,
@@ -271,7 +314,7 @@ export function layoutSequence(spec: SequenceSpec): Scene {
   }))
 
   // Bounds.
-  const all: Box[] = [...parts, ...noteNodes, ...sceneFrames, ...activations]
+  const all: Box[] = [...parts, ...noteNodes, ...sceneFrames, ...activations, ...sceneBands, ...sceneBoxes]
   for (const e of edges) {
     for (const p of e.points) all.push({ x: p.x, y: p.y, w: 0, h: 0 })
     if (e.label) all.push(e.label)
@@ -298,5 +341,7 @@ export function layoutSequence(spec: SequenceSpec): Scene {
     lifelines,
     activations,
     frames: sceneFrames,
+    bands: sceneBands,
+    boxes: sceneBoxes,
   }
 }

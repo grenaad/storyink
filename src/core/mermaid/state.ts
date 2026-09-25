@@ -7,10 +7,17 @@ export function parseState(src: string): { spec: GraphSpec; diagnostics: Diagnos
   const nodes = new Map<string, GraphNode>()
   const edges: GraphEdge[] = []
   const stack: string[] = []
-  let direction: "TB" | "LR" = "TB"
+  let direction: "TB" | "BT" | "LR" | "RL" = "TB"
   let title: string | undefined
   let line = 0
-  let inNote = false
+  let note: { target: string; lines: string[] } | undefined
+  let noteCount = 0
+  const addNote = (target: string, text: string) => {
+    const id = `note_${++noteCount}`
+    const t = ensure(target)
+    nodes.set(id, { id, label: text, kind: "note", ...(nodes.get(t)?.parent ? { parent: nodes.get(t)!.parent } : {}) })
+    edges.push({ from: id, to: t, style: "dashed", arrow: "none" })
+  }
   const warn = (message: string, hint?: string) =>
     diagnostics.push({ severity: "warning", path: `line ${line}`, message, hint })
   const scope = () => stack[stack.length - 1]
@@ -37,8 +44,11 @@ export function parseState(src: string): { spec: GraphSpec; diagnostics: Diagnos
     line++
     const s = raw.replace(/%%.*$/, "").trim()
     if (!s) continue
-    if (inNote) {
-      if (/^end note$/i.test(s)) inNote = false
+    if (note) {
+      if (/^end\s+note$/i.test(s)) {
+        addNote(note.target, note.lines.join(" "))
+        note = undefined
+      } else note.lines.push(cleanLabel(s))
       continue
     }
     if (!header && /^stateDiagram(-v2)?\b/.test(s)) {
@@ -47,8 +57,12 @@ export function parseState(src: string): { spec: GraphSpec; diagnostics: Diagnos
     }
     let m: RegExpExecArray | null
     if ((m = /^direction\s+(TB|TD|BT|LR|RL)$/i.exec(s))) {
-      if (!stack.length) direction = /LR|RL/i.test(m[1]) ? "LR" : "TB"
-      else warn("per-composite direction is ignored")
+      {
+        const d = m[1].toUpperCase()
+        const nd = (d === "TD" ? "TB" : d) as "TB" | "BT" | "LR" | "RL"
+        if (!stack.length) direction = nd
+        else nodes.get(stack[stack.length - 1])!.direction = nd
+      }
       continue
     }
     if ((m = /^title\s*:?\s*(.+)$/.exec(s))) {
@@ -65,7 +79,9 @@ export function parseState(src: string): { spec: GraphSpec; diagnostics: Diagnos
     }
     if ((m = /^state\s+([\w.-]+)\s*(<<\w+>>)?\s*(\{)?$/.exec(s))) {
       ensure(m[1])
-      if (m[2]) warn(`${m[2]} pseudo-state "${m[1]}" is drawn as a plain state`)
+      const pseudoKind = m[2]?.slice(2, -2).toLowerCase()
+      if (pseudoKind === "fork" || pseudoKind === "join" || pseudoKind === "choice") nodes.get(m[1])!.kind = pseudoKind
+      else if (m[2]) warn(`${m[2]} pseudo-state "${m[1]}" is drawn as a plain state`)
       if (m[3]) {
         nodes.get(m[1])!.kind = "composite"
         stack.push(m[1])
@@ -80,9 +96,13 @@ export function parseState(src: string): { spec: GraphSpec; diagnostics: Diagnos
       warn("concurrent regions (--) are drawn as one region")
       continue
     }
+    if ((m = /^note\s+(?:left|right)\s+of\s+([\w.-]+)\s*(?::\s*(.*))?$/i.exec(s))) {
+      if (m[2] !== undefined) addNote(m[1], cleanLabel(m[2]))
+      else note = { target: m[1], lines: [] }
+      continue
+    }
     if (/^note\s/i.test(s)) {
-      if (!s.includes(":")) inNote = true
-      warn("state notes are ignored")
+      warn("unsupported note form is ignored", "use: note right of State : text")
       continue
     }
     if (/^(classDef|class|style)\b/.test(s)) {
@@ -113,6 +133,7 @@ export function parseState(src: string): { spec: GraphSpec; diagnostics: Diagnos
     warn(`unrecognised line "${s}"`, "see docs/spec.md for supported Mermaid syntax")
   }
   if (stack.length) warn(`${stack.length} composite state(s) not closed with "}"`)
+  if (note) warn("note not closed with \"end note\"")
   return {
     spec: { type: "lifecycle", title: title ?? "State machine", direction, nodes: [...nodes.values()], edges, groups: [] },
     diagnostics,

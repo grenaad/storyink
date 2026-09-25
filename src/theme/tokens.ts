@@ -136,7 +136,7 @@ export const fonts = {
 export const type = {
   label: 13,
   detail: 11,
-  tag: 9.5,
+  tag: 10,
   tagTracking: 0.08,
   edgeLabel: 10,
   groupLabel: 10,
@@ -155,7 +155,7 @@ export const geometry = {
   panelRadius: 0,
   panelInset: 4,
   groupRadius: 0,
-  groupPad: 22,
+  groupPad: 18,
   groupLabelBand: 22,
   nodePadX: 16,
   nodePadY: 11,
@@ -168,9 +168,9 @@ export const geometry = {
   arrowSize: 6,
   pillPadX: 6,
   pillPadY: 3,
-  layerGap: 64,
-  nodeGap: 36,
-  groupGap: 28,
+  layerGap: 56,
+  nodeGap: 28,
+  groupGap: 24,
   margin: 32,
 }
 

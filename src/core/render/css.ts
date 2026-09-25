@@ -26,6 +26,7 @@ ${accentRules}
 .storyink .si-tag{font-size:${T.tag}px;letter-spacing:${T.tagTracking}em;fill:var(--si-accent);}
 .storyink .si-pill-label{font-size:${T.label - 1}px;}
 .si-group{fill:${v("group")};stroke:${v("groupLine")};stroke-width:1;}
+.si-band{fill:${v("panelAlt")};stroke:none;}
 .si-group-composite{fill:${v("panelAlt")};stroke:${v("line")};stroke-width:1;}
 .storyink .si-group-label{font-size:${T.groupLabel}px;letter-spacing:${T.tagTracking}em;fill:${v("inkFaint")};}
 .storyink .si-group-title{font-size:${T.label - 1}px;fill:${v("inkMuted")};}
@@ -36,8 +37,10 @@ ${accentRules}
 .si-arrow{fill:${v("wire")};stroke:${v("wire")};stroke-width:1;stroke-linejoin:round;}
 .si-arrow-open{fill:none;stroke:${v("wire")};stroke-width:${G.wireWidth};stroke-linecap:round;stroke-linejoin:round;}
 .si-port{fill:${v("port")};}
-.si-pill{fill:none;stroke:none;}
-.storyink .si-edge-label{font-size:${T.edgeLabel}px;letter-spacing:0.02em;fill:${v("inkMuted")};paint-order:stroke;stroke:${v("bg")};stroke-width:4px;stroke-linejoin:round;}
+.si-pill{fill:${v("bg")};stroke:none;}
+.si-pill.si-on-group{fill:${v("group")};}
+.si-pill.si-on-composite{fill:${v("panelAlt")};}
+.storyink .si-edge-label{font-size:${T.edgeLabel}px;letter-spacing:0.02em;fill:${v("inkMuted")};}
 .si-life{stroke:${v("line")};stroke-width:1;stroke-dasharray:3 4;}
 .si-act{fill:${v("panelAlt")};stroke:${v("line")};stroke-width:1;}
 .si-frame{fill:none;stroke:${v("line")};stroke-width:1;}

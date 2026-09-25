@@ -86,10 +86,42 @@ interface RunResult {
  * screenshot was written (Chrome 153 never exits afterwards, so it is
  * SIGKILLed), when `until` matches stdout, or after the hard timeout.
  */
+// Every live browser process; killed (whole process group) on exit or signals.
+const live = new Set<ReturnType<typeof spawn>>()
+function killTree(child: ReturnType<typeof spawn>) {
+  try {
+    if (child.pid && process.platform !== "win32") process.kill(-child.pid, "SIGKILL")
+    else child.kill("SIGKILL")
+  } catch {
+    try {
+      child.kill("SIGKILL")
+    } catch {}
+  }
+}
+let hooked = false
+function hookExit() {
+  if (hooked) return
+  hooked = true
+  process.on("exit", () => {
+    for (const c of live) killTree(c)
+  })
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
+    process.once(sig, () => {
+      for (const c of live) killTree(c)
+      process.exit(128 + (sig === "SIGINT" ? 2 : sig === "SIGTERM" ? 15 : 1))
+    })
+}
+
+/** Number of browser processes started by this module that are still running. */
+export const liveBrowsers = (): number => live.size
+
 function run(bin: string, args: string[], opts: { untilStdout?: RegExp; timeoutMs: number; signal?: AbortSignal }): Promise<RunResult> {
+  hookExit()
   return new Promise((resolve) => {
     const t0 = performance.now()
-    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] })
+    // Own process group so helpers (renderer, GPU) die with it.
+    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" })
+    live.add(child)
     let stdout = ""
     let stderr = ""
     let done = false
@@ -99,9 +131,8 @@ function run(bin: string, args: string[], opts: { untilStdout?: RegExp; timeoutM
       done = true
       clearTimeout(timer)
       opts.signal?.removeEventListener("abort", onAbort)
-      try {
-        child.kill("SIGKILL")
-      } catch {}
+      killTree(child)
+      live.delete(child)
       resolve({ ok, stdout, stderr, ms: Math.round(performance.now() - t0) })
     }
     const onAbort = () => finish(false)
@@ -122,8 +153,19 @@ function run(bin: string, args: string[], opts: { untilStdout?: RegExp; timeoutM
       stderr += String(e)
       finish(false)
     })
-    child.on("exit", (code) => finish(code === 0 || written))
+    child.on("exit", (code) => {
+      live.delete(child)
+      finish(code === 0 || written)
+    })
   })
+}
+
+/** Tile PNGs left to right with ffmpeg's `tile` filter. Returns false when ffmpeg is unavailable or fails. */
+export function ffmpegSheet(inputs: string[], out: string): boolean {
+  const n = inputs.length
+  const filter = `${inputs.map((_, i) => `[${i}:v]`).join("")}concat=n=${n}:v=1:a=0,tile=${n}x1`
+  const ff = spawnSync("ffmpeg", ["-y", "-loglevel", "error", ...inputs.flatMap((p) => ["-i", p]), "-filter_complex", filter, "-frames:v", "1", out])
+  return ff.status === 0 && fs.existsSync(out) && fs.statSync(out).size > 0
 }
 
 const sha256 = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex")
@@ -201,13 +243,13 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
       const sh = Math.round(headerH + 46 + (vb.h * (colW - 48)) / vb.w + 36)
       const png = path.join(outDir, `${base}.sheet.png`)
       try {
+        if (process.env.STORYINK_SHEET === "ffmpeg") throw new Error("forced ffmpeg sheet")
         const ms = await shoot(`sheet=${themes.join(",")}&chrome=0${tHash}`, png, sw, sh)
         sheetCap = { theme: "sheet", png, sha256: sha256(png), bytes: fs.statSync(png).size, width: sw * scale, height: sh * scale, ms }
       } catch (e) {
-        // Fallback: ffmpeg horizontal tile of the per-theme captures.
-        const ff = spawnSync("ffmpeg", ["-y", "-loglevel", "error", ...captures.flatMap((c) => ["-i", c.png]), "-filter_complex", `hstack=inputs=${captures.length}`, png])
-        if (ff.status === 0 && fs.existsSync(png))
-          sheetCap = { theme: "sheet", png, sha256: sha256(png), bytes: fs.statSync(png).size, width: W * captures.length * scale, height: H * scale, ms: 0 }
+        // Fallback: ffmpeg `tile` of the per-theme captures (all the same size).
+        const ff = ffmpegSheet(captures.map((c) => c.png), png)
+        if (ff) sheetCap = { theme: "sheet", png, sha256: sha256(png), bytes: fs.statSync(png).size, width: W * captures.length * scale, height: H * scale, ms: 0 }
         else gates.push({ name: "sheet", pass: false, detail: String((e as Error).message) })
       }
     }

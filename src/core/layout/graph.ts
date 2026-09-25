@@ -1,6 +1,6 @@
 import { geometry as G, type as T } from "../../theme/tokens.ts"
 import type { Arrowhead, Box, Pt, Scene, SceneEdge, SceneGroup, SceneLabel, SceneNode, ScenePort } from "../scene.ts"
-import type { GraphSpec } from "../spec.ts"
+import type { Direction, GraphSpec } from "../spec.ts"
 import { r2, snap, textWidth } from "./measure.ts"
 import { sizeNode } from "./nodes.ts"
 import { wirePath } from "./paths.ts"
@@ -231,28 +231,74 @@ function layoutLevel(members: Member[], edges: LevelEdge[], dir: "TB" | "LR"): L
     const mid = x / 2
     for (const v of l) cpos[v] -= mid
   }
-  const place = (l: number[], desired: number[]) => {
+  const real = (v: number) => verts[v].member !== undefined
+  const place = (l: number[], desired: number[], weights?: number[]) => {
     const off: number[] = [0]
     for (let i = 1; i < l.length; i++) off.push(off[i - 1] + sep(verts[l[i - 1]], verts[l[i]]))
     const q = isotonic(
       desired.map((d, i) => d - off[i]),
-      l.map((v) => verts[v].weight),
+      weights ?? l.map((v) => verts[v].weight),
     )
     l.forEach((v, i) => (cpos[v] = q[i] + off[i]))
+  }
+  const median = (vals: number[]) => {
+    const s2 = [...vals].sort((a, b) => a - b)
+    const m = s2.length
+    return m % 2 ? s2[(m - 1) / 2] : (s2[m / 2 - 1] + s2[m / 2]) / 2
+  }
+  // Prefer real neighbours; long-edge dummies only count when nothing else does.
+  const pick = (ns: number[]) => {
+    const r = ns.filter(real)
+    return r.length ? r : ns
   }
   for (let iter = 0; iter < 16; iter++) {
     const mode = iter % 3 // 0 down, 1 up, 2 both
     const order = mode === 1 ? [...Array(L).keys()].reverse() : [...Array(L).keys()]
     for (const l of order) {
       const desired = layers[l].map((v) => {
-        const ns = mode === 0 ? up[v] : mode === 1 ? down[v] : [...up[v], ...down[v]]
+        const ns = pick(mode === 0 ? up[v] : mode === 1 ? down[v] : [...up[v], ...down[v]])
         if (!ns.length) return cpos[v]
-        const vals = ns.map((u) => cpos[u]).sort((a, b) => a - b)
-        const m = vals.length
-        return m % 2 ? vals[(m - 1) / 2] : (vals[m / 2 - 1] + vals[m / 2]) / 2
+        return median(ns.map((u) => cpos[u]))
       })
       place(layers[l], desired)
     }
+  }
+  // Straighten chains: a node whose only real predecessor has it as its only
+  // real successor (or vice versa) snaps onto that neighbour's axis.
+  const chainPartner = (v: number, dirUp: boolean): number | undefined => {
+    const ns = (dirUp ? up[v] : down[v]).filter(real)
+    if (ns.length !== 1) return undefined
+    const u = ns[0]
+    const back = (dirUp ? down[u] : up[u]).filter(real)
+    return back.length === 1 ? u : undefined
+  }
+  for (let pass = 0; pass < 4; pass++) {
+    const downward = pass % 2 === 0
+    const order = downward ? [...Array(L).keys()] : [...Array(L).keys()].reverse()
+    for (const l of order) {
+      const lay = layers[l]
+      const weights = lay.map((v) => (real(v) && chainPartner(v, downward) !== undefined ? 20 : verts[v].weight))
+      const desired = lay.map((v) => {
+        const u = real(v) ? chainPartner(v, downward) : undefined
+        if (u !== undefined) return cpos[u]
+        const ns = pick([...up[v], ...down[v]])
+        return ns.length ? median(ns.map((x) => cpos[x])) : cpos[v]
+      })
+      place(lay, desired, weights)
+    }
+  }
+  // Exact snap where separation allows (the regression leaves sub-pixel drift).
+  for (const l of [...Array(L).keys()]) {
+    const lay = layers[l]
+    lay.forEach((v, i) => {
+      if (!real(v)) return
+      const u = chainPartner(v, true) ?? chainPartner(v, false)
+      if (u === undefined) return
+      const t = cpos[u]
+      const okL = i === 0 || t - cpos[lay[i - 1]] >= sep(verts[lay[i - 1]], verts[v]) - 0.01
+      const okR = i === lay.length - 1 || cpos[lay[i + 1]] - t >= sep(verts[v], verts[lay[i + 1]]) - 0.01
+      if (okL && okR) cpos[v] = t
+    })
   }
 
   // Normalise to a top-left origin.
@@ -273,8 +319,27 @@ function layoutLevel(members: Member[], edges: LevelEdge[], dir: "TB" | "LR"): L
   return dir === "TB" ? { pos, w: crossExtent, h: totalMain } : { pos, w: totalMain, h: crossExtent }
 }
 
+/** Target aspect ratio (w/h) for auto direction. */
+export const AUTO_ASPECT = 1.6
+
+/**
+ * Lay out a graph spec. With no `direction`, both TB and LR are laid out and
+ * the one whose viewBox aspect ratio is closest to 16:10 wins (log distance).
+ */
 export function layoutGraph(spec: GraphSpec): Scene {
-  const dir = spec.direction ?? "TB"
+  if (spec.direction) return layoutGraphDir(spec, spec.direction)
+  const tb = layoutGraphDir(spec, "TB")
+  const lr = layoutGraphDir(spec, "LR")
+  const score = (sc: Scene) => Math.abs(Math.log(sc.viewBox.w / sc.viewBox.h / AUTO_ASPECT))
+  return score(lr) < score(tb) - 0.05 ? lr : tb
+}
+
+type Base = "TB" | "LR"
+const baseOf = (d: Direction): Base => (d === "TB" || d === "BT" ? "TB" : "LR")
+const isReversed = (d: Direction) => d === "BT" || d === "RL"
+
+function layoutGraphDir(spec: GraphSpec, direction: Direction): Scene {
+  const dir = baseOf(direction)
   const tags = spec.type === "architecture" || spec.type === "dataflow"
   const groupsById = new Map((spec.groups ?? []).map((g) => [g.id, g]))
   // Composite lifecycle states behave as groups.
@@ -310,14 +375,20 @@ export function layoutGraph(spec: GraphSpec): Scene {
   const groupSize = new Map<string, { w: number; h: number }>()
   const groupLabelOf = (id: string) => groupsById.get(id)?.label ?? spec.nodes.find((n) => n.id === id)?.label ?? id
 
-  const solve = (container: string | undefined): { w: number; h: number } => {
+  const levelDir = new Map<string, Direction>()
+  const solve = (container: string | undefined, inherited: Direction = direction): { w: number; h: number } => {
     const kids = children.get(container) ?? []
+    const own: Direction =
+      (container && (groupsById.get(container)?.direction ?? spec.nodes.find((n) => n.id === container)?.direction)) || inherited
+    levelDir.set(container ?? "", own)
     const members: Member[] = kids.map((id) => {
       if (isContainer(id)) {
-        const s = solve(id)
+        const s = solve(id, own)
         return { id, w: s.w, h: s.h, group: true }
       }
       const s = sized.get(id)!
+      // Fork/join bars run across the flow.
+      if (s.shape === "bar" && baseOf(own) === "LR" && s.w > s.h) [s.w, s.h] = [s.h, s.w]
       return { id, w: s.w, h: s.h, group: false }
     })
     const kidSet = new Set(kids)
@@ -330,7 +401,7 @@ export function layoutGraph(spec: GraphSpec): Scene {
       const ls = labelSize(e.label)
       lifted.push({ from: a, to: b, labelW: ls.w, labelH: ls.h })
     }
-    const lay = layoutLevel(members, lifted, dir)
+    const lay = layoutLevel(members, lifted, baseOf(own))
     levelOf.set(container ?? "", lay)
     if (container === undefined) return { w: lay.w, h: lay.h }
     const labelW = textWidth(groupLabelOf(container).toUpperCase(), T.groupLabel, T.tagTracking) + 2 * G.groupPad
@@ -348,8 +419,11 @@ export function layoutGraph(spec: GraphSpec): Scene {
   const placeLevel = (container: string | undefined, ox: number, oy: number, innerW: number, depth: number) => {
     const lay = levelOf.get(container ?? "")!
     const dx = (innerW - lay.w) / 2
+    const ld = levelDir.get(container ?? "") ?? direction
     for (const id of children.get(container) ?? []) {
-      const c = lay.pos.get(id)!
+      const c0 = lay.pos.get(id)!
+      // BT / RL: mirror the main axis within this level.
+      const c = ld === "BT" ? { x: c0.x, y: lay.h - c0.y } : ld === "RL" ? { x: lay.w - c0.x, y: c0.y } : c0
       if (isContainer(id)) {
         const s = groupSize.get(id)!
         const x = ox + dx + c.x - s.w / 2
@@ -378,7 +452,8 @@ export function layoutGraph(spec: GraphSpec): Scene {
   const nodes = [...sized.values()]
   const boxes = new Map<string, Box>([...nodes.map((n) => [n.id, n] as const), ...groups.map((g) => [g.id, g] as const)])
 
-  const routed = routeEdges(spec, dir, boxes, nodes, groups, chain, labelSize)
+  const arrowheads = spec.style?.arrowheads ?? G.graphArrowheads
+  const routed = routeEdges(spec, direction, boxes, nodes, groups, labelSize, arrowheads)
 
   // viewBox: content bounds plus margin.
   let maxX = M + root.w
@@ -403,6 +478,7 @@ export function layoutGraph(spec: GraphSpec): Scene {
     type: spec.type,
     title: spec.title,
     ...(spec.subtitle ? { subtitle: spec.subtitle } : {}),
+    direction,
     viewBox: { x: r2(minX), y: r2(minY), w: r2(snap(maxX + M - minX)), h: r2(snap(maxY + M - minY)) },
     groups: groups.sort((a, b) => a.depth - b.depth),
     nodes,
@@ -411,6 +487,8 @@ export function layoutGraph(spec: GraphSpec): Scene {
     lifelines: [],
     activations: [],
     frames: [],
+    bands: [],
+    boxes: [],
   }
 }
 
@@ -420,19 +498,22 @@ const OPP: Record<Side, Side> = { top: "bottom", bottom: "top", left: "right", r
 
 function routeEdges(
   spec: GraphSpec,
-  dir: "TB" | "LR",
+  direction: Direction,
   boxes: Map<string, Box>,
   nodes: SceneNode[],
   groups: SceneGroup[],
-  chain: (id: string) => string[],
   labelSize: (s?: string) => { w: number; h: number },
+  arrowheads: boolean,
 ): { edges: SceneEdge[]; ports: ScenePort[] } {
+  const dir = baseOf(direction)
+  const rev = isReversed(direction)
   const edges = spec.edges ?? []
   const nodeById = new Map(nodes.map((n) => [n.id, n]))
-  const fwdSide: Side = dir === "TB" ? "bottom" : "right"
+  const fwdSide: Side = direction === "TB" ? "bottom" : direction === "BT" ? "top" : direction === "LR" ? "right" : "left"
   const backSide: Side = dir === "TB" ? "right" : "bottom"
-  const mainLo = (b: Box) => (dir === "TB" ? b.y : b.x)
-  const mainHi = (b: Box) => (dir === "TB" ? b.y + b.h : b.x + b.w)
+  // Main-axis extents measured in flow order (reversed layouts flip the sign).
+  const mainLo = (b: Box) => (dir === "TB" ? (rev ? -(b.y + b.h) : b.y) : rev ? -(b.x + b.w) : b.x)
+  const mainHi = (b: Box) => (dir === "TB" ? (rev ? -b.y : b.y + b.h) : rev ? -b.x : b.x + b.w)
   const crossC = (b: Box) => (dir === "TB" ? b.x + b.w / 2 : b.y + b.h / 2)
   const mainC = (b: Box) => (dir === "TB" ? b.y + b.h / 2 : b.x + b.w / 2)
 
@@ -472,8 +553,8 @@ function routeEdges(
     // Decisions branch sideways from their vertices when the target is off-axis.
     if (na?.shape === "diamond" && sa === fwdSide) {
       const off = crossC(b) - crossC(a)
-      if (Math.abs(off) > a.w / 3 && dir === "TB") sa = off > 0 ? "right" : "left"
-      if (Math.abs(off) > a.h / 3 && dir === "LR") sa = off > 0 ? "bottom" : "top"
+      if (Math.abs(off) > a.w / 5 && dir === "TB") sa = off > 0 ? "right" : "left"
+      if (Math.abs(off) > a.h / 5 && dir === "LR") sa = off > 0 ? "bottom" : "top"
     }
     return { i, a, b, sa, sb, self: false }
   })
@@ -507,7 +588,7 @@ function routeEdges(
       return horizontalSide ? other.x + other.w / 2 : other.y + other.h / 2
     }
     list.sort((x, y) => far(x) - far(y) || x.plan.i - y.plan.i)
-    const single = !node || node.shape === "diamond" || node.shape === "dot" || node.shape === "bullseye"
+    const single = !node || node.shape === "diamond" || node.shape === "dot" || node.shape === "bullseye" || node.shape === "choice"
     const n = list.length
     list.forEach((s, k2) => {
       const t = single && node ? 0.5 : (k2 + 1) / (n + 1)
@@ -545,7 +626,7 @@ function routeEdges(
     const tryMove = (pt: Pt, id: string, side: Side, to: number) => {
       const box = boxes.get(id)!
       const node = nodeById.get(id)
-      if (node && (node.shape === "diamond" || node.shape === "dot" || node.shape === "bullseye" || node.shape === "pill")) return false
+      if (node && (node.shape === "diamond" || node.shape === "dot" || node.shape === "bullseye" || node.shape === "pill" || node.shape === "choice")) return false
       const lo = (horiz ? box.y : box.x) + 8
       const hi = (horiz ? box.y + box.h : box.x + box.w) - 8
       if (to < lo || to > hi) return false
@@ -579,6 +660,7 @@ function routeEdges(
     return lp - lq || p.i - q.i
   })
   const result = new Array<SceneEdge>(edges.length)
+  const rails: { at: number; lo: number; hi: number }[] = []
   for (const p of orderIdx) {
     const e = edges[p.i]
     const id = e.id ?? `${e.from}->${e.to}`
@@ -605,8 +687,35 @@ function routeEdges(
     } else {
       // A container endpoint that encloses the other end is not an obstacle concern;
       // the router only avoids leaf nodes.
-      void chain
-      points = router.route({ from, fromDir: SIDE_DIR[p.sa], to, toDir: ((SIDE_DIR[p.sb] + 2) % 4) as Dir })
+      if (p.sa === backSide && p.sb === backSide) {
+        // Return loop: a tidy rail 24 px outside everything it passes.
+        const horiz = dir === "TB" // rail is vertical (x) in TB, horizontal (y) in LR
+        const lo = horiz ? Math.min(from.y, to.y) : Math.min(from.x, to.x)
+        const hi = horiz ? Math.max(from.y, to.y) : Math.max(from.x, to.x)
+        let rail = horiz ? Math.max(from.x, to.x) : Math.max(from.y, to.y)
+        for (const n of nodes) {
+          const nlo = horiz ? n.y : n.x
+          const nhi = horiz ? n.y + n.h : n.x + n.w
+          if (nhi >= lo - 1 && nlo <= hi + 1) rail = Math.max(rail, horiz ? n.x + n.w : n.y + n.h)
+        }
+        rail += 24
+        for (const r of rails) if (r.hi >= lo && r.lo <= hi && Math.abs(r.at - rail) < 10) rail = r.at + 12
+        const cand = horiz
+          ? [from, { x: rail, y: from.y }, { x: rail, y: to.y }, to]
+          : [from, { x: from.x, y: rail }, { x: to.x, y: rail }, to]
+        // Only use the rail when its legs don't cut through other nodes.
+        const hits = nodes.some(
+          (n) =>
+            n.id !== e.from &&
+            n.id !== e.to &&
+            cand.slice(1).some((b, k) => segHitsBox(cand[k], b, { x: n.x - 4, y: n.y - 4, w: n.w + 8, h: n.h + 8 })),
+        )
+        if (!hits) {
+          rails.push({ at: rail, lo, hi })
+          points = cand
+          router.avoid([points])
+        } else points = router.route({ from, fromDir: SIDE_DIR[p.sa], to, toDir: ((SIDE_DIR[p.sb] + 2) % 4) as Dir })
+      } else points = router.route({ from, fromDir: SIDE_DIR[p.sa], to, toDir: ((SIDE_DIR[p.sb] + 2) % 4) as Dir })
     }
     const heads: Arrowhead[] = []
     const arrow = e.arrow ?? "end"
@@ -616,8 +725,8 @@ function routeEdges(
       angle: r2(Math.atan2(tip.y - prev.y, tip.x - prev.x)),
       form: "filled",
     })
-    if (G.graphArrowheads && (arrow === "end" || arrow === "both")) heads.push(headAt(points[points.length - 1], points[points.length - 2]))
-    if (G.graphArrowheads && arrow === "both") heads.push(headAt(points[0], points[1]))
+    if (arrowheads && (arrow === "end" || arrow === "both")) heads.push(headAt(points[points.length - 1], points[points.length - 2]))
+    if (arrowheads && arrow === "both") heads.push(headAt(points[0], points[1]))
     const edge: SceneEdge = {
       id,
       from: e.from,
@@ -630,8 +739,8 @@ function routeEdges(
     }
     result[p.i] = edge
     ports.push(
-      { id: `${id}:out`, node: e.from, edge: id, end: "out", covered: G.graphArrowheads && arrow === "both", ...from },
-      { id: `${id}:in`, node: e.to, edge: id, end: "in", covered: G.graphArrowheads && arrow !== "none", ...to },
+      { id: `${id}:out`, node: e.from, edge: id, end: "out", covered: arrowheads && arrow === "both", ...from },
+      { id: `${id}:in`, node: e.to, edge: id, end: "in", covered: arrowheads && arrow !== "none", ...to },
     )
   }
   // Labels after all wires exist, so they can avoid nodes, other labels, wires and group rules.
@@ -650,7 +759,12 @@ function routeEdges(
     if (!e.label) return
     const edge = result[p.i]
     const others = result.filter((o) => o !== edge).flatMap((o) => segsOf(o.points))
-    edge.label = placeLabel(`${edge.id}:label`, e.label, edge.points, labelSize(e.label), obstacles, placedLabels, others, groupRules, groupTitles)
+    const lbl = placeLabel(`${edge.id}:label`, e.label, edge.points, labelSize(e.label), obstacles, placedLabels, others, groupRules, groupTitles)
+    const cx = lbl.x + lbl.w / 2
+    const cy = lbl.y + lbl.h / 2
+    const inside = groups.filter((g) => cx > g.x && cx < g.x + g.w && cy > g.y && cy < g.y + g.h).sort((a, b) => b.depth - a.depth)[0]
+    lbl.surface = inside ? (inside.composite ? "composite" : "group") : "bg"
+    edge.label = lbl
   })
   out.push(...result)
   void groups

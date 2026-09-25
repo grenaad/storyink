@@ -38,6 +38,10 @@ function NodeShape({ n }: { n: SceneNode }) {
           <circle className="si-dotfill" cx={w / 2} cy={h / 2} r={w / 2 - 5} />
         </>
       )
+    case "bar":
+      return <rect className="si-dotfill" x={0} y={0} width={w} height={h} />
+    case "choice":
+      return <polygon className="si-face" points={`${w / 2},0 ${w},${h / 2} ${w / 2},${h} 0,${h / 2}`} />
     case "pill":
       return <rect className="si-soft" x={0} y={0} width={w} height={h} rx={h / 2} />
     case "diamond": {
@@ -182,7 +186,7 @@ function LabelView({ e }: { e: SceneEdge }) {
   const text = e.seq !== undefined ? l.text.replace(/^\d+\.\s*/, "") : l.text
   return (
     <g className="si-lbl" data-si={`label:${l.id}`} data-box={`${l.x},${l.y},${l.w},${l.h}`}>
-      <rect className="si-pill" x={l.x} y={l.y} width={l.w} height={l.h} rx={l.h / 2} />
+      <rect className={`si-pill si-on-${l.surface ?? "bg"}`} x={l.x} y={l.y} width={l.w} height={l.h} />
       <text className="si-edge-label" x={f(l.x + l.w / 2)} y={f(l.y + l.h / 2 + 3.8)} textAnchor="middle">
         {text}
       </text>
@@ -246,6 +250,28 @@ export function Diagram({ scene, style, copy = "", className }: DiagramProps): R
       <title>{scene.title}</title>
       {style ? <style>{style}</style> : null}
       <rect className="si-bg" x={vb.x} y={vb.y} width={vb.w} height={vb.h} />
+      <g className="si-bands">
+        {scene.bands.map((b) => (
+          <g key={b.id} data-si={`band:${b.id}`}>
+            <rect className="si-band" x={b.x} y={b.y} width={b.w} height={b.h} />
+            {b.label ? (
+              <text className="si-group-label" x={f(b.x + 8)} y={f(b.y + 13)}>
+                {b.label.toUpperCase()}
+              </text>
+            ) : null}
+          </g>
+        ))}
+        {scene.boxes.map((b) => (
+          <g key={b.id} data-si={`box:${b.id}`}>
+            <rect className="si-group" x={b.x} y={b.y} width={b.w} height={b.h} />
+            {b.label ? (
+              <text className="si-group-label" x={f(b.x + 8)} y={f(b.y + 14)}>
+                {b.label.toUpperCase()}
+              </text>
+            ) : null}
+          </g>
+        ))}
+      </g>
       <g className="si-groups">
         {scene.groups.map((g) => (
           <GroupView key={g.id} g={g} />

@@ -1,5 +1,5 @@
 import type { Accent } from "../theme/tokens.ts"
-import type { ArrowMode, DiagramType, EdgeStyle, FrameKind, MessageKind } from "./spec.ts"
+import type { ArrowMode, DiagramType, Direction, EdgeStyle, FrameKind, MessageKind } from "./spec.ts"
 
 export interface Pt {
   x: number
@@ -25,6 +25,8 @@ export type Shape =
   | "note"
   | "actor"
   | "external"
+  | "bar"
+  | "choice"
 
 export interface SceneNode extends Box {
   id: string
@@ -59,6 +61,8 @@ export interface Arrowhead {
 export interface SceneLabel extends Box {
   id: string
   text: string
+  /** Surface the label sits on, so its backing matches: page, group or composite. */
+  surface?: "bg" | "group" | "composite"
 }
 
 export interface SceneEdge {
@@ -111,6 +115,8 @@ export interface Scene {
   type: DiagramType
   title: string
   subtitle?: string
+  /** Resolved direction for graph types (after auto-pick). */
+  direction?: Direction
   viewBox: Box
   groups: SceneGroup[]
   nodes: SceneNode[]
@@ -119,4 +125,19 @@ export interface Scene {
   lifelines: SceneLifeline[]
   activations: SceneActivation[]
   frames: SceneFrame[]
+  /** Sequence background bands (Mermaid rect). */
+  bands: SceneBand[]
+  /** Sequence participant boxes (Mermaid box). */
+  boxes: SceneBox[]
+}
+
+export interface SceneBand extends Box {
+  id: string
+  label?: string
+}
+
+export interface SceneBox extends Box {
+  id: string
+  label?: string
+  participants: string[]
 }

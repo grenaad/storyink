@@ -115,7 +115,7 @@ function arr(c: Collector, o: Obj, key: string, required: boolean): unknown[] {
   return value
 }
 
-const COMMON_KEYS = new Set(["$schema", "type", "title", "subtitle", "direction", "story"])
+const COMMON_KEYS = new Set(["$schema", "type", "title", "subtitle", "direction", "story", "style"])
 
 function unknownKeys(c: Collector, o: Obj, allowed: Set<string>, path: string) {
   for (const k of Object.keys(o))
@@ -150,8 +150,21 @@ export function validate(input: unknown): ValidationResult {
     c.warn("story", "\"story\" is reserved for Phase 2 storyboards and is ignored", "remove it or keep it for later")
   if (!type) return { ok: false, diagnostics: c.diagnostics }
 
+  let style: { arrowheads?: boolean } | undefined
+  if (value.style !== undefined) {
+    if (!isObj(value.style)) c.error("style", `"style" must be an object`, `e.g. "style": { "arrowheads": true }`)
+    else {
+      unknownKeys(c, value.style, new Set(["arrowheads"]), "style")
+      if (value.style.arrowheads !== undefined && typeof value.style.arrowheads !== "boolean")
+        c.error("style.arrowheads", `"arrowheads" must be true or false`)
+      else if (typeof value.style.arrowheads === "boolean") style = { arrowheads: value.style.arrowheads }
+      if (type === "sequence" && value.style.arrowheads === false)
+        c.warn("style.arrowheads", "sequence diagrams always draw arrowheads")
+    }
+  }
   const base = {
     ...(typeof value.$schema === "string" ? { $schema: value.$schema } : {}),
+    ...(style ? { style } : {}),
     title: title ?? "",
     ...(subtitle ? { subtitle } : {}),
   }
@@ -167,13 +180,15 @@ function validateGraph(
   base: { title: string; subtitle?: string },
 ): GraphSpec {
   unknownKeys(c, o, new Set([...COMMON_KEYS, "nodes", "edges", "groups"]), "")
-  let direction: GraphSpec["direction"]
-  if (o.direction !== undefined) {
-    const d = typeof o.direction === "string" ? o.direction.toUpperCase() : o.direction
-    const map: Record<string, "TB" | "LR"> = { TB: "TB", TD: "TB", LR: "LR" }
-    if (typeof d === "string" && map[d]) direction = map[d]
-    else c.error("direction", `unknown direction ${JSON.stringify(o.direction)}`, `use "TB" or "LR"`)
+  const dirOf = (v: unknown, path: string): GraphSpec["direction"] => {
+    if (v === undefined) return undefined
+    const d = typeof v === "string" ? v.toUpperCase() : v
+    const map: Record<string, "TB" | "BT" | "LR" | "RL"> = { TB: "TB", TD: "TB", BT: "BT", LR: "LR", RL: "RL" }
+    if (typeof d === "string" && map[d]) return map[d]
+    c.error(path, `unknown direction ${JSON.stringify(v)}`, `use "TB", "LR", "BT" or "RL" (or omit to auto-pick)`)
+    return undefined
   }
+  const direction = dirOf(o.direction, "direction")
   const kinds = GRAPH_NODE_KINDS[type] as readonly string[]
   const defaultKind = type === "workflow" ? "step" : type === "lifecycle" ? "state" : "service"
   const ids = new Map<string, string>()
@@ -187,7 +202,7 @@ function validateGraph(
   arr(c, o, "groups", false).forEach((g, i) => {
     const p = `groups[${i}]`
     if (!isObj(g)) return c.error(p, "group must be an object", `{ "id": "vpc", "label": "VPC" }`)
-    unknownKeys(c, g, new Set(["id", "label", "kind", "parent"]), p)
+    unknownKeys(c, g, new Set(["id", "label", "kind", "parent", "direction"]), p)
     const id = str(c, g, "id", p, true)
     if (!id) return
     if (!ID_RE.test(id)) c.error(`${p}.id`, `invalid id "${id}"`, "use letters, digits, _ . : -")
@@ -197,6 +212,7 @@ function validateGraph(
       label: str(c, g, "label", p, false) ?? id,
       ...(typeof g.kind === "string" ? { kind: g.kind } : {}),
       ...(typeof g.parent === "string" ? { parent: g.parent } : {}),
+      ...(g.direction !== undefined && dirOf(g.direction, `${p}.direction`) ? { direction: dirOf(g.direction, `${p}.direction`) } : {}),
     })
   })
 
@@ -206,7 +222,7 @@ function validateGraph(
   rawNodes.forEach((n, i) => {
     const p = `nodes[${i}]`
     if (!isObj(n)) return c.error(p, "node must be an object", `{ "id": "api", "label": "API" }`)
-    unknownKeys(c, n, new Set(["id", "label", "kind", "detail", "tag", "parent", "group"]), p)
+    unknownKeys(c, n, new Set(["id", "label", "kind", "detail", "tag", "parent", "group", "direction"]), p)
     const id = str(c, n, "id", p, true)
     if (!id) return
     if (!ID_RE.test(id)) c.error(`${p}.id`, `invalid id "${id}"`, "use letters, digits, _ . : -")
@@ -220,6 +236,7 @@ function validateGraph(
       ...(typeof n.detail === "string" && n.detail ? { detail: n.detail } : {}),
       ...(typeof n.tag === "string" ? { tag: n.tag } : {}),
       ...(parent ? { parent } : {}),
+      ...(n.direction !== undefined && dirOf(n.direction, `${p}.direction`) ? { direction: dirOf(n.direction, `${p}.direction`) } : {}),
     })
   })
 
@@ -292,7 +309,7 @@ function validateGraph(
   return {
     type,
     ...base,
-    direction: direction ?? (type === "architecture" || type === "dataflow" ? "LR" : "TB"),
+    ...(direction ? { direction } : {}),
     nodes,
     edges,
     groups,
@@ -305,7 +322,7 @@ function hintId(id: string, known: string[]): string {
 }
 
 function validateSequence(c: Collector, o: Obj, base: { title: string; subtitle?: string }): SequenceSpec {
-  unknownKeys(c, o, new Set([...COMMON_KEYS, "participants", "messages", "activations", "notes", "frames", "autonumber"]), "")
+  unknownKeys(c, o, new Set([...COMMON_KEYS, "participants", "messages", "activations", "notes", "frames", "bands", "boxes", "autonumber"]), "")
   if (o.direction !== undefined) c.warn("direction", "sequence diagrams ignore \"direction\"")
   const ids = new Set<string>()
   const participants: SequenceSpec["participants"] = []
@@ -405,6 +422,7 @@ function validateSequence(c: Collector, o: Obj, base: { title: string; subtitle?
       const r = ref(n.after, `${p}.after`)
       if (r !== undefined) note.after = r
     }
+    if (n.outside === true) note.outside = true
     notes.push(note)
   })
 
@@ -440,6 +458,27 @@ function validateSequence(c: Collector, o: Obj, base: { title: string; subtitle?
         c.error(`frames[${b}]`, `frame overlaps frames[${a}] without nesting`, "frames must be disjoint or fully nested")
     }
 
+  const bands: NonNullable<SequenceSpec["bands"]> = []
+  arr(c, o, "bands", false).forEach((b, i) => {
+    const p = `bands[${i}]`
+    if (!isObj(b)) return c.error(p, "band must be an object", `{ "start": 0, "end": 2 }`)
+    const start = ref(b.start, `${p}.start`)
+    const end = ref(b.end, `${p}.end`)
+    if (start !== undefined && end !== undefined && end < start) c.error(p, "band ends before it starts")
+    if (start !== undefined && end !== undefined) bands.push({ start, end, ...(typeof b.label === "string" ? { label: b.label } : {}) })
+  })
+  const boxes: NonNullable<SequenceSpec["boxes"]> = []
+  const order = participants.map((x) => x.id)
+  arr(c, o, "boxes", false).forEach((b, i) => {
+    const p = `boxes[${i}]`
+    if (!isObj(b) || !Array.isArray(b.participants)) return c.error(p, "box needs a participants array", `{ "label": "Backend", "participants": ["api", "db"] }`)
+    const ids = b.participants.map((x, j) => pref(x, `${p}.participants[${j}]`)).filter((x): x is string => !!x)
+    const idx = ids.map((x) => order.indexOf(x)).filter((x) => x >= 0).sort((a, b2) => a - b2)
+    if (idx.length && idx[idx.length - 1] - idx[0] !== idx.length - 1)
+      c.error(`${p}.participants`, "box participants must be adjacent in the participants list", "reorder participants so the box members are next to each other")
+    if (ids.length) boxes.push({ participants: ids, ...(typeof b.label === "string" ? { label: b.label } : {}) })
+  })
+
   const resolve = (r: MessageRef) => r as number
   return {
     type: "sequence",
@@ -449,6 +488,8 @@ function validateSequence(c: Collector, o: Obj, base: { title: string; subtitle?
     activations: activations.map((a) => ({ ...a, start: resolve(a.start), end: resolve(a.end) })),
     notes,
     frames,
+    bands,
+    boxes,
     autonumber: o.autonumber === true,
   }
 }
