@@ -127,6 +127,9 @@ const hooks: ViewerHooks = {
         }
         el.textContent = JSON.stringify(lint)
         window.__storyink!.lint = lint
+        // Sheets report their laid-out height so snapshots can size the window exactly.
+        const app = document.querySelector<HTMLElement>(".si-app")
+        if (app) document.documentElement.dataset.contentHeight = String(Math.ceil(app.getBoundingClientRect().height))
         window.__storyink!.ready = true
         document.documentElement.dataset.ready = "1"
         resolveReady()

@@ -7,7 +7,6 @@ import { pathToFileURL } from "node:url"
 import type { ThemeName } from "../theme/tokens.ts"
 import type { Box } from "../core/scene.ts"
 import { browserVersion, findBrowser, type Browser } from "./chrome.ts"
-import { beatTileMin } from "../core/story/state.ts"
 
 export interface SnapshotOptions {
   /** Themes to capture (default light, dark). */
@@ -275,13 +274,16 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
     }
     const beats: Capture[] = []
     if (sheetMode === "beats" && tl) {
-      const n = tl.steps.length + 1
       const bw = 1440
-      const cols = Math.max(1, Math.floor((bw - 48 + 20) / (beatTileMin(vb.w) + 20)))
-      const colW = (bw - 48 - (cols - 1) * 20) / cols
-      const tileH = (colW * vb.h) / vb.w + 52
-      const bh = Math.round(headerH + 14 + Math.ceil(n / cols) * (tileH + 18) + 24)
       for (const theme of themes) {
+        // Measure the laid-out sheet in-page, then capture at exactly that height.
+        const probe = await run(browser.path, [...baseFlags, fresh(), `--window-size=${bw},900`, "--dump-dom", url(`theme=${theme}&chrome=0&sheet=beats`)], {
+          timeoutMs,
+          untilStdout: /<\/html>\s*$/,
+          signal: opts.signal,
+        })
+        const mh = /<html[^>]*data-content-height="(\d+)"/.exec(probe.stdout)
+        const bh = mh ? Number(mh[1]) : 1800
         const png = path.join(outDir, `${base}.beats.${theme}.png`)
         const ms = await shoot(`theme=${theme}&chrome=0&sheet=beats`, png, bw, bh)
         beats.push({ theme: "beats", png, sha256: sha256(png), bytes: fs.statSync(png).size, width: bw * scale, height: bh * scale, ms })

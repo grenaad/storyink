@@ -335,7 +335,7 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
 
   return (
     <LazyMotion features={domAnimation} strict>
-    <div className={`si-app${hash.chrome ? "" : " si-nochrome"}`}>
+    <div className={`si-app${hash.chrome ? "" : " si-nochrome"}${hash.beats && tl ? " si-sheet-mode" : ""}`}>
       <header className="si-head">
         <p className="si-kind">{TYPE_LABEL[scene.type]}</p>
         <h1 className="si-title">{scene.title}</h1>
