@@ -3,33 +3,136 @@
   "type": "architecture",
   "title": "Checkout platform",
   "subtitle": "Order placement path from browser to payment provider",
-  "direction": "LR",
   "groups": [
-    { "id": "aws", "label": "AWS eu-west-1", "kind": "region" },
-    { "id": "app", "label": "Application tier", "kind": "cluster", "parent": "aws" },
-    { "id": "data", "label": "Data tier", "kind": "tier", "parent": "aws" }
+    {
+      "id": "aws",
+      "label": "AWS eu-west-1",
+      "kind": "region"
+    },
+    {
+      "id": "app",
+      "label": "Application tier",
+      "kind": "cluster",
+      "parent": "aws"
+    },
+    {
+      "id": "data",
+      "label": "Data tier",
+      "kind": "tier",
+      "parent": "aws"
+    }
   ],
   "nodes": [
-    { "id": "web", "label": "Web storefront", "kind": "client", "detail": "Next.js" },
-    { "id": "mobile", "label": "Mobile app", "kind": "client", "detail": "iOS / Android" },
-    { "id": "gateway", "label": "API gateway", "kind": "service", "parent": "app", "detail": "auth · rate limit" },
-    { "id": "orders", "label": "Orders", "kind": "service", "parent": "app", "detail": "Go" },
-    { "id": "payments", "label": "Payments", "kind": "service", "parent": "app", "detail": "Kotlin" },
-    { "id": "receipts", "label": "Send receipt", "kind": "function", "parent": "app", "detail": "Lambda" },
-    { "id": "db", "label": "Orders DB", "kind": "database", "parent": "data", "detail": "Postgres 16" },
-    { "id": "cache", "label": "Session cache", "kind": "cache", "parent": "data", "detail": "Redis" },
-    { "id": "events", "label": "order-events", "kind": "queue", "parent": "data", "detail": "Kafka" },
-    { "id": "stripe", "label": "Stripe", "kind": "external", "detail": "card payments" }
+    {
+      "id": "web",
+      "label": "Web storefront",
+      "kind": "client",
+      "detail": "Next.js"
+    },
+    {
+      "id": "mobile",
+      "label": "Mobile app",
+      "kind": "client",
+      "detail": "iOS / Android"
+    },
+    {
+      "id": "gateway",
+      "label": "API gateway",
+      "kind": "service",
+      "parent": "app",
+      "detail": "auth · rate limit"
+    },
+    {
+      "id": "orders",
+      "label": "Orders",
+      "kind": "service",
+      "parent": "app",
+      "detail": "Go"
+    },
+    {
+      "id": "payments",
+      "label": "Payments",
+      "kind": "service",
+      "parent": "app",
+      "detail": "Kotlin"
+    },
+    {
+      "id": "receipts",
+      "label": "Send receipt",
+      "kind": "function",
+      "parent": "app",
+      "detail": "Lambda"
+    },
+    {
+      "id": "db",
+      "label": "Orders DB",
+      "kind": "database",
+      "parent": "data",
+      "detail": "Postgres 16"
+    },
+    {
+      "id": "cache",
+      "label": "Session cache",
+      "kind": "cache",
+      "parent": "data",
+      "detail": "Redis"
+    },
+    {
+      "id": "events",
+      "label": "order-events",
+      "kind": "queue",
+      "parent": "data",
+      "detail": "Kafka"
+    },
+    {
+      "id": "stripe",
+      "label": "Stripe",
+      "kind": "external",
+      "detail": "card payments"
+    }
   ],
   "edges": [
-    { "from": "web", "to": "gateway", "label": "HTTPS" },
-    { "from": "mobile", "to": "gateway" },
-    { "from": "gateway", "to": "cache", "style": "dashed" },
-    { "from": "gateway", "to": "orders", "label": "gRPC" },
-    { "from": "orders", "to": "payments" },
-    { "from": "orders", "to": "db" },
-    { "from": "orders", "to": "events", "label": "publish" },
-    { "from": "events", "to": "receipts", "style": "dashed" },
-    { "from": "payments", "to": "stripe", "label": "charge" }
+    {
+      "from": "web",
+      "to": "gateway",
+      "label": "HTTPS"
+    },
+    {
+      "from": "mobile",
+      "to": "gateway"
+    },
+    {
+      "from": "gateway",
+      "to": "cache",
+      "style": "dashed"
+    },
+    {
+      "from": "gateway",
+      "to": "orders",
+      "label": "gRPC"
+    },
+    {
+      "from": "orders",
+      "to": "payments"
+    },
+    {
+      "from": "orders",
+      "to": "db"
+    },
+    {
+      "from": "orders",
+      "to": "events",
+      "label": "publish"
+    },
+    {
+      "from": "events",
+      "to": "receipts",
+      "style": "dashed"
+    },
+    {
+      "from": "payments",
+      "to": "stripe",
+      "label": "charge"
+    }
   ]
 }

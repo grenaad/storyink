@@ -2,8 +2,7 @@
   "$schema": "../schema/storyink.schema.json",
   "type": "dataflow",
   "title": "Product analytics pipeline",
-  "subtitle": "Events from three sources into the warehouse and a realtime feature store",
-  "direction": "LR",
+  "subtitle": "Three event sources feed a realtime feature store and an hourly warehouse",
   "groups": [
     { "id": "sources", "label": "Sources", "kind": "producers" },
     { "id": "stream", "label": "Streaming", "kind": "realtime" },
@@ -14,12 +13,12 @@
     { "id": "mobilesdk", "label": "Mobile SDK", "kind": "client", "parent": "sources" },
     { "id": "backend", "label": "Backend events", "kind": "service", "parent": "sources" },
     { "id": "collector", "label": "Collector", "kind": "service", "detail": "validate · enrich" },
-    { "id": "bus", "label": "events.raw", "kind": "queue", "parent": "stream", "detail": "Kafka" },
+    { "id": "bus", "label": "events.raw", "kind": "queue", "detail": "Kafka" },
     { "id": "flink", "label": "Sessionizer", "kind": "function", "parent": "stream", "detail": "Flink" },
-    { "id": "features", "label": "Feature store", "kind": "cache", "parent": "stream" },
+    { "id": "features", "label": "Feature store", "kind": "cache", "parent": "stream", "detail": "Redis" },
     { "id": "lake", "label": "Raw lake", "kind": "store", "parent": "batch", "detail": "S3 · Parquet" },
-    { "id": "dbt", "label": "dbt models", "kind": "function", "parent": "batch" },
-    { "id": "warehouse", "label": "Warehouse", "kind": "database", "parent": "batch", "detail": "BigQuery" },
+    { "id": "warehouse", "label": "Warehouse", "kind": "database", "parent": "batch", "detail": "BigQuery + dbt" },
+    { "id": "recs", "label": "Recommendations", "kind": "service" },
     { "id": "bi", "label": "Dashboards", "kind": "external", "detail": "Looker" }
   ],
   "edges": [
@@ -30,8 +29,8 @@
     { "from": "bus", "to": "flink" },
     { "from": "flink", "to": "features", "label": "p95 < 2s" },
     { "from": "bus", "to": "lake", "style": "dashed" },
-    { "from": "lake", "to": "dbt" },
-    { "from": "dbt", "to": "warehouse" },
+    { "from": "lake", "to": "warehouse", "label": "hourly" },
+    { "from": "features", "to": "recs" },
     { "from": "warehouse", "to": "bi" }
   ]
 }

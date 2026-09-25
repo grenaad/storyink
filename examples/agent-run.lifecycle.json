@@ -3,30 +3,111 @@
   "type": "lifecycle",
   "title": "Agent run lifecycle",
   "subtitle": "States of a single coding-agent run, including tool approval",
-  "direction": "TB",
   "nodes": [
-    { "id": "start", "kind": "initial" },
-    { "id": "queued", "label": "Queued", "kind": "state" },
-    { "id": "running", "label": "Running", "kind": "composite" },
-    { "id": "planning", "label": "Planning", "kind": "state", "parent": "running" },
-    { "id": "tool", "label": "Calling tool", "kind": "state", "parent": "running" },
-    { "id": "observe", "label": "Observing result", "kind": "state", "parent": "running" },
-    { "id": "approval", "label": "Awaiting approval", "kind": "state", "detail": "human in the loop" },
-    { "id": "done", "label": "Completed", "kind": "state" },
-    { "id": "failed", "label": "Failed", "kind": "state" },
-    { "id": "end", "kind": "final" }
+    {
+      "id": "start",
+      "kind": "initial"
+    },
+    {
+      "id": "queued",
+      "label": "Queued",
+      "kind": "state"
+    },
+    {
+      "id": "running",
+      "label": "Running",
+      "kind": "composite"
+    },
+    {
+      "id": "planning",
+      "label": "Planning",
+      "kind": "state",
+      "parent": "running"
+    },
+    {
+      "id": "tool",
+      "label": "Calling tool",
+      "kind": "state",
+      "parent": "running"
+    },
+    {
+      "id": "observe",
+      "label": "Observing result",
+      "kind": "state",
+      "parent": "running"
+    },
+    {
+      "id": "approval",
+      "label": "Awaiting approval",
+      "kind": "state",
+      "detail": "human in the loop",
+      "parent": "running"
+    },
+    {
+      "id": "done",
+      "label": "Completed",
+      "kind": "state"
+    },
+    {
+      "id": "failed",
+      "label": "Failed",
+      "kind": "state"
+    },
+    {
+      "id": "end",
+      "kind": "final"
+    }
   ],
   "edges": [
-    { "from": "start", "to": "queued" },
-    { "from": "queued", "to": "planning", "label": "worker free" },
-    { "from": "planning", "to": "tool" },
-    { "from": "tool", "to": "observe" },
-    { "from": "observe", "to": "planning", "label": "next step" },
-    { "from": "tool", "to": "approval", "label": "needs permission" },
-    { "from": "approval", "to": "tool", "label": "approved" },
-    { "from": "running", "to": "done", "label": "answer ready" },
-    { "from": "running", "to": "failed", "label": "error" },
-    { "from": "done", "to": "end" },
-    { "from": "failed", "to": "end" }
+    {
+      "from": "start",
+      "to": "queued"
+    },
+    {
+      "from": "queued",
+      "to": "planning",
+      "label": "worker free"
+    },
+    {
+      "from": "planning",
+      "to": "tool"
+    },
+    {
+      "from": "tool",
+      "to": "observe"
+    },
+    {
+      "from": "observe",
+      "to": "planning",
+      "label": "next step"
+    },
+    {
+      "from": "tool",
+      "to": "approval",
+      "label": "needs permission"
+    },
+    {
+      "from": "approval",
+      "to": "tool",
+      "label": "approved"
+    },
+    {
+      "from": "running",
+      "to": "done",
+      "label": "answer ready"
+    },
+    {
+      "from": "running",
+      "to": "failed",
+      "label": "error"
+    },
+    {
+      "from": "done",
+      "to": "end"
+    },
+    {
+      "from": "failed",
+      "to": "end"
+    }
   ]
 }
