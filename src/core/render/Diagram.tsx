@@ -85,7 +85,7 @@ function NodeShape({ n }: { n: SceneNode }) {
       return (
         <>
           <rect className="si-face" x={0} y={0} width={w} height={h} rx={r} />
-          <rect className="si-inset" x={i} y={i} width={w - 2 * i} height={h - 2 * i} rx={1} />
+          <rect className="si-inset" x={i} y={i} width={w - 2 * i} height={h - 2 * i} />
           {[0, 1, 2].map((k) => (
             <line key={k} className="si-glyph" x1={w - 22 + k * 5} y1={h / 2 - 7} x2={w - 22 + k * 5} y2={h / 2 + 7} />
           ))}
@@ -96,7 +96,7 @@ function NodeShape({ n }: { n: SceneNode }) {
       return (
         <>
           <rect className="si-face" x={0} y={0} width={w} height={h} rx={r} />
-          <rect className="si-inset" x={i} y={i} width={w - 2 * i} height={h - 2 * i} rx={1} />
+          <rect className="si-inset" x={i} y={i} width={w - 2 * i} height={h - 2 * i} />
           <rect className="si-ink-bar" x={i + 1} y={i + 1} width={2} height={h - 2 * i - 2} />
         </>
       )
@@ -145,7 +145,7 @@ function GroupView({ g }: { g: SceneGroup }) {
   const labelText = g.composite ? g.label : g.label.toUpperCase()
   return (
     <g className="si-grp" data-si={`group:${g.id}`}>
-      <rect className={g.composite ? "si-group-composite" : "si-group"} x={g.x} y={g.y} width={g.w} height={g.h} rx={g.composite ? 8 : G.groupRadius} />
+      <rect className={g.composite ? "si-group-composite" : "si-group"} x={g.x} y={g.y} width={g.w} height={g.h} rx={G.groupRadius} />
       {g.composite ? (
         <line className="si-group-rule" x1={g.x} x2={g.x + g.w} y1={g.y + 24} y2={g.y + 24} />
       ) : null}

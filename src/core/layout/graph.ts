@@ -616,8 +616,8 @@ function routeEdges(
       angle: r2(Math.atan2(tip.y - prev.y, tip.x - prev.x)),
       form: "filled",
     })
-    if (arrow === "end" || arrow === "both") heads.push(headAt(points[points.length - 1], points[points.length - 2]))
-    if (arrow === "both") heads.push(headAt(points[0], points[1]))
+    if (G.graphArrowheads && (arrow === "end" || arrow === "both")) heads.push(headAt(points[points.length - 1], points[points.length - 2]))
+    if (G.graphArrowheads && arrow === "both") heads.push(headAt(points[0], points[1]))
     const edge: SceneEdge = {
       id,
       from: e.from,
@@ -630,8 +630,8 @@ function routeEdges(
     }
     result[p.i] = edge
     ports.push(
-      { id: `${id}:out`, node: e.from, edge: id, end: "out", covered: arrow === "both", ...from },
-      { id: `${id}:in`, node: e.to, edge: id, end: "in", covered: arrow !== "none", ...to },
+      { id: `${id}:out`, node: e.from, edge: id, end: "out", covered: G.graphArrowheads && arrow === "both", ...from },
+      { id: `${id}:in`, node: e.to, edge: id, end: "in", covered: G.graphArrowheads && arrow !== "none", ...to },
     )
   }
   // Labels after all wires exist, so they can avoid nodes, other labels, wires and group rules.

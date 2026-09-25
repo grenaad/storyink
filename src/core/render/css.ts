@@ -31,13 +31,13 @@ ${accentRules}
 .storyink .si-group-title{font-size:${T.label - 1}px;fill:${v("inkMuted")};}
 .si-group-rule{stroke:${v("groupLine")};stroke-width:1;}
 .si-wire{fill:none;stroke:${v("wire")};stroke-width:${G.wireWidth};stroke-linecap:round;stroke-linejoin:round;}
-.si-wire.si-dashed{stroke-dasharray:5 4;}
+.si-wire.si-dashed{stroke-dasharray:3 5;}
 .si-wire.si-thick{stroke-width:${G.wireWidth * 2};stroke:${v("port")};}
 .si-arrow{fill:${v("wire")};stroke:${v("wire")};stroke-width:1;stroke-linejoin:round;}
 .si-arrow-open{fill:none;stroke:${v("wire")};stroke-width:${G.wireWidth};stroke-linecap:round;stroke-linejoin:round;}
 .si-port{fill:${v("port")};}
-.si-pill{fill:${v("pill")};stroke:${v("lineSoft")};stroke-width:1;}
-.storyink .si-edge-label{font-size:${T.edgeLabel}px;fill:${v("inkMuted")};}
+.si-pill{fill:none;stroke:none;}
+.storyink .si-edge-label{font-size:${T.edgeLabel}px;letter-spacing:0.02em;fill:${v("inkMuted")};paint-order:stroke;stroke:${v("bg")};stroke-width:4px;stroke-linejoin:round;}
 .si-life{stroke:${v("line")};stroke-width:1;stroke-dasharray:3 4;}
 .si-act{fill:${v("panelAlt")};stroke:${v("line")};stroke-width:1;}
 .si-frame{fill:none;stroke:${v("line")};stroke-width:1;}

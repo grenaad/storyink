@@ -1,4 +1,4 @@
-import { animate, motion, useMotionValue } from "motion/react"
+import { animate, domAnimation, LazyMotion, m, useMotionValue } from "motion/react"
 import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react"
 import { motion as M, palettes, cssVar, type Palette, type ThemeName } from "../../theme/tokens.ts"
 import type { Scene } from "../scene.ts"
@@ -46,7 +46,7 @@ export function parseHash(hash: string): HashParams {
 
 function Btn({ label, title, onClick, children }: { label: string; title: string; onClick: () => void; children?: ReactNode }) {
   return (
-    <motion.button
+    <m.button
       type="button"
       className="si-btn"
       aria-label={label}
@@ -57,7 +57,7 @@ function Btn({ label, title, onClick, children }: { label: string; title: string
       transition={M.spring}
     >
       {children ?? label}
-    </motion.button>
+    </m.button>
   )
 }
 
@@ -251,6 +251,7 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
   const sheet = hash.sheet?.length ? hash.sheet : undefined
 
   return (
+    <LazyMotion features={domAnimation} strict>
     <div className={`si-app${hash.chrome ? "" : " si-nochrome"}`}>
       <header className="si-head">
         <p className="si-kind">{TYPE_LABEL[scene.type]}</p>
@@ -268,9 +269,9 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
         </div>
       ) : (
         <div className="si-stage" ref={stage}>
-          <motion.div className="si-canvas" style={{ x, y, scale: k, originX: 0, originY: 0 }}>
+          <m.div className="si-canvas" style={{ x, y, scale: k, originX: 0, originY: 0 }}>
             <Diagram scene={scene} />
-          </motion.div>
+          </m.div>
           <div className="si-tools" onPointerDown={(e) => e.stopPropagation()}>
             <Btn label="−" title="Zoom out (-)" onClick={() => zoomAt(0.8, undefined, undefined, true)} />
             <Btn label="+" title="Zoom in (+)" onClick={() => zoomAt(1.25, undefined, undefined, true)} />
@@ -286,5 +287,6 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
         </div>
       )}
     </div>
+    </LazyMotion>
   )
 }
