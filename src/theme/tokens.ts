@@ -63,6 +63,9 @@ export interface Palette {
   pulseBloomEdge: string
   glow: string
   glowCrest: string
+  /** Flood-glow alpha multiplier and blend (light: warm light on paper via screen). */
+  glowGain: string
+  glowBlend: string
   flash: string
   portActive: string
   playInk: string
@@ -104,8 +107,11 @@ export const palettes: Record<ThemeName, Palette> = {
     pulse: "#2b2925",
     pulseBloom: "#3d3a34",
     pulseBloomEdge: "#8a857c",
-    glow: "#a39d91",
-    glowCrest: "#2b2925",
+    // Light theme: warm light on paper (a screen-blended warm tint), not an ink darkening.
+    glow: "#f3d9b6",
+    glowCrest: "#fffaf0",
+    glowGain: "3",
+    glowBlend: "screen",
     flash: "#141311",
     portActive: "#141311",
     playInk: "#a39e94",
@@ -146,6 +152,8 @@ export const palettes: Record<ThemeName, Palette> = {
     pulseBloomEdge: "#9a948c",
     glow: "#8c8882",
     glowCrest: "#ece9e4",
+    glowGain: "1",
+    glowBlend: "normal",
     flash: "#f3dfc6",
     portActive: "#f0f0f0",
     playInk: "#5e5b54",

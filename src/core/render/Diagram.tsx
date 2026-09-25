@@ -139,11 +139,11 @@ function NodeView({ n, copy, fr }: { n: SceneNode; copy: string; fr?: Frame }) {
       {glows.map((g, k) => {
         const gid = `si-glow-${copy}-${n.id}-${k}`.replace(/[^\w-]/g, "_")
         return (
-          <g key={gid} className="si-glow">
+          <g key={gid} className="si-glow" style={{ mixBlendMode: "var(--si-glowBlend)" as never }}>
             <defs>
               <radialGradient id={gid} gradientUnits="userSpaceOnUse" cx={f(g.cx - n.x)} cy={f(g.cy - n.y)} r={g.r}>
-                <stop offset="0" style={{ stopColor: "var(--si-glowCrest)", stopOpacity: g.a }} />
-                <stop offset="0.45" style={{ stopColor: "var(--si-glow)", stopOpacity: +(g.a * 0.45).toFixed(3) }} />
+                <stop offset="0" style={{ stopColor: "var(--si-glowCrest)", stopOpacity: `calc(var(--si-glowGain) * ${g.a})` }} />
+                <stop offset="0.45" style={{ stopColor: "var(--si-glow)", stopOpacity: `calc(var(--si-glowGain) * ${+(g.a * 0.45).toFixed(3)})` }} />
                 <stop offset="1" style={{ stopColor: "var(--si-glow)", stopOpacity: 0 }} />
               </radialGradient>
             </defs>
