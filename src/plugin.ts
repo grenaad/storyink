@@ -4,7 +4,7 @@ import type { Plugin } from "@opencode/plugin"
 import { fromMermaid } from "./core/mermaid/index.ts"
 import { formatDiagnostic, type Diagnostic } from "./core/validate.ts"
 import { readSkill, skillPath } from "./node/assets.ts"
-import { parseSource, snapshot, writeDiagram } from "./node/index.ts"
+import { parseSource, snapshot, writeDiagram, type SnapshotReceipt } from "./node/index.ts"
 import type { ThemeName } from "./theme/tokens.ts"
 
 export const PLUGIN_ID = "storyink"
@@ -43,6 +43,40 @@ function specFrom(input: { spec?: unknown; mermaid?: string }) {
 }
 
 const THEME = { type: "string", enum: ["light", "dark"] } as const
+
+/**
+ * Build the snapshot tool result: gate summary, full-res paths (on disk only) and the
+ * compact preview image(s). Never inlines full-resolution sheets.
+ */
+export function snapshotResult(rc: SnapshotReceipt, receiptPath: string | undefined, code: number, image: "overview" | "full" | "none") {
+  const lint = rc.lint as { ok?: boolean; issues?: { kind: string; ids: string[]; detail: string }[] } | undefined
+  const previews = image === "none" ? [] : (rc.previews ?? []).slice(0, image === "full" ? 3 : 1)
+  const text = [
+    `storyink snapshot: ${rc.ok ? "all gates pass" : "gate failure"}`,
+    ...rc.gates.map((g) => `- gate ${g.name}: ${g.pass ? "pass" : "FAIL"} (${g.detail})`),
+    ...(lint?.issues ?? []).map((x) => `  - lint ${x.kind}: ${x.ids.join(", ")} ${x.detail}`),
+    "Full-resolution PNGs (on disk; open only if you must, they are large):",
+    ...rc.captures.map((c) => `- ${c.theme}${c.at !== undefined && c.at !== "end" ? ` t=${c.at}` : ""}: ${c.png} (${c.width}×${c.height})`),
+    rc.sheet ? `- sheet: ${rc.sheet.png} (${rc.sheet.width}×${rc.sheet.height})` : "",
+    ...(rc.beats ?? []).map((b) => `- beats: ${b.png} (${b.width}×${b.height})`),
+    previews.length
+      ? `Inline preview${previews.length > 1 ? `s (${previews.length} parts)` : ""}: ${previews.map((p) => `${p.path} (${p.width}×${p.height}, ${(p.bytes / 1024).toFixed(0)} KiB; ${p.shows})`).join("; ")}`
+      : "No inline image (image: \"none\").",
+    `- receipt: ${receiptPath}`,
+  ].filter(Boolean)
+  return {
+    content: [
+      { type: "text" as const, text: text.join("\n") },
+      ...previews.map((p) => ({
+        type: "file" as const,
+        uri: `data:${p.path.endsWith(".png") ? "image/png" : "image/jpeg"};base64,${fs.readFileSync(p.path).toString("base64")}`,
+        mime: p.path.endsWith(".png") ? "image/png" : "image/jpeg",
+        name: path.basename(p.path),
+      })),
+    ],
+    metadata: { code, receipt: receiptPath, previews: previews.map((p) => p.path) },
+  }
+}
 
 /** OpenCode v2 plugin: storyink tools and the bundled skill. */
 const plugin = {
@@ -158,7 +192,7 @@ const plugin = {
       editor.add({
         name: "snapshot",
         description:
-          "Screenshot a storyink HTML file in light and dark with headless Chrome, lint label overflow/overlap, and return PNG paths, a receipt, and the side-by-side contact sheet image so you can see the render. Look at the image before describing or delivering the diagram.",
+          "Screenshot a storyink HTML file in light and dark with headless Chrome, lint label overflow/overlap, and return full-res PNG paths, a receipt, and ONE compact preview image (JPEG, longest side ≤ maxImageSize, default 1024) so you can see the render. Look at the preview before describing the diagram; don't re-read the full-res sheets; use `at` for detail frames.",
         input: {
           type: "object",
           properties: {
@@ -168,14 +202,31 @@ const plugin = {
             outDir: { type: "string", description: "Directory for PNGs and receipt (default: next to the html)" },
             at: { type: "array", items: { type: ["number", "string"] }, description: 'Story times to capture, seconds or "end" (default ["end"])' },
             sheet: { type: "string", enum: ["themes", "beats", "none"], description: 'Contact sheet: "themes" (light|dark, default) or "beats" (one tile per story step)' },
+            image: {
+              type: "string",
+              enum: ["overview", "full", "none"],
+              description: 'Inline image: "overview" (default: one compact image; beat sheets reflow into more columns), "full" (normal sheet layout, split into ≤ 3 downscaled parts when tall), "none" (paths only)',
+            },
+            maxImageSize: { type: "number", description: "Longest side of the returned image in px (default 1024, 256–2048)" },
           },
           required: ["html"],
           additionalProperties: false,
         },
         options: { namespace: "storyink" },
         execute: async (input, context) => {
-          const i = input as { html: string; themes?: ThemeName[]; width?: number; outDir?: string; at?: (number | string)[]; sheet?: "themes" | "beats" | "none" }
+          const i = input as {
+            html: string
+            themes?: ThemeName[]
+            width?: number
+            outDir?: string
+            at?: (number | string)[]
+            sheet?: "themes" | "beats" | "none"
+            image?: "overview" | "full" | "none"
+            maxImageSize?: number
+          }
+          const image = i.image ?? "overview"
           const r = await snapshot(abs(i.html), {
+            ...(image !== "none" ? { preview: { mode: image, maxSize: Math.max(256, Math.min(2048, i.maxImageSize ?? 1024)) } } : {}),
             ...(i.at ? { at: i.at.map((x) => (x === "end" ? ("end" as const) : Number(x))) } : {}),
             sheet: i.sheet === "none" ? false : i.sheet === "beats" ? "beats" : true,
             ...(i.themes ? { themes: i.themes } : {}),
@@ -184,25 +235,7 @@ const plugin = {
             signal: context.signal,
           })
           if (r.code === 2 || !r.receipt) return { content: `storyink: ${r.error ?? "snapshot failed"}`, metadata: { code: r.code } }
-          const rc = r.receipt
-          const lint = rc.lint as { ok?: boolean; issues?: { kind: string; ids: string[]; detail: string }[] } | undefined
-          const text = [
-            `storyink snapshot: ${rc.ok ? "all gates pass" : "gate failure"}`,
-            ...rc.captures.map((c) => `- ${c.theme}: ${c.png}`),
-            rc.sheet ? `- sheet: ${rc.sheet.png}` : "",
-            ...(rc.beats ?? []).map((b) => `- beats: ${b.png}`),
-            ...rc.gates.map((g) => `- gate ${g.name}: ${g.pass ? "pass" : "FAIL"} (${g.detail})`),
-            ...(lint?.issues ?? []).map((x) => `  - lint ${x.kind}: ${x.ids.join(", ")} ${x.detail}`),
-            `- receipt: ${r.receiptPath}`,
-          ].filter(Boolean)
-          const image = rc.beats?.[0]?.png ?? rc.sheet?.png ?? rc.captures[0]?.png
-          return {
-            content: [
-              { type: "text" as const, text: text.join("\n") },
-              ...(image ? [{ type: "file" as const, uri: `data:image/png;base64,${fs.readFileSync(image).toString("base64")}`, mime: "image/png", name: path.basename(image) }] : []),
-            ],
-            metadata: { code: r.code, receipt: r.receiptPath },
-          }
+          return snapshotResult(r.receipt, r.receiptPath, r.code, image)
         },
       })
     })
