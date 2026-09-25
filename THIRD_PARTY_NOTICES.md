@@ -20,6 +20,18 @@ MIT License. Copyright (c) 2024 Motion B.V.; Copyright (c) 2018 Framer B.V. <htt
 The viewer bundle inlined into each HTML file starts with a comment banner that carries
 these notices and the MIT permission text.
 
+## @kitlangton/rolling-number (bundled into the HTML viewer)
+
+MIT License. Copyright (c) 2026 Kit Langton. <https://github.com/kitlangton/rolling-number>
+Used unmodified from npm for live counter reels; its stylesheet is inlined when a story has
+counters. The notice is also in the viewer bundle banner.
+
+## Storyboard design
+
+Timings and curves (beats, springs, pulse phases, rewind, gate) follow the numbers documented in
+our own style study of the "OpenCode Reloaded" figures; the runtime is an independent
+implementation. No code, shaders or figure content from anoma.ly are included.
+
 ## archify (design reference)
 
 The spec's overall shape (one JSON document per diagram with `type`, `nodes`/`edges`/`groups`,

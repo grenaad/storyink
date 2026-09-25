@@ -39,7 +39,207 @@
       "description": "Graph types only. Omit to auto-pick TB or LR by aspect ratio (closest to 16:10)."
     },
     "story": {
-      "description": "Reserved for Phase 2 storyboards. Accepted and ignored."
+      "description": "Storyboard (opt-in). \"auto\" derives steps from graph / message order.",
+      "oneOf": [
+        {
+          "const": "auto"
+        },
+        {
+          "type": "object",
+          "required": [
+            "steps"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "autoplay": {
+              "type": "boolean"
+            },
+            "end": {
+              "enum": [
+                "hold",
+                "loop"
+              ]
+            },
+            "steps": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "at": {
+                    "oneOf": [
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\+\\s*\\d+(\\.\\d+)?$"
+                      }
+                    ]
+                  },
+                  "reveal": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    ]
+                  },
+                  "pulse": {
+                    "oneOf": [
+                      {
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                              "edge": {
+                                "type": "string"
+                              },
+                              "route": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                },
+                                "minItems": 1
+                              },
+                              "duration": {
+                                "type": "number",
+                                "exclusiveMinimum": 0
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "oneOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "edge": {
+                                  "type": "string"
+                                },
+                                "route": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "minItems": 1
+                                },
+                                "duration": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  },
+                  "highlight": {
+                    "oneOf": [
+                      {
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "ids"
+                        ],
+                        "properties": {
+                          "ids": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "for": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "caption": {
+                    "type": "string"
+                  },
+                  "counter": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "to"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "to": {
+                            "type": "number"
+                          }
+                        }
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "id",
+                            "to"
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "to": {
+                              "type": "number"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "stop": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "style": {
       "type": "object",
@@ -230,6 +430,31 @@
                   "RL"
                 ],
                 "description": "Composite states: inner layout direction (best-effort)."
+              },
+              "counter": {
+                "type": "object",
+                "required": [
+                  "id"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "prefix": {
+                    "type": "string"
+                  },
+                  "suffix": {
+                    "type": "string"
+                  }
+                },
+                "description": "Rolling counter driven by story counter steps."
               }
             }
           }

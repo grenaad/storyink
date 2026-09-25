@@ -10,3 +10,7 @@ export { renderSvg, renderHtml, toScene, fontCss, StoryinkError, type SvgOptions
 export { parseHash, type HashParams } from "./render/App.tsx"
 export * as tokens from "../theme/tokens.ts"
 export { VERSION } from "../generated/meta.ts"
+export { storyState, restFrame, beatTimes, counterValue, type StateOptions } from "./story/state.ts"
+export { compileStory, resolveEdge, readTime, type CompileResult } from "./story/compile.ts"
+export { autoStory } from "./story/auto.ts"
+export type { Timeline, TimelineStep, TimelinePulse, TimelineGlow, TimelineDraw, PulseFrame, GlowFrame, Frame as StoryFrame } from "./story/types.ts"

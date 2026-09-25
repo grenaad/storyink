@@ -228,7 +228,12 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   const shoot = async (hash: string, png: string, w: number, h: number) => {
     fs.rmSync(png, { force: true })
     const args = [...baseFlags, fresh(), `--window-size=${w},${h}`, `--screenshot=${png}`, url(hash)]
-    const r = await run(browser.path, args, { timeoutMs, signal: opts.signal })
+    let r = await run(browser.path, args, { timeoutMs, signal: opts.signal })
+    if ((!fs.existsSync(png) || fs.statSync(png).size === 0) && !opts.signal?.aborted) {
+      // Rare early exits of the headless shell: retry once with a fresh profile.
+      const retry = [...baseFlags, fresh(), `--window-size=${w},${h}`, `--screenshot=${png}`, url(hash)]
+      r = await run(browser.path, retry, { timeoutMs, signal: opts.signal })
+    }
     if (!fs.existsSync(png) || fs.statSync(png).size === 0)
       throw new Error(`screenshot failed (${r.ms} ms): ${r.stderr.split("\n").filter((l) => l.trim()).slice(-3).join(" | ")}`)
     return r.ms

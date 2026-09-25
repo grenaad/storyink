@@ -100,3 +100,49 @@ when they have no outgoing edges. Unknown lines produce warnings, never crashes.
 - `<script type="application/json" id="storyink-data">` holds `{ version, scene }`.
 - `<script type="application/json" id="storyink-lint">` holds the in-browser lint report
   (`text-overflow`, `label-overflow`, `label-node`, `label-label`, `node-node`).
+
+## Storyboard (`story`, opt-in)
+
+A spec may carry `"story": { ... }` or `"story": "auto"`. The HTML then plays the diagram as
+a sequence of beats; the SVG, the no-JS page, exports (by default), `#t=end`, reduced motion and
+print all show the **final frame, which is exactly the static diagram**.
+
+```jsonc
+"story": {
+  "autoplay": false,   // default: click-to-play gate; true = play when scrolled into view
+  "end": "hold",       // "hold" (default) or "loop"
+  "steps": [
+    { "at": 0, "reveal": ["web"], "caption": "A shopper presses Pay", "stop": "Request" },
+    { "at": "+0.2", "pulse": "web->gateway" },
+    { "reveal": ["gateway"], "highlight": ["cache"] },
+    { "at": "+0.2", "pulse": ["gateway->orders", "gateway->cache"] },
+    { "pulse": { "route": ["orders->events", "events->receipts"] } },
+    { "at": "+0.2", "counter": { "id": "orders", "to": 128 } }
+  ]
+}
+```
+
+| step field  | meaning |
+| ----------- | ------- |
+| `at`        | seconds (absolute, must not go backwards) or `"+x"` = x s after the previous step **ends**; default `"+0"` |
+| `reveal`    | ids that appear here (fade + 6 px rise). Nodes, groups, edges, notes (`note-<i>`), frames (`frame-<i>`). Ids never revealed are visible from the start (context). Wires into hidden nodes draw on once both ends are shown. |
+| `pulse`     | an edge / message id, a unique `"from->to"` (ambiguous pairs are an error), a list (parallel) or `{ "route": [...] }` (multi-hop, one ease over the whole route) or `{ "edge", "duration" }`. The wire draws on under the dot; the target glows on arrival. |
+| `highlight` | ids or `{ "ids": [...], "for": 1.5 }`: flood glow + text flash |
+| `caption`   | a line under the title; words fade in; the previous line dims to 0.52 |
+| `counter`   | `{ "id", "to" }` (or a list): rolls a node counter (`nodes[].counter = { id, value, label, prefix, suffix }`) |
+| `stop`      | chapter label: a tall scrubber tick, a beat-sheet title and a `Shift+←/→` stop |
+
+A step **ends** when its reveals settle (react spring, 0.53 s), its pulses arrive (gather 0.34 s
++ flight 0.45–1.6 s by path length), or its caption's reading time (0.25 s + 0.075 s/word, 1–3 s)
+elapses, whichever is last. After the last event the story holds 1.5 s. Glows are spaced ≥ 1/3 s
+(≤ 3 flashes/s). Stories over 60 s warn.
+
+`"story": "auto"` (or `--story auto` / tool `story: "auto"`) derives the steps: graphs reveal the
+sources, then pulse breadth-first waves and reveal what they reach (edges into a group enter its
+entry states, notes appear with their target); sequences pulse every message in order, with
+activations, frames and notes following their messages.
+
+**Page contract:** `#t=<seconds|end>` seeks (paused), `#autoplay=0|1`, `#motion=full|reduced`,
+`#static=1` (runtime off, final frame), `#sheet=beats` (one tile per step + final frame).
+`window.__storyink = { ready, duration, steps: [{ id, label, t0, t1, stop? }], setTime(t), play(), pause(), replay(), state() }`.
+Keys: space play/pause, ←/→ previous/next step (Shift: chapter), R replay.

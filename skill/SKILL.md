@@ -75,6 +75,35 @@ add `kind`, `detail`, `groups`, a real `title`/`subtitle`.
 4. Fix the spec (labels, `detail`, grouping, `direction`, edge order), re-render, re-snapshot.
    Stop after three passes and report what is left.
 
+## 6. Storyboard (opt-in)
+
+Only when the user asks for an animated / story diagram. Add `"story"` to the spec (or
+`story: "auto"` on `storyink_render`, `--story auto` on the CLI):
+
+```json
+"story": { "steps": [
+  { "at": 0.3, "reveal": ["web"], "caption": "A shopper presses Pay", "stop": "Request" },
+  { "at": "+0.2", "pulse": "web->api" },
+  { "reveal": ["api"], "highlight": ["api"] },
+  { "at": "+0.2", "pulse": { "route": ["api->db", "db->cache"] }, "counter": { "id": "hits", "to": 3 } }
+] }
+```
+
+`at`: seconds or `"+x"` after the previous step ends. Reveal the target in the step *after* its
+pulse (`"+0"`) so nothing appears before its cause. Counters live on nodes:
+`"counter": { "id": "hits", "label": "hits" }`. One visible change per step; captions short.
+
+Loop: render, then `storyink_snapshot` with `sheet: "beats"` (CLI `--sheet beats`), plus a few
+`at` frames. Look at the beats sheet in both themes and check:
+- [ ] no overlaps or clipped labels on any beat
+- [ ] legible in both themes
+- [ ] nothing appears before its cause
+- [ ] each beat changes one visible thing
+- [ ] no half-drawn tile once a step has settled
+- [ ] the last frame is the static diagram (gates `end=static`, `reduced=static` pass)
+
+Max 3 passes. Stills can't show smoothness or real-time pacing: say so when reporting.
+
 ## 5. Report
 
 State what you delivered: HTML and SVG paths (and sizes), the sheet PNG you looked at, lint

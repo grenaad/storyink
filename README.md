@@ -34,10 +34,10 @@ both and has the OpenCode plugin as its default export. Runs on Node ≥ 20 and 
 ## 2. CLI
 
 ```
-storyink render <in.json|in.mmd|-> [-o out.html] [--svg out.svg] [--theme light|dark]
+storyink render <in.json|in.mmd|-> [-o out.html] [--svg out.svg] [--theme light|dark] [--story auto]
 storyink mermaid <in.mmd> [-o out.json]
 storyink validate <in> [--json]
-storyink snapshot <out.html> [--theme light,dark] [--width N] [--no-sheet] [--scale 2] [-o dir] [--json]
+storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats]|--no-sheet] [--at 0.5,1.2,end] [--scale 2] [-o dir] [--json]
 storyink skill
 ```
 
@@ -90,6 +90,27 @@ npx storyink skill        # prints the SKILL.md path and its content
 
 An MCP server is planned.
 
+## Storyboards (opt-in)
+
+Add a `story` to play a diagram as a sequence of beats in the HTML viewer:
+- nodes reveal;
+- wires draw on under a travelling pulse;
+- arrivals glow;
+- captions type in;
+- counters roll (via [@kitlangton/rolling-number](https://github.com/kitlangton/rolling-number)).
+
+`"story": "auto"` (or `--story auto`) derives the beats from the graph or message order. Playback
+has a click-to-play gate, play/pause, a tape-rewind replay and a scrubber with step and chapter
+ticks. Space, ←/→ and R control it. When reduced motion is on, the viewer jumps to the final frame.
+
+The final frame is always the static diagram. Every frame is a pure function of time
+(`storyState(scene, timeline, t)`), so `#t=2.5` seeks exactly and
+`storyink snapshot --at 1,2.5,end --sheet beats` renders stills and a beat contact sheet. The
+receipt gates check that the end frame and the reduced-motion page match the static diagram. See
+[docs/spec.md](docs/spec.md#storyboard-story-opt-in).
+
+![Checkout beats](docs/gallery/checkout.architecture.beats.light.png)
+
 ## Gallery
 
 `bun run gallery` renders every example and Mermaid sample and writes one light and one dark PNG per
@@ -100,6 +121,7 @@ example to `docs/gallery/`.
 | ![Checkout platform](docs/gallery/checkout.architecture.light.png) | ![Agent run lifecycle](docs/gallery/agent-run.lifecycle.dark.png) |
 | ![Release pipeline](docs/gallery/release.workflow.light.png) | ![OAuth sequence](docs/gallery/oauth.sequence.dark.png) |
 | ![Analytics pipeline](docs/gallery/analytics.dataflow.dark.png) | ![Order state machine (Mermaid)](docs/gallery/order.state.light.png) |
+| ![OAuth beats](docs/gallery/oauth.sequence.beats.dark.png) | ![Order state machine, auto story](docs/gallery/order.state.beats.light.png) |
 
 ## Spec
 
