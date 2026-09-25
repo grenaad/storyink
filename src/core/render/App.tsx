@@ -39,6 +39,9 @@ export interface HashParams {
   motion?: "full" | "reduced"
   /** `#static=1`: the SSR final frame with the story runtime disabled. */
   still?: boolean
+  /** Beat sheet layout: fixed column count and a tile range (for compact previews). */
+  cols?: number
+  range?: [number, number]
 }
 
 export function parseHash(hash: string): HashParams {
@@ -59,6 +62,8 @@ export function parseHash(hash: string): HashParams {
     ...(autoplay === "1" || autoplay === "0" ? { autoplay: autoplay === "1" } : {}),
     ...(motion === "full" || motion === "reduced" ? { motion } : {}),
     ...(p.get("static") === "1" ? { still: true } : {}),
+    ...(Number(p.get("cols")) >= 1 ? { cols: Math.min(12, Math.floor(Number(p.get("cols")))) } : {}),
+    ...(/^\d+-\d+$/.test(p.get("range") ?? "") ? { range: p.get("range")!.split("-").map(Number) as [number, number] } : {}),
   }
 }
 
@@ -343,7 +348,7 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
         {tl ? <Captions frame={hash.beats ? undefined : liveFrame} /> : null}
       </header>
       {hash.beats && tl ? (
-        <BeatSheet scene={scene} tl={tl} />
+        <BeatSheet scene={scene} tl={tl} {...(hash.cols ? { cols: hash.cols } : {})} {...(hash.range ? { range: hash.range } : {})} />
       ) : sheet ? (
         <div className="si-sheet" style={{ gridTemplateColumns: `repeat(${sheet.length}, 1fr)` }}>
           {sheet.map((t) => (

@@ -375,17 +375,23 @@ export function Captions({ frame }: { frame?: Frame }): ReactElement {
 }
 
 /** `#sheet=beats`: one labelled tile per step plus the final frame. */
-export function BeatSheet({ scene, tl }: { scene: Scene; tl: Timeline }): ReactElement {
-  const beats = beatTimes(tl)
+export function BeatSheet({ scene, tl, cols, range }: { scene: Scene; tl: Timeline; cols?: number; range?: [number, number] }): ReactElement {
+  const all = beatTimes(tl)
+  const [r0, r1] = range ?? [0, all.length - 1]
+  const beats = all.slice(r0, r1 + 1)
   return (
-    <div className="si-beats" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${beatTileMin(scene.viewBox.w)}px, 1fr))` }}>
-      {beats.map((b, i) => {
+    <div
+      className={`si-beats${cols && cols >= 4 ? " si-beats-compact" : ""}`}
+      style={{ gridTemplateColumns: cols ? `repeat(${cols}, minmax(0, 1fr))` : `repeat(auto-fill, minmax(${beatTileMin(scene.viewBox.w)}px, 1fr))` }}
+    >
+      {beats.map((b, j) => {
+        const i = j + r0
         const fr = storyState(scene, tl, b.t)
         const cap = beatCaption(tl, fr, b)
         return (
           <figure key={b.id} className="si-beat">
             <figcaption className="si-beat-cap">
-              <span className="si-beat-n">{i < beats.length - 1 ? String(i + 1).padStart(2, "0") : "END"}</span> {b.label}
+              <span className="si-beat-n">{b.id !== "end" ? String(i + 1).padStart(2, "0") : "END"}</span> {b.label}
               <span className="si-beat-t">{b.t.toFixed(2)}s</span>
             </figcaption>
             <Diagram scene={scene} frame={fr} copy={`beat${i}`} />

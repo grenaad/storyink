@@ -71,7 +71,7 @@ const escapeJson = (s: string) => s.replace(/</g, "\\u003c").replace(/\u2028/g, 
 const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
 
 // Runs before paint: hash theme > stored theme > pinned theme > system.
-const BOOT = `(function(){try{var d=document.documentElement,h=new URLSearchParams(location.hash.slice(1)),t=h.get("theme");if(t!=="light"&&t!=="dark"){t=null;try{t=localStorage.getItem("storyink-theme")}catch(e){}}if(t==="light"||t==="dark")d.dataset.theme=t;if(h.get("chrome")==="0")d.classList.add("si-nochrome-root")}catch(e){}})();`
+const BOOT = `(function(){try{var d=document.documentElement,h=new URLSearchParams(location.hash.slice(1)),t=h.get("theme");if(t!=="light"&&t!=="dark"){t=null;try{t=localStorage.getItem("storyink-theme")}catch(e){}}if(t==="light"||t==="dark")d.dataset.theme=t;if(h.get("chrome")==="0")d.classList.add("si-nochrome-root");var z=parseFloat(h.get("zoom")||"");if(z>0&&z<1)d.style.zoom=String(z)}catch(e){}})();`
 
 /** Standalone offline HTML: header, SSR diagram, viewer bundle, embedded font and data. */
 export function renderHtml(spec: Spec | Scene | unknown, opts: HtmlOptions = {}): string {

@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url"
 import type { ThemeName } from "../theme/tokens.ts"
 import type { Box } from "../core/scene.ts"
 import { browserVersion, findBrowser, type Browser } from "./chrome.ts"
+import { beatTimes } from "../core/story/state.ts"
 
 export interface SnapshotOptions {
   /** Themes to capture (default light, dark). */
@@ -32,6 +33,21 @@ export interface SnapshotOptions {
   timeoutMs?: number
   /** Virtual time budget in ms (default 3000). */
   budgetMs?: number
+  /**
+   * Compact preview for models / agents (never the full-res sheet):
+   * "overview" (default when set) reflows beat sheets into more, smaller tiles so one image
+   * fits; "full" keeps the normal sheet layout, split into at most 3 parts when tall.
+   */
+  preview?: { mode?: "overview" | "full"; maxSize?: number; maxBytes?: number; path?: string }
+}
+
+export interface Preview {
+  path: string
+  width: number
+  height: number
+  bytes: number
+  /** What the image shows, e.g. "beats 1–12 of 12 (4 columns)". */
+  shows: string
 }
 
 export interface Capture {
@@ -60,6 +76,8 @@ export interface SnapshotReceipt {
   sheet?: Capture
   /** Beat sheets, one per theme. */
   beats?: Capture[]
+  /** Compact previews (JPEG, longest side ≤ maxSize) for inline image results. */
+  previews?: Preview[]
   story?: { duration: number; steps: number }
   lint?: unknown
   gates: Gate[]
@@ -242,6 +260,89 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   const captures: Capture[] = []
   let sheetCap: Capture | undefined
   let beatCaps: Capture[] = []
+  let previews: Preview[] = []
+  let beatCount: number | undefined
+
+  /** Measure a sheet page's laid-out height in-page (data-content-height). */
+  const measure = async (hash: string, w: number): Promise<number | undefined> => {
+    const probe = await run(browser.path, [...baseFlags, fresh(), `--window-size=${w},900`, "--dump-dom", url(hash)], {
+      timeoutMs,
+      untilStdout: /<\/html>\s*$/,
+      signal: opts.signal,
+    })
+    const m = /<html[^>]*data-content-height="(\d+)"/.exec(probe.stdout)
+    return m ? Number(m[1]) : undefined
+  }
+  /** Capture `hash` at w×h CSS px, scaled so the longest side ≤ maxSize, as JPEG within maxBytes. */
+  const shootSmall = async (hash: string, w: number, h: number, file: string, maxSize: number, maxBytes: number) => {
+    // Page zoom (not device scale factor: Chrome clamps DSF at 0.5) so any size fits maxSize.
+    let z = Math.min(1, maxSize / Math.max(w, h))
+    let size = { width: 0, height: 0 }
+    for (let attempt = 0; attempt < 4; attempt++) {
+      fs.rmSync(file, { force: true })
+      const pw = Math.max(1, Math.floor(w * z))
+      const ph = Math.max(1, Math.floor(h * z))
+      const args = [...baseFlags.filter((f) => !f.startsWith("--force-device-scale-factor")), "--force-device-scale-factor=1", fresh(), `--window-size=${pw},${ph}`, `--screenshot=${file}`, url(`${hash}&zoom=${z.toFixed(4)}`)]
+      await run(browser.path, args, { timeoutMs, signal: opts.signal })
+      if (!fs.existsSync(file)) break
+      size = { width: pw, height: ph }
+      if (fs.statSync(file).size <= maxBytes) break
+      z *= 0.8
+    }
+    if (!fs.existsSync(file) || fs.statSync(file).size === 0) throw new Error(`preview capture failed: ${file}`)
+    return { ...size, bytes: fs.statSync(file).size }
+  }
+  const makePreviews = async (): Promise<Preview[]> => {
+    const p = opts.preview!
+    const maxSize = Math.max(256, Math.min(4096, p.maxSize ?? 1024))
+    const maxBytes = p.maxBytes ?? 300 * 1024
+    const mode = p.mode ?? "overview"
+    const theme = themes[0]
+    const file0 = p.path ? path.resolve(p.path) : path.join(outDir, `${base}.preview.jpg`)
+    fs.mkdirSync(path.dirname(file0), { recursive: true })
+    const partFile = (k: number, n: number) => (n === 1 ? file0 : file0.replace(/(\.[a-z]+)?$/i, (ext) => `-${k + 1}${ext || ".jpg"}`))
+    const out: Preview[] = []
+    if (sheetMode === "beats" && tl) {
+      const bw = 1440
+      const total = tl.steps.length + 1
+      const tileCount = beatCount ?? total
+      if (mode === "overview") {
+        // Reflow into more columns until the sheet is roughly landscape-to-square, in ONE image.
+        let chosen = { cols: 3, h: 0 }
+        for (const cols of [3, 4, 5, 6, 8]) {
+          const h = (await measure(`theme=${theme}&chrome=0&sheet=beats&cols=${cols}`, bw)) ?? bw
+          chosen = { cols, h }
+          if (h / bw <= 1.25) break
+        }
+        const r = await shootSmall(`theme=${theme}&chrome=0&sheet=beats&cols=${chosen.cols}`, bw, chosen.h, partFile(0, 1), maxSize, maxBytes)
+        out.push({ path: partFile(0, 1), ...r, shows: `all ${tileCount} beat tiles (${chosen.cols} columns), ${theme}` })
+      } else {
+        const h = (await measure(`theme=${theme}&chrome=0&sheet=beats`, bw)) ?? bw
+        const parts = Math.min(3, Math.max(1, Math.ceil(h / bw / 1.6)))
+        const per = Math.ceil(tileCount / parts)
+        for (let k = 0; k < parts; k++) {
+          const a = k * per
+          const b = Math.min(tileCount - 1, a + per - 1)
+          if (a > b) break
+          const hash = `theme=${theme}&chrome=0&sheet=beats&range=${a}-${b}`
+          const ph = (await measure(hash, bw)) ?? bw
+          const n = parts
+          const r = await shootSmall(hash, bw, ph, partFile(k, n), maxSize, maxBytes)
+          out.push({ path: partFile(k, n), ...r, shows: `beat tiles ${a + 1}–${b + 1} of ${tileCount} (part ${k + 1}/${n}), ${theme}` })
+        }
+      }
+    } else if (sheetCap && sheetMode === "themes") {
+      const colW = Math.max(500, Math.min(1000, vb.w + 48))
+      const sw = colW * themes.length
+      const sh = Math.round(headerH + 46 + (vb.h * (colW - 48)) / vb.w + 36)
+      const r = await shootSmall(`sheet=${themes.join(",")}&chrome=0`, sw, sh, partFile(0, 1), maxSize, maxBytes)
+      out.push({ path: partFile(0, 1), ...r, shows: `${themes.join(" | ")} side by side, final frame` })
+    } else {
+      const r = await shootSmall(`theme=${theme}&chrome=0${tq("end")}`, W, H, partFile(0, 1), maxSize, maxBytes)
+      out.push({ path: partFile(0, 1), ...r, shows: `${theme}, final frame` })
+    }
+    return out
+  }
   let lint: unknown
   try {
     for (const theme of themes)
@@ -290,6 +391,7 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
       }
     }
     beatCaps = beats
+    if (tl) beatCount = beatTimes(tl as never).length
 
     if (sheetMode === "themes" && themes.length > 1) {
       const colW = Math.max(500, Math.min(1000, vb.w + 48))
@@ -307,6 +409,8 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
         else gates.push({ name: "sheet", pass: false, detail: String((e as Error).message) })
       }
     }
+
+    if (opts.preview) previews = await makePreviews()
 
     // Lint via --dump-dom.
     const dom = await run(browser.path, [...baseFlags, fresh(), `--window-size=${W},${H}`, "--dump-dom", url(`theme=${themes[0]}&chrome=0${tq("end")}`)], {
@@ -335,6 +439,7 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
     captures,
     ...(sheetCap ? { sheet: sheetCap } : {}),
     ...(beatCaps.length ? { beats: beatCaps } : {}),
+    ...(previews.length ? { previews } : {}),
     ...(tl ? { story: { duration: tl.duration, steps: tl.steps.length } } : {}),
     ...(lint ? { lint } : {}),
     gates,

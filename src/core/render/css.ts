@@ -124,6 +124,9 @@ body{background:${v("bg")};color:${v("ink")};font-family:${fonts.mono};-webkit-f
 .si-live-counters .si-counter-value{fill-opacity:0;}
 .si-beats{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:18px 20px;padding:14px 24px 24px;overflow:auto;flex:1;align-content:start;}
 .si-sheet-mode{height:auto;min-height:0;overflow:visible;}
+.si-beats-compact{gap:12px 14px;}
+.si-beats-compact .si-beat-cap{font-size:11px;}
+.si-beats-compact .si-beat-caption{font-size:12px;}
 .si-sheet-mode .si-beats{overflow:visible;flex:none;}
 .si-beat{margin:0;display:flex;flex-direction:column;border-top:1px solid ${v("chromeLine")};padding-top:8px;}
 .si-beat-cap{display:flex;gap:8px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:${v("inkMuted")};margin-bottom:6px;white-space:nowrap;overflow:hidden;}

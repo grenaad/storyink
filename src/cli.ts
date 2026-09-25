@@ -25,6 +25,7 @@ ${bold("Usage")}
   storyink validate <in> [--json]
   storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats]|--no-sheet]
                    [--at 0.5,1.2,end] [--scale 2] [-o dir] [--json]
+                   [--preview out.jpg [--preview-size 1024]]   compact one-image preview for agents
   storyink skill            print the SKILL.md path and content
   storyink --help | --version
 
@@ -45,7 +46,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const _: string[] = []
   const flags = new Map<string, string | true>()
-  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story"])
+  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size"])
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "-" || !a.startsWith("-")) _.push(a)
@@ -161,6 +162,9 @@ async function main(argv: string[]): Promise<number> {
       themes,
       ...(width ? { width } : {}),
       sheet: a.flags.has("--no-sheet") ? false : str(a, "--sheet") === "beats" ? "beats" : true,
+      ...(str(a, "--preview")
+        ? { preview: { mode: "overview" as const, path: str(a, "--preview")!, maxSize: Number(str(a, "--preview-size") ?? 1024) || 1024 } }
+        : {}),
       ...(str(a, "--at") ? { at: str(a, "--at")!.split(",").map((x) => (x.trim() === "end" ? ("end" as const) : Number(x))) } : {}),
       scale,
       ...(str(a, "-o", "--out") ? { outDir: str(a, "-o", "--out") } : {}),
@@ -179,6 +183,7 @@ async function main(argv: string[]): Promise<number> {
     for (const c of rc.captures) console.log(`${green("png")} ${c.png}${c.at !== undefined && c.at !== "end" ? dim(` t=${c.at}`) : ""} ${dim(`${c.width}×${c.height} ${kb(c.bytes)} ${c.ms}ms`)}`)
     if (rc.sheet) console.log(`${green("sheet")} ${rc.sheet.png}`)
     for (const b of rc.beats ?? []) console.log(`${green("beats")} ${b.png}`)
+    for (const p of rc.previews ?? []) console.log(`${green("preview")} ${p.path} ${dim(`${p.width}×${p.height} ${kb(p.bytes)} · ${p.shows}`)}`)
     for (const g of rc.gates) console.log(`${g.pass ? green("pass") : red("FAIL")} ${bold(g.name)} ${dim(g.detail)}`)
     const issues = (rc.lint as { issues?: { kind: string; ids: string[]; detail: string }[] } | undefined)?.issues ?? []
     for (const i of issues) console.log(`  ${yellow(i.kind)} ${i.ids.join(" ")} ${dim(i.detail)}`)
