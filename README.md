@@ -38,6 +38,7 @@ storyink render <in.json|in.mmd|-> [-o out.html] [--svg out.svg] [--theme light|
 storyink mermaid <in.mmd> [-o out.json]
 storyink validate <in> [--json]
 storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats]|--no-sheet] [--at 0.5,1.2,end] [--scale 2] [-o dir] [--json]
+                  [--preview out.jpg [--preview-size 1024]]
 storyink skill
 ```
 
@@ -74,8 +75,14 @@ read `package.json` `main`, which is why the repo ships a root `server.js` that 
 Rebuild after changes, then restart the server (or touch the config) to reload.
 
 This adds the tools `storyink_render`, `storyink_from_mermaid`, `storyink_validate` and
-`storyink_snapshot`. `storyink_snapshot` returns the contact sheet as an image, so the model can
-see its own render. The plugin also adds the `storyink` skill (`skill/SKILL.md`), which covers
+`storyink_snapshot`. `storyink_snapshot` returns **one compact preview image** so the model can see its
+own render: a JPEG no larger than `maxImageSize` (1024 px by default) on its longest side, and
+usually well under 300 KB.
+- Beat sheets are reflowed into more columns so they fit in that single image.
+- Set `image: "full"` to get the normal sheet layout instead, split into at most 3 parts, or
+  `image: "none"` to get paths only.
+- Full-resolution PNGs are never inlined; they stay on disk and their paths are listed. The CLI
+  equivalent is `--preview out.jpg`. The plugin also adds the `storyink` skill (`skill/SKILL.md`), which covers
 choosing a diagram type, writing the spec, and the render → look → fix loop. If you already have
 a skill with the id `storyink`, yours is kept. Relative paths resolve against the project
 directory.

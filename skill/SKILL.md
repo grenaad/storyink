@@ -104,6 +104,17 @@ Loop: render, then `storyink_snapshot` with `sheet: "beats"` (CLI `--sheet beats
 
 Max 3 passes. Stills can't show smoothness or real-time pacing: say so when reporting.
 
+## Images and context
+
+- `storyink_snapshot` returns **one compact preview** (JPEG, ≤ 1024 px, a few hundred KB at most)
+  by default. Prefer it; `image: "full"` (≤ 3 parts) only when needed, `image: "none"` for gates only.
+- Full-res PNGs stay on disk and are listed in the text. **Don't re-read them**: they are huge
+  and every image stays in your context for the rest of the session.
+- For detail, snapshot single frames with `at` (e.g. `at: [2.5]`) instead of zooming into sheets.
+- Keep image reads few: one preview per render pass, at most 3 passes.
+- Outside OpenCode: `storyink snapshot x.html --sheet beats --preview x.preview.jpg` and read the
+  preview only.
+
 ## 5. Report
 
 State what you delivered: HTML and SVG paths (and sizes), the sheet PNG you looked at, lint
