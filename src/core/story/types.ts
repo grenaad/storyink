@@ -7,6 +7,8 @@ export interface TimelineStep {
   t1: number
   stop?: string
   caption?: string
+  /** Title parts for beat tiles: pulse paths, revealed node names, counter changes. */
+  parts?: { paths: string[]; reveals: string[]; counters: string[] }
 }
 
 export interface TimelinePulse {
@@ -58,7 +60,8 @@ export interface Timeline {
   draw: Record<string, TimelineDraw>
   pulses: TimelinePulse[]
   glows: TimelineGlow[]
-  captions: { text: string; t0: number; t1: number }[]
+  /** A caption belongs to its step: shown from t0, gone by t1 (step end + settle, or the next caption). */
+  captions: { text: string; t0: number; t1: number; step: number; handoff: boolean }[]
   counters: Record<string, { node: string; start: number; events: { t: number; to: number }[]; prefix?: string; suffix?: string; decimals: number }>
 }
 
@@ -96,7 +99,8 @@ export interface Frame {
   /** Arrival flash 0..1 for node text. */
   flash: Record<string, number>
   counters: Record<string, string>
-  captions: { text: string; o: number; words: number[] }[]
+  /** `current` = the caption of the step in progress; a superseded line is dimmed (0.52) and not current. */
+  captions: { text: string; o: number; words: number[]; current: boolean }[]
   /** Every event has settled (the frame equals the static diagram). */
   settled: boolean
 }

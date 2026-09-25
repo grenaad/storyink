@@ -2,6 +2,7 @@ import { story as S } from "../../theme/tokens.ts"
 import type { Pt, Scene } from "../scene.ts"
 import { clamp01, easeOutCubic, inOutCubic, react, smooth, smoothstep, spring } from "./ease.ts"
 import type { Frame, GlowFrame, PulseFrame, Timeline } from "./types.ts"
+import { composeTitle, truncate } from "./compile.ts"
 
 export interface StateOptions {
   /** Reduced motion: springs become steps, no pulses or glows. */
@@ -186,7 +187,8 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
   // Counters: exact values from the clock.
   for (const [id, c] of Object.entries(tl.counters)) frame.counters[id] = formatCounter(counterValue(c, t, reduced), c.decimals, c.prefix, c.suffix)
 
-  // Captions: current line with staggered words; the superseded line dims to 0.52.
+  // Captions belong to their step: words stagger in, the line fades after its step settles.
+  // When the next caption takes over directly, the old line lingers dimmed to 0.52 (not current).
   const cur = tl.captions.findIndex((c) => t >= c.t0 && t < c.t1)
   if (cur >= 0) {
     const c = tl.captions[cur]
@@ -194,48 +196,91 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
     const W = Math.min(2.8, Math.max(0.12, Math.min(c.t1 - c.t0, 1.2) - 0.08))
     const f = Math.min(S.springs.word, W / 2)
     const stagger = words.length > 1 ? (W - 1.5 * f) / (words.length - 1) : 0
-    const fadeOut = 1 - smoothstep((t - (c.t1 - 0.3)) / 0.3)
-    const lastCaption = cur === tl.captions.length - 1
+    const fadeOut = c.handoff ? 1 : reduced ? 1 : 1 - smoothstep((t - (c.t1 - 0.3)) / 0.3)
+    const prev = cur > 0 ? tl.captions[cur - 1] : undefined
+    if (prev && prev.handoff && prev.t1 === c.t0) {
+      const dim = 1 - (1 - S.dimSuperseded) * (reduced ? 1 : react(t - c.t0))
+      const gone = reduced ? 0 : 1 - smoothstep((t - c.t0 - 0.9) / 0.4)
+      const o = r2(dim * gone)
+      if (o > 0.01) frame.captions.push({ text: prev.text, o, words: prev.text.split(/\s+/).map(() => 1), current: false })
+    }
     frame.captions.push({
       text: c.text,
-      o: r2(lastCaption ? fadeOut : 1),
+      o: r2(fadeOut),
       words: words.map((_, i) => r2(reduced ? 1 : spring(t - c.t0 - i * stagger, f))),
+      current: true,
     })
-    if (cur > 0 && !lastCaption) void 0
-    const prev = cur > 0 ? tl.captions[cur - 1] : undefined
-    if (prev) {
-      const dim = 1 - (1 - S.dimSuperseded) * (reduced ? 1 : react(t - c.t0))
-      const gone = 1 - smoothstep((t - c.t0 - 1.2) / 0.4)
-      const o = r2(dim * gone * (lastCaption ? fadeOut : 1))
-      if (o > 0.01) frame.captions.unshift({ text: prev.text, o, words: prev.text.split(/\s+/).map(() => 1) })
-    }
   }
   return frame
 }
 
 /** Time of a beat tile: after the step lands, before the next one moves. */
-export function beatTimes(tl: Timeline): { id: string; label: string; t: number }[] {
-  // A step chained straight into the next ("+0") is shown by the next tile.
-  const kept = tl.steps.filter((s, i) => {
-    const next = tl.steps[i + 1]
-    return !next || next.t0 - s.t1 > 0.05 || !!s.stop || !!s.caption
-  })
-  let pending: string[] = []
-  const out: { id: string; label: string; t: number }[] = []
+export interface Beat {
+  id: string
+  label: string
+  t: number
+  /** Indices of the story steps this tile shows (first..last). */
+  steps: [number, number]
+}
+
+/** Default cap on beat tiles (plus the final frame); minor steps are grouped to fit. */
+export const MAX_BEATS = 12
+
+/**
+ * Beat tiles: one per visible change. A step chained straight into the next
+ * ("+0") shares the next tile; long stories group minor steps (no stop or
+ * caption) until at most `max` tiles remain. The last tile is the final frame.
+ */
+export function beatTimes(tl: Timeline, max = MAX_BEATS): Beat[] {
+  const groups: number[][] = []
+  let open: number[] = []
   tl.steps.forEach((s, i) => {
-    if (!kept.includes(s)) {
-      pending.push(s.label)
-      return
-    }
+    open.push(i)
     const next = tl.steps[i + 1]
+    const chained = next && next.t0 - s.t1 <= 0.05 && !next.stop && !next.caption
+    if (!chained) {
+      groups.push(open)
+      open = []
+    }
+  })
+  if (open.length) groups.push(open)
+  const major = (g: number[]) => g.some((i) => tl.steps[i].stop || tl.steps[i].caption)
+  while (groups.length > max) {
+    // Merge the minor group with its closest neighbour in time.
+    let best = -1
+    let gap = Infinity
+    for (let k = 0; k + 1 < groups.length; k++) {
+      if (major(groups[k + 1]) && major(groups[k])) continue
+      const d = tl.steps[groups[k + 1][0]].t0 - tl.steps[groups[k][groups[k].length - 1]].t1
+      if (d < gap) {
+        gap = d
+        best = k
+      }
+    }
+    if (best < 0) break
+    groups.splice(best, 2, [...groups[best], ...groups[best + 1]])
+  }
+  const out: Beat[] = groups.map((g) => {
+    const last = g[g.length - 1]
+    const s = tl.steps[last]
+    const next = tl.steps[last + 1]
     const settle = s.t1 + 0.6
     const t = next ? Math.max(s.t1, Math.min(settle, next.t0 - 0.02)) : Math.min(settle, tl.duration)
-    const label = s.stop || s.caption ? s.label : [...pending, s.label].join(" · ")
-    out.push({ id: s.id, label, t })
-    pending = []
+    const withStop = g.map((i) => tl.steps[i]).find((x) => x.stop)
+    const withCaption = g.map((i) => tl.steps[i]).find((x) => x.caption)
+    const label = withStop?.stop ?? (withCaption?.caption ? truncate(withCaption.caption, 40) : composeTitle(g.map((i) => tl.steps[i].parts ?? { paths: [], reveals: [], counters: [] })))
+    return { id: s.id, label, t: Math.round(t * 1000) / 1000, steps: [g[0], last] }
   })
-  out.push({ id: "end", label: "final frame", t: tl.duration })
+  out.push({ id: "end", label: "Final frame", t: tl.duration, steps: [tl.steps.length, tl.steps.length] })
   return out
+}
+
+/** The caption to print under a beat tile: only a current caption set by one of the tile's steps. */
+export function beatCaption(tl: Timeline, frame: Frame, beat: Beat): string | undefined {
+  const c = frame.captions.find((x) => x.current)
+  if (!c) return undefined
+  const owner = tl.captions.find((x) => x.text === c.text && frame.t >= x.t0 && frame.t < x.t1)
+  return owner && owner.step >= beat.steps[0] && owner.step <= beat.steps[1] ? c.text : undefined
 }
 
 /** Minimum beat-tile width for a diagram (wide diagrams get fewer, larger tiles). */

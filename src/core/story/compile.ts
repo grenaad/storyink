@@ -63,7 +63,7 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
   const flights: Record<string, TimelineDraw> = {}
   const pulses: TimelinePulse[] = []
   let glows: TimelineGlow[] = []
-  const captions: { text: string; t0: number; t1: number }[] = []
+  const captions: Timeline["captions"] = []
   const counters: Timeline["counters"] = {}
   const steps: Timeline["steps"] = []
 
@@ -155,7 +155,7 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
 
     // Caption.
     if (typeof step.caption === "string" && step.caption.trim()) {
-      captions.push({ text: step.caption.trim(), t0, t1: 0 })
+      captions.push({ text: step.caption.trim(), t0, t1: 0, step: i, handoff: false })
       ends.push(t0 + readTime(step.caption))
     }
 
@@ -176,8 +176,9 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
     }
 
     const t1 = Math.max(...ends)
-    const label = step.stop ?? step.caption ?? summarize(step, scene)
-    steps.push({ id: step.id ?? `step-${i + 1}`, label, t0, t1, ...(step.stop ? { stop: step.stop } : {}), ...(step.caption ? { caption: step.caption } : {}) })
+    const parts = titleParts(step, scene)
+    const label = step.stop ?? (step.caption ? truncate(step.caption, 40) : composeTitle([parts]))
+    steps.push({ id: step.id ?? `step-${i + 1}`, label, t0, t1, parts, ...(step.stop ? { stop: step.stop } : {}), ...(step.caption ? { caption: step.caption } : {}) })
     prevEnd = t1
     prevT0 = t0
   })
@@ -265,7 +266,19 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
   ]
   const lastEvent = Math.max(...events)
   const duration = lastEvent + S.endHold
-  captions.forEach((c, k) => (c.t1 = k + 1 < captions.length ? captions[k + 1].t0 : duration - 0.5))
+  // A caption belongs to its step: it stays through the step and a settle beat, then fades.
+  // If the next caption arrives first, it hands over (the old line dims to 0.52 briefly).
+  captions.forEach((c, k) => {
+    // The caption covers its step and any caption-less steps chained straight after it ("+0").
+    let last = c.step
+    while (steps[last + 1] && steps[last + 1].t0 - steps[last].t1 <= 0.05 && !steps[last + 1].caption) last++
+    const own = Math.min(steps[last].t1 + S.beats.settle, duration - 0.5)
+    const next = captions[k + 1]
+    if (next && next.t0 <= own) {
+      c.t1 = next.t0
+      c.handoff = true
+    } else c.t1 = own
+  })
   if (duration > S.warnTotal) warn("story", `story runs ${duration.toFixed(1)}s (over ${S.warnTotal}s)`, "shorten gaps or split the story")
   if (!story.steps.length) warn("story.steps", "story has no steps")
 
@@ -291,24 +304,95 @@ function parentOf(spec: Spec, id: string): string | undefined {
   return spec.nodes.find((n) => n.id === id)?.parent ?? spec.groups?.find((g) => g.id === id)?.parent
 }
 
-function summarize(step: StoryStep, scene: Scene): string {
-  const name = (id: string) =>
-    scene.nodes.find((n) => n.id === id)?.label.join(" ") || scene.groups.find((g) => g.id === id)?.label || id
-  const edgeName = (ref: string) => {
+export function truncate(s: string, n: number): string {
+  const t = s.trim()
+  if (t.length <= n) return t
+  const cut = t.slice(0, n - 1)
+  const sp = cut.lastIndexOf(" ")
+  return `${(sp > n * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,.;:·-]+$/, "")}…`
+}
+
+/** Humanised pieces of a step: pulse paths (A → B → C), revealed names, counter changes. */
+const PSEUDO: Record<string, string> = { initial: "Start", final: "End", choice: "Choice", fork: "Fork", join: "Join" }
+
+/** Human name for an element: its label, or a word for label-less pseudo states. */
+export function humanName(scene: Scene, id: string): string {
+  const n = scene.nodes.find((x) => x.id === id)
+  if (n) {
+    const l = n.label.join(" ").trim()
+    if (l) return l
+    const word = PSEUDO[n.kind] ?? n.kind
+    const owner = /^(.+)__(start|end)$/.exec(id)?.[1]
+    const group = owner && owner !== "root" ? scene.groups.find((g) => g.id === owner)?.label : undefined
+    return group ? `${group} ${word.toLowerCase()}` : word
+  }
+  return scene.groups.find((g) => g.id === id)?.label || id
+}
+
+export function titleParts(step: StoryStep, scene: Scene): NonNullable<import("./types.ts").TimelineStep["parts"]> {
+  const name = (id: string) => humanName(scene, id)
+  const edgeOf = (ref: string) => {
     const r = resolveEdge(scene, ref)
-    const e = r.id ? scene.edges.find((x) => x.id === r.id) : undefined
-    if (!e) return ref
-    if (scene.type === "sequence") return e.label?.text.replace(/^\d+\.\s*/, "") || `${name(e.from)} → ${name(e.to)}`
-    return `${name(e.from)} → ${name(e.to)}`
+    return r.id ? scene.edges.find((x) => x.id === r.id) : undefined
   }
-  const parts: string[] = []
-  const shown = asList(step.reveal).filter((id) => scene.nodes.find((n) => n.id === id)?.kind !== "note" && !/__(start|end)$/.test(id))
-  if (shown.length) parts.push(shown.map(name).join(", "))
-  if (step.pulse) {
-    const ps = asList(step.pulse as PulseRef | PulseRef[]).map((p) => (typeof p === "string" ? edgeName(p) : p.route ? p.route.map(edgeName).join(" · ") : edgeName(p.edge ?? "")))
-    parts.push(ps.length > 2 ? `${ps.slice(0, 2).join(", ")} +${ps.length - 2}` : ps.join(", "))
+  const paths: string[] = []
+  for (const p of asList(step.pulse as PulseRef | PulseRef[])) {
+    const refs = typeof p === "string" ? [p] : (p.route ?? (p.edge ? [p.edge] : []))
+    const es = refs.map(edgeOf).filter((e): e is NonNullable<typeof e> => !!e)
+    if (!es.length) continue
+    if (scene.type === "sequence") {
+      const l = es.map((e) => e.label?.text.replace(/^\d+\.\s*/, "") || `${name(e.from)} → ${name(e.to)}`).join(" · ")
+      paths.push(l)
+      continue
+    }
+    const hops = [name(es[0].from), ...es.map((e) => name(e.to))]
+    paths.push(hops.filter((h, i) => h !== hops[i - 1]).join(" → "))
   }
-  if (step.highlight) parts.push("highlight")
-  if (step.counter) parts.push("count")
-  return parts.join(" · ") || (asList(step.reveal).length ? "start" : "step")
+  const reveals = asList(step.reveal)
+    .filter((id) => !["note", "initial", "final", "choice", "fork", "join"].includes(scene.nodes.find((n) => n.id === id)?.kind ?? ""))
+    .map(name)
+  const counters = asList(step.counter).map((c) => {
+    const n = scene.nodes.find((x) => x.counter?.id === c.id)
+    const node = n ? n.label.join(" ") : c.id
+    const lab = n?.counter?.label
+    const what = lab && lab.toLowerCase() !== node.toLowerCase() ? `${node} ${lab}` : node
+    return `${what.charAt(0).toUpperCase()}${what.slice(1)} count → ${c.to.toLocaleString("en-US")}`
+  })
+  return { paths, reveals, counters }
+}
+
+/** Join the parts of one or more merged steps into a short title, without repeating names. */
+export function composeTitle(list: NonNullable<import("./types.ts").TimelineStep["parts"]>[], max = 48): string {
+  // Parallel single hops from one source read as "A → B, C".
+  const raw = [...new Set(list.flatMap((p) => p.paths))]
+  const bySource = new Map<string, string[]>()
+  const paths: string[] = []
+  const single = raw.map((p) => p.split(" → ")).filter((h) => h.length === 2)
+  if (raw.length > 1 && single.length === raw.length && new Set(single.map((h) => h[1])).size === 1) {
+    // Fan-in: "A, B → C".
+    paths.push(`${[...new Set(single.map((h) => h[0]))].join(", ")} → ${single[0][1]}`)
+    raw.length = 0
+  }
+  for (const p of raw) {
+    const hops = p.split(" → ")
+    if (hops.length === 2) {
+      const l = bySource.get(hops[0])
+      if (l) l.push(hops[1])
+      else {
+        const nl = [hops[1]]
+        bySource.set(hops[0], nl)
+        paths.push(`\u0000${hops[0]}`)
+      }
+    } else paths.push(p)
+  }
+  for (let i = 0; i < paths.length; i++)
+    if (paths[i].startsWith("\u0000")) {
+      const src = paths[i].slice(1)
+      paths[i] = `${src} → ${bySource.get(src)!.join(", ")}`
+    }
+  const inPaths = new Set(paths.flatMap((p) => p.split(/ → | · |, /)))
+  const reveals = [...new Set(list.flatMap((p) => p.reveals))].filter((r) => !inPaths.has(r))
+  const counters = list.flatMap((p) => p.counters)
+  const bits = [paths.length ? paths.join(" + ") : "", reveals.length ? reveals.join(", ") : "", ...counters].filter(Boolean)
+  return truncate(bits.join(" · ") || "Start", max)
 }

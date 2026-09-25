@@ -2,7 +2,7 @@ import { animate, useMotionValue, useMotionValueEvent, type AnimationPlaybackCon
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react"
 import { story as S } from "../../theme/tokens.ts"
 import type { Scene } from "../scene.ts"
-import { beatTileMin, beatTimes, storyState } from "../story/state.ts"
+import { beatCaption, beatTileMin, beatTimes, storyState } from "../story/state.ts"
 import type { Frame, Timeline } from "../story/types.ts"
 import { Diagram } from "./Diagram.tsx"
 
@@ -381,7 +381,7 @@ export function BeatSheet({ scene, tl }: { scene: Scene; tl: Timeline }): ReactE
     <div className="si-beats" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${beatTileMin(scene.viewBox.w)}px, 1fr))` }}>
       {beats.map((b, i) => {
         const fr = storyState(scene, tl, b.t)
-        const cap = fr.captions[fr.captions.length - 1]?.text
+        const cap = beatCaption(tl, fr, b)
         return (
           <figure key={b.id} className="si-beat">
             <figcaption className="si-beat-cap">

@@ -4,8 +4,8 @@ import path from "node:path"
 import { layout } from "../src/core/layout/index.ts"
 import { fromMermaid } from "../src/core/mermaid/index.ts"
 import { renderSvg } from "../src/core/render/index.tsx"
-import { beatTimes, counterValue, restFrame, storyState } from "../src/core/story/state.ts"
-import { readTime } from "../src/core/story/compile.ts"
+import { beatCaption, beatTimes, counterValue, MAX_BEATS, restFrame, storyState } from "../src/core/story/state.ts"
+import { composeTitle, readTime, truncate } from "../src/core/story/compile.ts"
 import { validate } from "../src/core/validate.ts"
 
 const ex = (f: string) => JSON.parse(fs.readFileSync(path.join(import.meta.dir, "..", "examples", f), "utf8"))
@@ -110,8 +110,29 @@ describe("storyState", () => {
 
   test("beat times include a final frame and skip chained steps", () => {
     const b = beatTimes(tl)
-    expect(b[b.length - 1]).toEqual({ id: "end", label: "final frame", t: tl.duration })
+    expect(b[b.length - 1]).toMatchObject({ id: "end", label: "Final frame", t: tl.duration })
     expect(b.length).toBeLessThan(tl.steps.length + 1)
+  })
+
+  test("a caption belongs to its step and fades after it settles", () => {
+    const c = tl.captions[0]
+    const on = storyState(scene, tl, c.t0 + 0.5)
+    expect(on.captions.map((x) => [x.text, x.current])).toEqual([["One two three", true]])
+    expect(c.handoff).toBe(false)
+    expect(storyState(scene, tl, c.t1 + 0.01).captions).toEqual([])
+    // Beat tiles only print a caption set by one of their own steps.
+    const beats = beatTimes(tl)
+    const fr = storyState(scene, tl, beats[1].t)
+    expect(beatCaption(tl, fr, beats[1])).toBeUndefined()
+  })
+
+  test("handover: the superseded caption is dimmed and not current", () => {
+    const v2 = validate({ ...base, story: { steps: [{ at: 0, caption: "First line here" }, { at: "+0", caption: "Second line" }] } })
+    const s2 = layout(v2.spec!)
+    const t = s2.timeline!.captions[1].t0 + 0.4
+    const f = storyState(s2, s2.timeline!, t)
+    expect(f.captions.map((x) => x.current)).toEqual([false, true])
+    expect(f.captions[0].o).toBeLessThan(0.6)
   })
 
   test("SSR / static SVG equals the story-less diagram", () => {
@@ -143,5 +164,28 @@ describe("auto story", () => {
     const tl = sc.timeline!
     expect(tl.appear["Fulfilment__start"]).toBeGreaterThan(tl.appear["Paid"])
     expect(tl.appear["note_1"]).toBe(tl.appear["Refunded"])
+  })
+})
+
+describe("beat titles", () => {
+  const P = (paths: string[], reveals: string[] = [], counters: string[] = []) => ({ paths, reveals, counters })
+  test("humanised, deduplicated, short", () => {
+    expect(composeTitle([P(["API gateway → Orders"], ["Orders"], ["Orders count → 1"])])).toBe("API gateway → Orders · Orders count → 1")
+    expect(composeTitle([P(["Orders → order-events → Send receipt"])])).toBe("Orders → order-events → Send receipt")
+    expect(composeTitle([P(["Check → Paid", "Check → Cancelled"])])).toBe("Check → Paid, Cancelled")
+    expect(composeTitle([P(["Picking → Join", "Invoicing → Join"])])).toBe("Picking, Invoicing → Join")
+    expect(composeTitle([P(["A → B"]), P([], ["B", "C"])])).toBe("A → B · C")
+    expect(truncate("The app makes a one-time verifier and its hash", 40)).toBe("The app makes a one-time verifier and…")
+  })
+  test("examples: labels, not ids; no repeated tokens", () => {
+    const sc = layout(validate(ex("checkout.architecture.json")).spec!)
+    const labels = beatTimes(sc.timeline!).map((b) => b.label)
+    expect(labels).toContain("API gateway → Orders · Orders count → 1")
+    expect(labels.join("|")).not.toMatch(/ORDERS · ORDERS|->|__/)
+    const m = fromMermaid(fs.readFileSync(path.join(import.meta.dir, "..", "examples/mermaid/order.state.mmd"), "utf8"))
+    const st = layout({ ...m.spec!, story: "auto" } as never).timeline!
+    const b = beatTimes(st)
+    expect(b.length).toBeLessThanOrEqual(MAX_BEATS + 1)
+    expect(b.map((x) => x.label).join("|")).not.toMatch(/__|root/)
   })
 })
