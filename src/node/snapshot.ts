@@ -1,0 +1,249 @@
+import { spawn, spawnSync } from "node:child_process"
+import { createHash } from "node:crypto"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import { pathToFileURL } from "node:url"
+import type { ThemeName } from "../theme/tokens.ts"
+import type { Box } from "../core/scene.ts"
+import { browserVersion, findBrowser, type Browser } from "./chrome.ts"
+
+export interface SnapshotOptions {
+  /** Themes to capture (default light, dark). */
+  themes?: ThemeName[]
+  /** Window width in CSS px (default derived from the viewBox, min 500). */
+  width?: number
+  /** Also capture a side-by-side contact sheet of all themes (default true). */
+  sheet?: boolean
+  /** Output directory (default: next to the HTML file). */
+  outDir?: string
+  /** Device scale factor (default 1). */
+  scale?: 1 | 2
+  /** `#t=` value (Phase 1: accepted, no-op). */
+  t?: string
+  browser?: Browser
+  signal?: AbortSignal
+  /** Per-process hard timeout (default 15 s). */
+  timeoutMs?: number
+  /** Virtual time budget in ms (default 3000). */
+  budgetMs?: number
+}
+
+export interface Capture {
+  theme: ThemeName | "sheet"
+  png: string
+  sha256: string
+  bytes: number
+  width: number
+  height: number
+  ms: number
+}
+
+export interface Gate {
+  name: string
+  pass: boolean
+  detail: string
+}
+
+export interface SnapshotReceipt {
+  html: string
+  browser: { path: string; version?: string; flavor: string; source: string }
+  flags: string[]
+  captures: Capture[]
+  sheet?: Capture
+  lint?: unknown
+  gates: Gate[]
+  ok: boolean
+  createdAt: string
+}
+
+export interface SnapshotResult {
+  /** 0 pass, 1 gate failure, 2 no browser. */
+  code: 0 | 1 | 2
+  receipt?: SnapshotReceipt
+  receiptPath?: string
+  error?: string
+}
+
+const HARD_TIMEOUT = 15_000
+
+function readScene(html: string): { viewBox: Box; title: string } {
+  const m = /<script type="application\/json" id="storyink-data">([\s\S]*?)<\/script>/.exec(html)
+  if (!m) throw new Error("not a storyink HTML file (no #storyink-data)")
+  const data = JSON.parse(m[1])
+  return data.scene
+}
+
+interface RunResult {
+  ok: boolean
+  stdout: string
+  stderr: string
+  ms: number
+}
+
+/**
+ * Run one browser process. Resolves when it exits, when stderr reports the
+ * screenshot was written (Chrome 153 never exits afterwards, so it is
+ * SIGKILLed), when `until` matches stdout, or after the hard timeout.
+ */
+function run(bin: string, args: string[], opts: { untilStdout?: RegExp; timeoutMs: number; signal?: AbortSignal }): Promise<RunResult> {
+  return new Promise((resolve) => {
+    const t0 = performance.now()
+    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] })
+    let stdout = ""
+    let stderr = ""
+    let done = false
+    let written = false
+    const finish = (ok: boolean) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      opts.signal?.removeEventListener("abort", onAbort)
+      try {
+        child.kill("SIGKILL")
+      } catch {}
+      resolve({ ok, stdout, stderr, ms: Math.round(performance.now() - t0) })
+    }
+    const onAbort = () => finish(false)
+    opts.signal?.addEventListener("abort", onAbort)
+    const timer = setTimeout(() => finish(written), opts.timeoutMs)
+    child.stdout.on("data", (d) => {
+      stdout += d
+      if (opts.untilStdout?.test(stdout)) finish(true)
+    })
+    child.stderr.on("data", (d) => {
+      stderr += d
+      if (/bytes written to file/.test(stderr)) {
+        written = true
+        finish(true)
+      }
+    })
+    child.on("error", (e) => {
+      stderr += String(e)
+      finish(false)
+    })
+    child.on("exit", (code) => finish(code === 0 || written))
+  })
+}
+
+const sha256 = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex")
+
+/** Screenshot a storyink HTML page in each theme (plus a contact sheet), lint it, and write a receipt. */
+export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Promise<SnapshotResult> {
+  const browser = opts.browser ?? findBrowser()
+  if (!browser) return { code: 2, error: "no Chrome/Chromium found (set STORYINK_CHROME)" }
+  const abs = path.resolve(htmlPath)
+  const html = fs.readFileSync(abs, "utf8")
+  const scene = readScene(html)
+  const vb = scene.viewBox
+  const themes = opts.themes?.length ? opts.themes : (["light", "dark"] as ThemeName[])
+  const outDir = path.resolve(opts.outDir ?? path.dirname(abs))
+  fs.mkdirSync(outDir, { recursive: true })
+  const base = path.basename(abs).replace(/\.html?$/i, "")
+  const scale = opts.scale ?? 1
+  const timeoutMs = opts.timeoutMs ?? HARD_TIMEOUT
+  const budget = opts.budgetMs ?? 3000
+  // Viewer header (kind line, serif title, optional subtitle).
+  const headerH = (scene as { subtitle?: string }).subtitle ? 128 : 100
+  const W = Math.round(Math.max(500, opts.width ?? Math.min(1600, vb.w + 64)))
+  const s = Math.min(1, (W - 64) / vb.w)
+  const H = Math.round(headerH + vb.h * s + 64 + 8)
+  const url = (hash: string) => `${pathToFileURL(abs).href}#${hash}`
+  const tHash = opts.t ? `&t=${encodeURIComponent(opts.t)}` : ""
+
+  const baseFlags = [
+    ...(browser.flavor === "chrome" ? ["--headless=new"] : []),
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--hide-scrollbars",
+    `--force-device-scale-factor=${scale}`,
+    "--force-prefers-no-reduced-motion",
+    "--disable-extensions",
+    "--mute-audio",
+    `--virtual-time-budget=${budget}`,
+  ]
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "storyink-chrome-"))
+  let n = 0
+  const fresh = () => {
+    const d = path.join(tmpRoot, `p${n++}`)
+    fs.mkdirSync(d)
+    return `--user-data-dir=${d}`
+  }
+  const shoot = async (hash: string, png: string, w: number, h: number) => {
+    fs.rmSync(png, { force: true })
+    const args = [...baseFlags, fresh(), `--window-size=${w},${h}`, `--screenshot=${png}`, url(hash)]
+    const r = await run(browser.path, args, { timeoutMs, signal: opts.signal })
+    if (!fs.existsSync(png) || fs.statSync(png).size === 0)
+      throw new Error(`screenshot failed (${r.ms} ms): ${r.stderr.split("\n").filter((l) => l.trim()).slice(-3).join(" | ")}`)
+    return r.ms
+  }
+
+  const gates: Gate[] = []
+  const captures: Capture[] = []
+  let sheetCap: Capture | undefined
+  let lint: unknown
+  try {
+    for (const theme of themes) {
+      const png = path.join(outDir, `${base}.${theme}.png`)
+      const ms = await shoot(`theme=${theme}&chrome=0${tHash}`, png, W, H)
+      captures.push({ theme, png, sha256: sha256(png), bytes: fs.statSync(png).size, width: W * scale, height: H * scale, ms })
+    }
+    // Determinism gate: same t twice, same pixels.
+    const first = captures[0]
+    const again = path.join(tmpRoot, "again.png")
+    await shoot(`theme=${first.theme}&chrome=0${tHash}`, again, W, H)
+    const same = sha256(again) === first.sha256
+    gates.push({ name: "deterministic", pass: same, detail: same ? `${first.theme} captured twice: identical` : `${first.theme} differs between runs` })
+
+    if (opts.sheet !== false && themes.length > 1) {
+      const colW = Math.max(500, Math.min(1000, vb.w + 48))
+      const sw = colW * themes.length
+      const sh = Math.round(headerH + 40 + (vb.h * (colW - 48)) / Math.max(vb.w, colW - 48) + 32)
+      const png = path.join(outDir, `${base}.sheet.png`)
+      try {
+        const ms = await shoot(`sheet=${themes.join(",")}&chrome=0${tHash}`, png, sw, sh)
+        sheetCap = { theme: "sheet", png, sha256: sha256(png), bytes: fs.statSync(png).size, width: sw * scale, height: sh * scale, ms }
+      } catch (e) {
+        // Fallback: ffmpeg horizontal tile of the per-theme captures.
+        const ff = spawnSync("ffmpeg", ["-y", "-loglevel", "error", ...captures.flatMap((c) => ["-i", c.png]), "-filter_complex", `hstack=inputs=${captures.length}`, png])
+        if (ff.status === 0 && fs.existsSync(png))
+          sheetCap = { theme: "sheet", png, sha256: sha256(png), bytes: fs.statSync(png).size, width: W * captures.length * scale, height: H * scale, ms: 0 }
+        else gates.push({ name: "sheet", pass: false, detail: String((e as Error).message) })
+      }
+    }
+
+    // Lint via --dump-dom.
+    const dom = await run(browser.path, [...baseFlags, fresh(), `--window-size=${W},${H}`, "--dump-dom", url(`theme=${themes[0]}&chrome=0`)], {
+      timeoutMs,
+      untilStdout: /<\/html>\s*$/,
+      signal: opts.signal,
+    })
+    const lm = /<script type="application\/json" id="storyink-lint">([\s\S]*?)<\/script>/.exec(dom.stdout)
+    const ready = /<html[^>]*data-ready="1"/.test(dom.stdout)
+    gates.push({ name: "ready", pass: ready, detail: ready ? "hydrated, fonts ready" : "page never signalled ready" })
+    if (lm) {
+      lint = JSON.parse(lm[1])
+      const l = lint as { ok: boolean; issues: unknown[] }
+      gates.push({ name: "lint", pass: l.ok, detail: l.ok ? "no overflow or overlap" : `${l.issues.length} issue(s)` })
+    } else gates.push({ name: "lint", pass: false, detail: "no lint output in DOM" })
+  } catch (e) {
+    gates.push({ name: "capture", pass: false, detail: (e as Error).message })
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true })
+  }
+
+  const receipt: SnapshotReceipt = {
+    html: abs,
+    browser: { path: browser.path, version: browser.version ?? browserVersion(browser.path), flavor: browser.flavor, source: browser.source },
+    flags: [...baseFlags, "--user-data-dir=<fresh tmp>", `--window-size=${W},${H}`],
+    captures,
+    ...(sheetCap ? { sheet: sheetCap } : {}),
+    ...(lint ? { lint } : {}),
+    gates,
+    ok: gates.every((g) => g.pass),
+    createdAt: new Date().toISOString(),
+  }
+  const receiptPath = path.join(outDir, `${base}.receipt.json`)
+  fs.writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`)
+  return { code: receipt.ok ? 0 : 1, receipt, receiptPath }
+}
