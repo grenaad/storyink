@@ -1,0 +1,71 @@
+{
+  "name": "storyink",
+  "version": "0.1.0",
+  "description": "Diagram library, CLI and OpenCode v2 plugin: architecture, workflow, sequence, dataflow and lifecycle diagrams from JSON or Mermaid into standalone HTML and SVG.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/types/core/index.d.ts",
+      "import": "./dist/core/index.js"
+    },
+    "./node": {
+      "types": "./dist/types/node/index.d.ts",
+      "import": "./dist/node/index.js"
+    },
+    "./schema.json": "./schema/storyink.schema.json",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "storyink": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "gen": "bun scripts/gen.ts",
+    "build": "bun scripts/build.ts",
+    "typecheck": "bun run gen && tsc --noEmit",
+    "test": "bun run gen && bun test",
+    "prepublishOnly": "bun run build"
+  },
+  "dependencies": {
+    "motion": "13.4.3",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.0.16",
+    "@types/bun": "latest",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "5.9.3"
+  },
+  "license": "MIT",
+  "author": "grenaad",
+  "keywords": [
+    "diagram",
+    "architecture",
+    "sequence-diagram",
+    "mermaid",
+    "svg",
+    "opencode",
+    "plugin"
+  ],
+  "files": [
+    "dist",
+    "schema",
+    "skill",
+    "docs",
+    "examples",
+    "fonts/OFL.txt",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
+  ]
+}
