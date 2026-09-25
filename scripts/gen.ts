@@ -30,6 +30,11 @@ write(
     `export const COMMIT_MONO_700 = ${JSON.stringify(font(700))}\n`,
 )
 
+write(
+  "rolling.ts",
+  `/** @kitlangton/rolling-number styles (MIT, Kit Langton). */\nexport const ROLLING_CSS = ${JSON.stringify(fs.readFileSync(path.join(root, "node_modules/@kitlangton/rolling-number/dist/styles.css"), "utf8"))}\n`,
+)
+
 const version = (name: string) => JSON.parse(fs.readFileSync(path.join(root, "node_modules", name, "package.json"), "utf8")).version
 const banner = `/*! storyink viewer ${pkg.version} | MIT
  * Bundles:
@@ -37,6 +42,8 @@ const banner = `/*! storyink viewer ${pkg.version} | MIT
  *    MIT License. Copyright (c) Meta Platforms, Inc. and affiliates.
  *  motion ${version("motion")} (framer-motion ${version("framer-motion")}, motion-dom ${version("motion-dom")}, motion-utils ${version("motion-utils")})
  *    MIT License. Copyright (c) 2024 Motion B.V.; Copyright (c) 2018 Framer B.V.
+ *  @kitlangton/rolling-number ${version("@kitlangton/rolling-number")}
+ *    MIT License. Copyright (c) 2026 Kit Langton.
  *  Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
  *  associated documentation files (the "Software"), to deal in the Software without restriction,
  *  including without limitation the rights to use, copy, modify, merge, publish, distribute,

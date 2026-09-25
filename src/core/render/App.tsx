@@ -1,5 +1,8 @@
 import { animate, domAnimation, LazyMotion, m, useMotionValue } from "motion/react"
 import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react"
+import { flushSync } from "react-dom"
+import type { Frame } from "../story/types.ts"
+import { BeatSheet, Captions, Gate, Transport, useStory } from "./Story.tsx"
 import { motion as M, palettes, cssVar, type Palette, type ThemeName } from "../../theme/tokens.ts"
 import type { Scene } from "../scene.ts"
 import { Diagram } from "./Diagram.tsx"
@@ -20,6 +23,8 @@ export interface ViewerHooks {
   exportSvg: (theme: ThemeName) => void
   exportPng: (theme: ThemeName) => void
   onReady: (sheet: boolean) => void
+  /** Called after every story frame renders (live counters overlay). */
+  onFrame?: (frame: Frame, playing: boolean) => void
 }
 
 /** Parsed `location.hash` contract. */
@@ -28,19 +33,32 @@ export interface HashParams {
   chrome: boolean
   t?: string
   sheet?: ThemeName[]
+  /** `#sheet=beats`: one tile per story step. */
+  beats?: boolean
+  autoplay?: boolean
+  motion?: "full" | "reduced"
+  /** `#static=1`: the SSR final frame with the story runtime disabled. */
+  still?: boolean
 }
 
 export function parseHash(hash: string): HashParams {
   const p = new URLSearchParams(hash.replace(/^#/, ""))
   const theme = p.get("theme")
   const sheet = p.get("sheet")
+  const autoplay = p.get("autoplay")
+  const motion = p.get("motion")
   return {
     ...(theme === "light" || theme === "dark" ? { theme } : {}),
     chrome: p.get("chrome") !== "0",
     ...(p.get("t") ? { t: p.get("t")! } : {}),
-    ...(sheet
-      ? { sheet: sheet.split(",").filter((x): x is ThemeName => x === "light" || x === "dark") }
-      : {}),
+    ...(sheet === "beats"
+      ? { beats: true }
+      : sheet
+        ? { sheet: sheet.split(",").filter((x): x is ThemeName => x === "light" || x === "dark") }
+        : {}),
+    ...(autoplay === "1" || autoplay === "0" ? { autoplay: autoplay === "1" } : {}),
+    ...(motion === "full" || motion === "reduced" ? { motion } : {}),
+    ...(p.get("static") === "1" ? { still: true } : {}),
   }
 }
 
@@ -115,7 +133,20 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
   const k = useMotionValue(1)
   const [hash, setHash] = useState<HashParams>({ chrome: true })
   const [theme, setTheme] = useState<ThemeName | undefined>(undefined)
+  const [hydrated, setHydrated] = useState(false)
+  const [sysReduced, setSysReduced] = useState(false)
+  const [override, setOverride] = useState<Frame | undefined>(undefined)
+  const [exportCurrent, setExportCurrent] = useState(false)
   const vb = scene.viewBox
+  const tl = scene.timeline
+  const reduced = hash.motion === "reduced" || (hash.motion !== "full" && sysReduced)
+  const story = useStory(scene, tl, {
+    ...(hash.t !== undefined ? { t: hash.t } : {}),
+    ...(hash.autoplay !== undefined ? { autoplay: hash.autoplay } : {}),
+    reduced,
+    still: !hydrated || !!hash.still || !!hash.beats || !!hash.sheet?.length,
+    stage,
+  })
 
   const fit = useCallback(
     (anim: boolean) => {
@@ -124,9 +155,10 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
       const sw = el.clientWidth
       const sh = el.clientHeight
       const pad = 32
-      const s = Math.max(0.1, Math.min((sw - 2 * pad) / vb.w, (sh - 2 * pad) / vb.h, 1.25))
-      const tx = (sw - vb.w * s) / 2
-      const ty = Math.max(pad / 2, (sh - vb.h * s) / 2)
+      // Snap to whole pixels / 1/64 scale steps so repeated captures rasterize identically.
+      const s = Math.floor(Math.max(0.1, Math.min((sw - 2 * pad) / vb.w, (sh - 2 * pad) / vb.h, 1.25)) * 64) / 64
+      const tx = Math.round((sw - vb.w * s) / 2)
+      const ty = Math.round(Math.max(pad / 2, (sh - vb.h * s) / 2))
       if (anim) {
         animate(k, s, M.spring)
         animate(x, tx, M.spring)
@@ -167,6 +199,8 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
   useEffect(() => {
     const h = parseHash(location.hash)
     setHash(h)
+    if (typeof matchMedia === "function") setSysReduced(matchMedia("(prefers-reduced-motion: reduce)").matches)
+    setHydrated(true)
     let stored: ThemeName | undefined
     try {
       const s = localStorage.getItem(THEME_KEY)
@@ -181,14 +215,45 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
   }, [])
 
   useEffect(() => {
-    if (!hash.sheet?.length) fit(false)
-    hooks?.onReady(!!hash.sheet?.length)
-  }, [hash, fit, hooks])
+    if (!hydrated) return
+    if (!hash.sheet?.length && !hash.beats) fit(false)
+    hooks?.onReady(!!hash.sheet?.length || !!hash.beats)
+  }, [hash, fit, hooks, hydrated])
+
+  // Page contract: setTime / duration / steps / play / pause.
+  const storyRef = useRef(story)
+  storyRef.current = story
+  useEffect(() => {
+    const w = window as unknown as { __storyink?: Record<string, unknown> }
+    if (!w.__storyink) return
+    w.__storyink.duration = tl?.duration ?? 0
+    w.__storyink.steps = tl ? tl.steps.map((st) => ({ id: st.id, label: st.label, t0: st.t0, t1: st.t1, ...(st.stop ? { stop: st.stop } : {}) })) : []
+    w.__storyink.setTime = (x: number | "end") => storyRef.current?.seek(x === "end" ? (tl?.duration ?? 0) : Number(x))
+    w.__storyink.play = () => storyRef.current?.play()
+    w.__storyink.pause = () => storyRef.current?.pause()
+    w.__storyink.replay = () => storyRef.current?.replay()
+    w.__storyink.state = () => ({ t: storyRef.current?.t ?? 0, mode: storyRef.current?.mode ?? "static" })
+  }, [tl])
+
+  const liveFrame = override ?? story?.frame
+  useEffect(() => {
+    if (story && hooks?.onFrame) hooks.onFrame(story.frame, story.mode === "playing")
+  }, [story?.frame, story?.mode, hooks])
 
   useEffect(() => {
     const onResize = () => fit(false)
     addEventListener("resize", onResize)
-    return () => removeEventListener("resize", onResize)
+    // The header height can change once webfonts load; refit so every capture uses the same scale.
+    let ro: ResizeObserver | undefined
+    if (typeof ResizeObserver !== "undefined" && stage.current) {
+      ro = new ResizeObserver(onResize)
+      ro.observe(stage.current)
+    }
+    document.fonts?.ready.then(onResize)
+    return () => {
+      removeEventListener("resize", onResize)
+      ro?.disconnect()
+    }
   }, [fit])
 
   // Wheel zoom at cursor, drag to pan, keyboard.
@@ -219,7 +284,15 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
     }
     const key = (ev: KeyboardEvent) => {
       if (ev.target instanceof HTMLInputElement || ev.metaKey || ev.ctrlKey || ev.altKey) return
-      if (ev.key === "0") fit(true)
+      const st = storyRef.current
+      if (st && (ev.key === " " || ev.code === "Space")) {
+        ev.preventDefault()
+        if (st.mode === "gate") st.ungate()
+        else st.toggle()
+      } else if (st && ev.key === "ArrowRight") st.step(1, ev.shiftKey)
+      else if (st && ev.key === "ArrowLeft") st.step(-1, ev.shiftKey)
+      else if (st && (ev.key === "r" || ev.key === "R")) st.replay()
+      else if (ev.key === "0") fit(true)
       else if (ev.key === "+" || ev.key === "=") zoomAt(1.25, undefined, undefined, true)
       else if (ev.key === "-" || ev.key === "_") zoomAt(0.8, undefined, undefined, true)
     }
@@ -249,6 +322,16 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
   }
   const resolved = theme ?? "light"
   const sheet = hash.sheet?.length ? hash.sheet : undefined
+  /** Export either the final frame (default) or the frame on screen. */
+  const exportWith = (fn: () => void) => {
+    if (!story || exportCurrent) return fn()
+    flushSync(() => setOverride(story.frameAt(tl!.duration)))
+    try {
+      fn()
+    } finally {
+      flushSync(() => setOverride(undefined))
+    }
+  }
 
   return (
     <LazyMotion features={domAnimation} strict>
@@ -257,21 +340,36 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
         <p className="si-kind">{TYPE_LABEL[scene.type]}</p>
         <h1 className="si-title">{scene.title}</h1>
         {scene.subtitle ? <p className="si-subtitle">{scene.subtitle}</p> : null}
+        {tl ? <Captions frame={hash.beats ? undefined : liveFrame} /> : null}
       </header>
-      {sheet ? (
+      {hash.beats && tl ? (
+        <BeatSheet scene={scene} tl={tl} />
+      ) : sheet ? (
         <div className="si-sheet" style={{ gridTemplateColumns: `repeat(${sheet.length}, 1fr)` }}>
           {sheet.map((t) => (
             <div key={t} data-theme={t}>
               <p className="si-sheet-cap">{t}</p>
-              <Diagram scene={scene} copy={t} />
+              <Diagram scene={scene} copy={t} frame={story?.frameAt(tl!.duration)} />
             </div>
           ))}
         </div>
       ) : (
-        <div className="si-stage" ref={stage}>
+        <div className={`si-stage${story?.mode === "gate" ? " si-gated" : ""}`} ref={stage} onClick={() => story?.mode === "gate" && story.ungate()}>
           <m.div className="si-canvas" style={{ x, y, scale: k, originX: 0, originY: 0 }}>
-            <Diagram scene={scene} />
+            <div
+              className="si-figure"
+              style={
+                story && (story.dim < 1 || story.blur > 0)
+                  ? { opacity: story.dim, ...(story.blur > 0 ? { filter: `blur(${story.blur}px)` } : {}) }
+                  : undefined
+              }
+            >
+              <Diagram scene={scene} frame={liveFrame} />
+              <div className="si-counters" />
+            </div>
           </m.div>
+          {story?.mode === "gate" ? <Gate onPlay={story.ungate} /> : null}
+          {story && tl ? <Transport c={story} tl={tl} /> : null}
           <div className="si-tools" onPointerDown={(e) => e.stopPropagation()}>
             <Btn label="−" title="Zoom out (-)" onClick={() => zoomAt(0.8, undefined, undefined, true)} />
             <Btn label="+" title="Zoom in (+)" onClick={() => zoomAt(1.25, undefined, undefined, true)} />
@@ -281,8 +379,11 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
               {resolved === "dark" ? <Sun /> : <Moon />}
             </Btn>
             <span className="si-sep" />
-            <Btn label="SVG" title="Export SVG" onClick={() => hooks?.exportSvg(resolved)} />
-            <Btn label="PNG" title="Export PNG (2×)" onClick={() => hooks?.exportPng(resolved)} />
+            {tl ? (
+              <Btn label={exportCurrent ? "Frame: now" : "Frame: end"} title="Export the final frame or the frame on screen" onClick={() => setExportCurrent((v) => !v)} />
+            ) : null}
+            <Btn label="SVG" title="Export SVG" onClick={() => exportWith(() => hooks?.exportSvg(resolved))} />
+            <Btn label="PNG" title="Export PNG (2×)" onClick={() => exportWith(() => hooks?.exportPng(resolved))} />
           </div>
         </div>
       )}

@@ -7,19 +7,25 @@ import { pathToFileURL } from "node:url"
 import type { ThemeName } from "../theme/tokens.ts"
 import type { Box } from "../core/scene.ts"
 import { browserVersion, findBrowser, type Browser } from "./chrome.ts"
+import { beatTileMin } from "../core/story/state.ts"
 
 export interface SnapshotOptions {
   /** Themes to capture (default light, dark). */
   themes?: ThemeName[]
   /** Window width in CSS px (default derived from the viewBox, min 500). */
   width?: number
-  /** Also capture a side-by-side contact sheet of all themes (default true). */
-  sheet?: boolean
+  /**
+   * Contact sheet: true / "themes" (default) = themes side by side;
+   * "beats" = one tile per story step plus the final frame (per theme); false = none.
+   */
+  sheet?: boolean | "themes" | "beats"
+  /** Story times to capture: seconds or "end" (default ["end"]). */
+  at?: (number | "end")[]
   /** Output directory (default: next to the HTML file). */
   outDir?: string
   /** Device scale factor (default 1). */
   scale?: 1 | 2
-  /** `#t=` value (Phase 1: accepted, no-op). */
+  /** @deprecated use `at`. */
   t?: string
   browser?: Browser
   signal?: AbortSignal
@@ -30,7 +36,9 @@ export interface SnapshotOptions {
 }
 
 export interface Capture {
-  theme: ThemeName | "sheet"
+  theme: ThemeName | "sheet" | "beats"
+  /** Story time captured ("end" = final frame). */
+  at?: number | "end"
   png: string
   sha256: string
   bytes: number
@@ -51,6 +59,9 @@ export interface SnapshotReceipt {
   flags: string[]
   captures: Capture[]
   sheet?: Capture
+  /** Beat sheets, one per theme. */
+  beats?: Capture[]
+  story?: { duration: number; steps: number }
   lint?: unknown
   gates: Gate[]
   ok: boolean
@@ -67,7 +78,7 @@ export interface SnapshotResult {
 
 const HARD_TIMEOUT = 15_000
 
-function readScene(html: string): { viewBox: Box; title: string } {
+function readScene(html: string): { viewBox: Box; title: string; subtitle?: string; timeline?: { duration: number; steps: unknown[] } } {
   const m = /<script type="application\/json" id="storyink-data">([\s\S]*?)<\/script>/.exec(html)
   if (!m) throw new Error("not a storyink HTML file (no #storyink-data)")
   const data = JSON.parse(m[1])
@@ -185,13 +196,16 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   const scale = opts.scale ?? 1
   const timeoutMs = opts.timeoutMs ?? HARD_TIMEOUT
   const budget = opts.budgetMs ?? 3000
-  // Viewer header (kind line, serif title, optional subtitle).
-  const headerH = (scene as { subtitle?: string }).subtitle ? 128 : 100
+  // Viewer header (kind line, serif title, optional subtitle, caption slot for stories).
+  const tl = scene.timeline
+  const headerH = (scene.subtitle ? 128 : 100) + (tl ? 54 : 0)
+  const ats: (number | "end")[] = opts.at?.length ? opts.at : opts.t ? [opts.t === "end" ? "end" : Number(opts.t)] : ["end"]
+  const tq = (at: number | "end") => (tl ? `&t=${at === "end" ? "end" : +at.toFixed(3)}` : "")
+  const sheetMode = opts.sheet === false ? false : opts.sheet === "beats" ? "beats" : "themes"
   const W = Math.round(Math.max(500, opts.width ?? Math.min(1600, vb.w + 64)))
   const s = Math.min(1, (W - 64) / vb.w)
   const H = Math.round(headerH + vb.h * s + 64 + 8)
   const url = (hash: string) => `${pathToFileURL(abs).href}#${hash}`
-  const tHash = opts.t ? `&t=${encodeURIComponent(opts.t)}` : ""
 
   const baseFlags = [
     ...(browser.flavor === "chrome" ? ["--headless=new"] : []),
@@ -223,28 +237,61 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   const gates: Gate[] = []
   const captures: Capture[] = []
   let sheetCap: Capture | undefined
+  let beatCaps: Capture[] = []
   let lint: unknown
   try {
-    for (const theme of themes) {
-      const png = path.join(outDir, `${base}.${theme}.png`)
-      const ms = await shoot(`theme=${theme}&chrome=0${tHash}`, png, W, H)
-      captures.push({ theme, png, sha256: sha256(png), bytes: fs.statSync(png).size, width: W * scale, height: H * scale, ms })
-    }
-    // Determinism gate: same t twice, same pixels.
+    for (const theme of themes)
+      for (const at of ats) {
+        const tag = at === "end" ? "" : `.t${+at.toFixed(2)}`
+        const png = path.join(outDir, `${base}.${theme}${tag}.png`)
+        const ms = await shoot(`theme=${theme}&chrome=0${tq(at)}`, png, W, H)
+        captures.push({ theme, at, png, sha256: sha256(png), bytes: fs.statSync(png).size, width: W * scale, height: H * scale, ms })
+      }
+    // Determinism gate: same t twice, same pixels (a mid-story frame when there is a story).
     const first = captures[0]
-    const again = path.join(tmpRoot, "again.png")
-    await shoot(`theme=${first.theme}&chrome=0${tHash}`, again, W, H)
-    const same = sha256(again) === first.sha256
-    gates.push({ name: "deterministic", pass: same, detail: same ? `${first.theme} captured twice: identical` : `${first.theme} differs between runs` })
+    const midT: number | "end" = tl ? (ats.find((a) => a !== "end") ?? +(tl.duration / 2).toFixed(3)) : "end"
+    const a1 = path.join(tmpRoot, "same-1.png")
+    const a2 = path.join(tmpRoot, "same-2.png")
+    await shoot(`theme=${first.theme}&chrome=0${tq(midT)}`, a1, W, H)
+    await shoot(`theme=${first.theme}&chrome=0${tq(midT)}`, a2, W, H)
+    const same = sha256(a1) === sha256(a2)
+    gates.push({ name: "deterministic", pass: same, detail: same ? `${first.theme} at t=${midT} captured twice: identical` : `${first.theme} at t=${midT} differs between runs` })
+    if (tl) {
+      // End frame = static, and reduced motion = static.
+      const stat = path.join(tmpRoot, "static.png")
+      const end = path.join(tmpRoot, "end.png")
+      const red = path.join(tmpRoot, "reduced.png")
+      await shoot(`theme=${first.theme}&chrome=0&static=1`, stat, W, H)
+      await shoot(`theme=${first.theme}&chrome=0&t=end`, end, W, H)
+      await shoot(`theme=${first.theme}&chrome=0&motion=reduced`, red, W, H)
+      const sStat = sha256(stat)
+      gates.push({ name: "end=static", pass: sha256(end) === sStat, detail: sha256(end) === sStat ? "t=end matches the static diagram" : "t=end differs from the static diagram" })
+      gates.push({ name: "reduced=static", pass: sha256(red) === sStat, detail: sha256(red) === sStat ? "reduced motion shows the static diagram" : "reduced motion differs from the static diagram" })
+    }
+    const beats: Capture[] = []
+    if (sheetMode === "beats" && tl) {
+      const n = tl.steps.length + 1
+      const bw = 1440
+      const cols = Math.max(1, Math.floor((bw - 48 + 20) / (beatTileMin(vb.w) + 20)))
+      const colW = (bw - 48 - (cols - 1) * 20) / cols
+      const tileH = (colW * vb.h) / vb.w + 52
+      const bh = Math.round(headerH + 14 + Math.ceil(n / cols) * (tileH + 18) + 24)
+      for (const theme of themes) {
+        const png = path.join(outDir, `${base}.beats.${theme}.png`)
+        const ms = await shoot(`theme=${theme}&chrome=0&sheet=beats`, png, bw, bh)
+        beats.push({ theme: "beats", png, sha256: sha256(png), bytes: fs.statSync(png).size, width: bw * scale, height: bh * scale, ms })
+      }
+    }
+    beatCaps = beats
 
-    if (opts.sheet !== false && themes.length > 1) {
+    if (sheetMode === "themes" && themes.length > 1) {
       const colW = Math.max(500, Math.min(1000, vb.w + 48))
       const sw = colW * themes.length
       const sh = Math.round(headerH + 46 + (vb.h * (colW - 48)) / vb.w + 36)
       const png = path.join(outDir, `${base}.sheet.png`)
       try {
         if (process.env.STORYINK_SHEET === "ffmpeg") throw new Error("forced ffmpeg sheet")
-        const ms = await shoot(`sheet=${themes.join(",")}&chrome=0${tHash}`, png, sw, sh)
+        const ms = await shoot(`sheet=${themes.join(",")}&chrome=0`, png, sw, sh)
         sheetCap = { theme: "sheet", png, sha256: sha256(png), bytes: fs.statSync(png).size, width: sw * scale, height: sh * scale, ms }
       } catch (e) {
         // Fallback: ffmpeg `tile` of the per-theme captures (all the same size).
@@ -255,7 +302,7 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
     }
 
     // Lint via --dump-dom.
-    const dom = await run(browser.path, [...baseFlags, fresh(), `--window-size=${W},${H}`, "--dump-dom", url(`theme=${themes[0]}&chrome=0`)], {
+    const dom = await run(browser.path, [...baseFlags, fresh(), `--window-size=${W},${H}`, "--dump-dom", url(`theme=${themes[0]}&chrome=0${tq("end")}`)], {
       timeoutMs,
       untilStdout: /<\/html>\s*$/,
       signal: opts.signal,
@@ -280,6 +327,8 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
     flags: [...baseFlags, "--user-data-dir=<fresh tmp>", `--window-size=${W},${H}`],
     captures,
     ...(sheetCap ? { sheet: sheetCap } : {}),
+    ...(beatCaps.length ? { beats: beatCaps } : {}),
+    ...(tl ? { story: { duration: tl.duration, steps: tl.steps.length } } : {}),
     ...(lint ? { lint } : {}),
     gates,
     ok: gates.every((g) => g.pass),

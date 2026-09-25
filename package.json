@@ -40,6 +40,7 @@
     "gallery": "bun run gen && bun scripts/gallery.ts"
   },
   "dependencies": {
+    "@kitlangton/rolling-number": "0.4.1",
     "motion": "13.4.3",
     "react": "19.3.0",
     "react-dom": "19.3.0"

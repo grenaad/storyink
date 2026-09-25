@@ -66,15 +66,17 @@ const plugin = {
             output: { type: "string", description: "Output .html path (relative to the project directory)" },
             svg: { type: "string", description: "Optional output .svg path" },
             theme: { ...THEME, description: "Pin the theme; default follows the viewer's system preference" },
+            story: { type: "string", enum: ["auto"], description: "Add an auto-generated storyboard (only when the user asked for an animated diagram)" },
           },
           required: ["output"],
           additionalProperties: false,
         },
         options: { namespace: "storyink" },
         execute: async (input, context) => {
-          const i = input as { spec?: unknown; mermaid?: string; output: string; svg?: string; theme?: ThemeName }
+          const i = input as { spec?: unknown; mermaid?: string; output: string; svg?: string; theme?: ThemeName; story?: "auto" }
           if (context.signal.aborted) throw new Error("aborted")
           const s = specFrom(i)
+          if (s.ok && s.spec && i.story === "auto" && s.spec.story === undefined) s.spec.story = "auto"
           if (!s.ok || !s.spec)
             return {
               content: `storyink: spec is invalid, nothing written.\n${summarize(s.diagnostics)}`,
@@ -164,14 +166,18 @@ const plugin = {
             themes: { type: "array", items: THEME, description: "Default [light, dark]" },
             width: { type: "number", description: "Window width in CSS px (min 500)" },
             outDir: { type: "string", description: "Directory for PNGs and receipt (default: next to the html)" },
+            at: { type: "array", items: { type: ["number", "string"] }, description: 'Story times to capture, seconds or "end" (default ["end"])' },
+            sheet: { type: "string", enum: ["themes", "beats", "none"], description: 'Contact sheet: "themes" (light|dark, default) or "beats" (one tile per story step)' },
           },
           required: ["html"],
           additionalProperties: false,
         },
         options: { namespace: "storyink" },
         execute: async (input, context) => {
-          const i = input as { html: string; themes?: ThemeName[]; width?: number; outDir?: string }
+          const i = input as { html: string; themes?: ThemeName[]; width?: number; outDir?: string; at?: (number | string)[]; sheet?: "themes" | "beats" | "none" }
           const r = await snapshot(abs(i.html), {
+            ...(i.at ? { at: i.at.map((x) => (x === "end" ? ("end" as const) : Number(x))) } : {}),
+            sheet: i.sheet === "none" ? false : i.sheet === "beats" ? "beats" : true,
             ...(i.themes ? { themes: i.themes } : {}),
             ...(i.width ? { width: i.width } : {}),
             ...(i.outDir ? { outDir: abs(i.outDir) } : {}),
@@ -184,11 +190,12 @@ const plugin = {
             `storyink snapshot: ${rc.ok ? "all gates pass" : "gate failure"}`,
             ...rc.captures.map((c) => `- ${c.theme}: ${c.png}`),
             rc.sheet ? `- sheet: ${rc.sheet.png}` : "",
+            ...(rc.beats ?? []).map((b) => `- beats: ${b.png}`),
             ...rc.gates.map((g) => `- gate ${g.name}: ${g.pass ? "pass" : "FAIL"} (${g.detail})`),
             ...(lint?.issues ?? []).map((x) => `  - lint ${x.kind}: ${x.ids.join(", ")} ${x.detail}`),
             `- receipt: ${r.receiptPath}`,
           ].filter(Boolean)
-          const image = rc.sheet?.png ?? rc.captures[0]?.png
+          const image = rc.beats?.[0]?.png ?? rc.sheet?.png ?? rc.captures[0]?.png
           return {
             content: [
               { type: "text" as const, text: text.join("\n") },

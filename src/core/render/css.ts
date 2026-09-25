@@ -49,6 +49,12 @@ ${accentRules}
 .storyink .si-frame-label{font-size:${T.detail}px;fill:${v("inkMuted")};}
 .si-frame-rule{stroke:${v("line")};stroke-width:1;stroke-dasharray:4 4;}
 .si-seq{fill:${v("ink")};}
+.si-pulse{fill:${v("pulse")};}
+.si-halo{fill:${v("pulseBloom")};}
+.si-ring-pulse{fill:none;stroke:${v("pulse")};}
+.si-trail{fill:none;stroke:${v("pulse")};stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;}
+.storyink .si-counter{font-size:${T.counter}px;font-variant-numeric:tabular-nums lining-nums;fill:${v("ink")};}
+.storyink .si-counter-label{font-size:${T.tag}px;letter-spacing:${T.tagTracking}em;fill:${v("inkMuted")};}
 .storyink .si-seq-text{font-size:8.5px;fill:${v("bg")};font-weight:700;}
 `.trim()
 }
@@ -73,7 +79,7 @@ body{background:${v("bg")};color:${v("ink")};font-family:${fonts.mono};-webkit-f
 .si-kind{font-size:${T.tag}px;letter-spacing:${T.tagTracking * 1.5}em;text-transform:uppercase;color:${v("inkFaint")};margin:0 0 8px;}
 .si-stage{position:relative;flex:1;overflow:hidden;cursor:grab;touch-action:none;}
 .si-stage.si-dragging{cursor:grabbing;}
-.si-canvas{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform;}
+.si-canvas{position:absolute;left:0;top:0;transform-origin:0 0;}
 .si-canvas svg{display:block;}
 .si-tools{position:absolute;right:16px;bottom:16px;display:flex;gap:6px;padding:5px;border:1px solid ${v("chromeLine")};background:${v("chrome")};border-radius:4px;}
 .si-btn{appearance:none;border:1px solid transparent;background:transparent;color:${v("inkMuted")};font:inherit;font-size:11px;letter-spacing:0.04em;height:26px;min-width:26px;padding:0 8px;border-radius:3px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;}
@@ -85,6 +91,45 @@ body{background:${v("bg")};color:${v("ink")};font-family:${fonts.mono};-webkit-f
 .si-sheet .si-sheet-cap{font-size:${T.tag}px;letter-spacing:${T.tagTracking * 1.5}em;text-transform:uppercase;color:${v("inkFaint")};margin:0 0 10px;}
 .si-sheet svg{width:100%;height:auto;max-height:100%;}
 .si-nochrome .si-tools{display:none;}
+.si-figure{position:relative;transition:opacity .3s ease-out;}
+.si-figure.si-settling{transition:opacity 1s ease-in-out;}
+.si-captions{min-height:44px;margin:10px 0 0;font-size:13px;line-height:20px;color:${v("ink")};}
+.si-caption{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.si-word{display:inline-block;transform-origin:left center;white-space:pre;}
+.si-gated{cursor:pointer;}
+.si-gate{position:absolute;inset:0;margin:auto;width:48px;height:48px;border:0;padding:0;background:none;color:${v("playInk")};cursor:pointer;}
+.si-gate:hover,.si-gated:hover .si-gate{color:${v("playInkHover")};}
+.si-gate-play{position:absolute;inset:0;display:block;transition:transform .3s cubic-bezier(.3,1.4,.5,1);}
+.si-gate:hover .si-gate-play,.si-gated:hover .si-gate-play{transform:scale(1.08);}
+.si-gate-play svg{width:100%;height:100%;display:block;}
+.si-gate-disc{position:absolute;left:50%;top:50%;width:240px;height:240px;margin:-120px 0 0 -120px;border-radius:50%;background:color-mix(in srgb, ${v("bg")} 35%, transparent);backdrop-filter:blur(7px);-webkit-mask:radial-gradient(closest-side,#000 35%,transparent);mask:radial-gradient(closest-side,#000 35%,transparent);pointer-events:none;}
+.si-gate-ring{position:absolute;inset:0;border:2.4px solid color-mix(in srgb, ${v("pulse")} 7%, transparent);border-radius:14px;filter:blur(2.5px);animation:si-ring 7.5s linear infinite;pointer-events:none;opacity:0;}
+.si-gate-ring-2{animation-delay:-3.75s;}
+@keyframes si-ring{0%{transform:scale(1.05);opacity:0}2%{opacity:.9}100%{transform:scale(5.5);opacity:0}}
+.si-transport{position:absolute;left:16px;bottom:16px;display:flex;align-items:center;gap:2px;padding:5px 10px 5px 5px;border:1px solid ${v("chromeLine")};background:${v("chrome")};border-radius:4px;color:${v("control")};font-size:11px;}
+.si-tbtn{appearance:none;border:0;background:none;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;color:inherit;cursor:pointer;border-radius:3px;transition:color .15s ease-out;}
+.si-tbtn:hover,.si-tbtn:focus-visible{color:${v("controlHover")};outline:none;}
+.si-ended .si-replay{color:${v("endedInk")};}
+.si-scrub{position:relative;width:260px;height:28px;margin:0 10px 0 6px;cursor:pointer;touch-action:none;}
+.si-scrub-track{position:absolute;left:0;right:0;top:13px;height:1px;background:${v("chromeLine")};}
+.si-scrub-fill{position:absolute;left:0;top:13px;height:1px;background:${v("control")};}
+.si-scrub-head{position:absolute;top:9px;width:9px;height:9px;margin-left:-4.5px;border-radius:50%;background:${v("controlHover")};}
+.si-tick{position:absolute;top:10px;width:1px;height:7px;background:${v("control")};opacity:.6;}
+.si-tick-stop{top:6px;height:15px;opacity:.9;}
+.si-tick-label{position:absolute;bottom:17px;left:0;transform:translateX(-50%);font-size:9px;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap;color:${v("inkFaint")};pointer-events:none;}
+.si-time{font-variant-numeric:tabular-nums;min-width:86px;color:${v("inkMuted")};}
+.si-nochrome .si-transport{display:none;}
+.si-counters{position:absolute;left:0;top:0;pointer-events:none;}
+.si-counter-live{position:absolute;font-family:${fonts.mono};font-size:${T.counter}px;line-height:1;color:${v("ink")};font-variant-numeric:tabular-nums lining-nums;white-space:pre;}
+.si-live-counters .si-counter-value{fill-opacity:0;}
+.si-beats{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:18px 20px;padding:14px 24px 24px;overflow:auto;flex:1;align-content:start;}
+.si-beat{margin:0;display:flex;flex-direction:column;border-top:1px solid ${v("chromeLine")};padding-top:8px;}
+.si-beat-cap{display:flex;gap:8px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:${v("inkMuted")};margin-bottom:6px;white-space:nowrap;overflow:hidden;}
+.si-beat-n{color:${v("ink")};}
+.si-beat-t{margin-left:auto;color:${v("inkFaint")};}
+.si-beat svg{width:100%;height:auto;}
+.si-beat-caption{margin:6px 0 0;min-height:16px;font-size:11px;color:${v("ink")};}
+@media print{.si-transport,.si-tools,.si-gate{display:none!important}.si-figure{opacity:1!important;filter:none!important}}
 .si-noscript .si-tools{display:none;}
 .si-noscript .si-stage{overflow:auto;cursor:auto;}
 .si-noscript .si-canvas{position:static;margin:0 auto;}

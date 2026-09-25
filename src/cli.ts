@@ -20,10 +20,11 @@ const cyan = paint(COLOR, "36")
 const HELP = `${bold("storyink")} ${dim(VERSION)} - diagrams from JSON or Mermaid into standalone HTML and SVG
 
 ${bold("Usage")}
-  storyink render <in.json|in.mmd|-> [-o out.html] [--svg out.svg] [--theme light|dark]
+  storyink render <in.json|in.mmd|-> [-o out.html] [--svg out.svg] [--theme light|dark] [--story auto]
   storyink mermaid <in.mmd> [-o out.json]
   storyink validate <in> [--json]
-  storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet|--no-sheet] [--scale 2] [-o dir] [--json]
+  storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats]|--no-sheet]
+                   [--at 0.5,1.2,end] [--scale 2] [-o dir] [--json]
   storyink skill            print the SKILL.md path and content
   storyink --help | --version
 
@@ -44,7 +45,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const _: string[] = []
   const flags = new Map<string, string | true>()
-  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t"])
+  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story"])
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "-" || !a.startsWith("-")) _.push(a)
@@ -52,6 +53,7 @@ function parseArgs(argv: string[]): Args {
       const [k, ...v] = a.split("=")
       flags.set(k, v.join("="))
     } else if (takes.has(a) && i + 1 < argv.length) flags.set(a, argv[++i])
+    else if (a === "--sheet" && (argv[i + 1] === "beats" || argv[i + 1] === "themes")) flags.set(a, argv[++i])
     else flags.set(a, true)
   }
   return { _, flags }
@@ -105,6 +107,11 @@ async function main(argv: string[]): Promise<number> {
     const loaded = parseSource(input.text, input.name)
     printDiagnostics(loaded.diagnostics)
     if (!loaded.ok || !loaded.spec) return 1
+    const storyFlag = str(a, "--story")
+    if (storyFlag !== undefined) {
+      if (storyFlag !== "auto") throw new Error(`--story takes "auto", got "${storyFlag}"`)
+      if (loaded.spec.story === undefined) loaded.spec.story = "auto"
+    }
     const svg = str(a, "--svg")
     let html = str(a, "-o", "--out")
     if (!html && !svg) html = input.name ? input.name.replace(/\.(json|mmd|mermaid)$/i, "") + ".html" : "diagram.html"
@@ -153,7 +160,8 @@ async function main(argv: string[]): Promise<number> {
     const r = await snapshot(file, {
       themes,
       ...(width ? { width } : {}),
-      sheet: !a.flags.has("--no-sheet"),
+      sheet: a.flags.has("--no-sheet") ? false : str(a, "--sheet") === "beats" ? "beats" : true,
+      ...(str(a, "--at") ? { at: str(a, "--at")!.split(",").map((x) => (x.trim() === "end" ? ("end" as const) : Number(x))) } : {}),
       scale,
       ...(str(a, "-o", "--out") ? { outDir: str(a, "-o", "--out") } : {}),
       ...(str(a, "--t") ? { t: str(a, "--t") } : {}),
@@ -168,8 +176,9 @@ async function main(argv: string[]): Promise<number> {
     }
     const rc = r.receipt!
     console.log(`${dim("browser")} ${rc.browser.version ?? rc.browser.path}`)
-    for (const c of rc.captures) console.log(`${green("png")} ${c.png} ${dim(`${c.width}×${c.height} ${kb(c.bytes)} ${c.ms}ms`)}`)
+    for (const c of rc.captures) console.log(`${green("png")} ${c.png}${c.at !== undefined && c.at !== "end" ? dim(` t=${c.at}`) : ""} ${dim(`${c.width}×${c.height} ${kb(c.bytes)} ${c.ms}ms`)}`)
     if (rc.sheet) console.log(`${green("sheet")} ${rc.sheet.png}`)
+    for (const b of rc.beats ?? []) console.log(`${green("beats")} ${b.png}`)
     for (const g of rc.gates) console.log(`${g.pass ? green("pass") : red("FAIL")} ${bold(g.name)} ${dim(g.detail)}`)
     const issues = (rc.lint as { issues?: { kind: string; ids: string[]; detail: string }[] } | undefined)?.issues ?? []
     for (const i of issues) console.log(`  ${yellow(i.kind)} ${i.ids.join(" ")} ${dim(i.detail)}`)

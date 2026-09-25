@@ -3,6 +3,7 @@ import { paletteCss, palettes, type ThemeName } from "../theme/tokens.ts"
 import type { Scene } from "../core/scene.ts"
 import { App, type ViewerHooks } from "../core/render/App.tsx"
 import { lintDom } from "./lint.ts"
+import { createCounterOverlay } from "./counters.ts"
 
 interface Data {
   version: string
@@ -34,11 +35,15 @@ window.__storyink = {
   // Phase 1 has no timeline; accepted for the page contract.
   setTime: () => {},
   version: data.version,
-}
+  get lastExport() {
+    return lastExport
+  },
+} as never
 
 function exportSvgText(theme: ThemeName): string {
   const live = document.querySelector<SVGSVGElement>(".si-stage svg.storyink, svg.storyink")!
   const svg = live.cloneNode(true) as SVGSVGElement
+  svg.querySelectorAll(".si-counter-value").forEach((el) => el.removeAttribute("fill-opacity"))
   const font = document.getElementById("storyink-font")?.textContent ?? ""
   const rules = document.getElementById("storyink-diagram-css")?.textContent ?? ""
   const style = document.createElementNS("http://www.w3.org/2000/svg", "style")
@@ -64,13 +69,20 @@ function download(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
+/** Last export (for automated tests via window.__storyink.lastExport). */
+let lastExport: { kind: string; bytes: number; text?: string } | undefined
+const counters = createCounterOverlay(scene)
+
 const hooks: ViewerHooks = {
   exportSvg(theme) {
-    download(new Blob([exportSvgText(theme)], { type: "image/svg+xml" }), `${slug(scene.title)}-${theme}.svg`)
+    const text = exportSvgText(theme)
+    lastExport = { kind: "svg", bytes: text.length, text }
+    download(new Blob([text], { type: "image/svg+xml" }), `${slug(scene.title)}-${theme}.svg`)
   },
   async exportPng(theme) {
-    await document.fonts.ready
+    // Serialize first: the chosen frame (final or current) is only on screen synchronously.
     const text = exportSvgText(theme)
+    await document.fonts.ready
     const url = URL.createObjectURL(new Blob([text], { type: "image/svg+xml" }))
     const img = new Image()
     img.decoding = "sync"
@@ -88,7 +100,14 @@ const hooks: ViewerHooks = {
     ctx.fillRect(0, 0, canvas.width, canvas.height)
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
     URL.revokeObjectURL(url)
-    canvas.toBlob((b) => b && download(b, `${slug(scene.title)}-${theme}@2x.png`), "image/png")
+    canvas.toBlob((b) => {
+      if (!b) return
+      lastExport = { kind: "png", bytes: b.size }
+      download(b, `${slug(scene.title)}-${theme}@2x.png`)
+    }, "image/png")
+  },
+  onFrame(frame, playing) {
+    counters.update(frame, playing)
   },
   onReady(sheet) {
     void document.fonts.ready.then(() => {

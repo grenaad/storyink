@@ -10,6 +10,8 @@ import { validate, type Diagnostic } from "../validate.ts"
 import { App } from "./App.tsx"
 import { diagramCss, fontFaceCss, viewerCss } from "./css.ts"
 import { Diagram } from "./Diagram.tsx"
+import { storyState } from "../story/state.ts"
+import { ROLLING_CSS } from "../../generated/rolling.ts"
 
 export class StoryinkError extends Error {
   constructor(
@@ -44,13 +46,17 @@ export interface SvgOptions {
   theme?: ThemeName
   /** Embed Commit Mono (default true). */
   font?: boolean
+  /** Story time to render (seconds or "end", default "end" = the static diagram). */
+  t?: number | "end"
 }
 
 /** Static, self-contained SVG (React SSR). */
 export function renderSvg(spec: Spec | Scene | unknown, opts: SvgOptions = {}): string {
   const scene = toScene(spec)
   const style = [opts.font === false ? "" : fontCss(), themeCss("svg.storyink", opts.theme), diagramCss()].filter(Boolean).join("\n")
-  const markup = renderToStaticMarkup(<Diagram scene={scene} style={style} />)
+  const tl = scene.timeline
+  const t = !tl || opts.t === undefined || opts.t === "end" ? (tl?.duration ?? 0) : opts.t
+  const markup = renderToStaticMarkup(<Diagram scene={scene} style={style} frame={storyState(scene, tl, t)} />)
   return `<?xml version="1.0" encoding="UTF-8"?>\n${markup}\n`
 }
 
@@ -83,7 +89,7 @@ export function renderHtml(spec: Spec | Scene | unknown, opts: HtmlOptions = {})
 <style id="storyink-font">${fontCss()}</style>
 <style id="storyink-theme">${themeCss(":root")}</style>
 <style id="storyink-diagram-css">${diagramCss()}</style>
-<style id="storyink-viewer-css">${viewerCss()}</style>
+<style id="storyink-viewer-css">${viewerCss()}${scene.timeline && Object.keys(scene.timeline.counters).length ? ROLLING_CSS : ""}</style>
 <script>${BOOT}</script>
 </head>
 <body>
