@@ -85,6 +85,65 @@ describe("mermaid sequence", () => {
   })
 })
 
+describe("mermaid additions", () => {
+  test("flowchart RL/BT and subgraph direction", () => {
+    expect((fromMermaid("flowchart RL\n a --> b").spec as any).direction).toBe("RL")
+    expect((fromMermaid("graph BT\n a --> b").spec as any).direction).toBe("BT")
+    const r = fromMermaid("flowchart TD\n subgraph S\n direction LR\n a --> b\n end")
+    expect((r.spec as any).groups[0].direction).toBe("LR")
+    expect(r.diagnostics.length).toBe(0)
+  })
+
+  test("sequence rect -> band, box -> participant group, note placement", () => {
+    const r = fromMermaid(`sequenceDiagram
+  box rgb(1,2,3) Backend
+    participant A
+    participant B
+  end
+  participant C
+  loop poll
+    A->>B: x
+    rect rgb(0,0,0)
+      B->>C: y
+    end
+    Note over B: inside
+  end
+  Note over A: after`)
+    expect(r.ok).toBe(true)
+    const s = r.spec as any
+    expect(s.boxes).toEqual([{ participants: ["A", "B"], label: "Backend" }])
+    expect(s.bands).toEqual([{ start: 1, end: 1 }])
+    expect(s.notes[0].outside).toBeUndefined()
+    expect(s.notes[1].outside).toBe(true)
+  })
+
+  test("state fork/join/choice and notes", () => {
+    const r = fromMermaid(`stateDiagram-v2
+  state f <<fork>>
+  state j <<join>>
+  state c <<choice>>
+  [*] --> f
+  f --> A
+  f --> B
+  A --> j
+  B --> j
+  j --> c
+  c --> [*]
+  note right of A : one line
+  note left of B
+    two
+    lines
+  end note`)
+    expect(r.ok).toBe(true)
+    const s = r.spec as any
+    const kind = (id: string) => s.nodes.find((n: any) => n.id === id).kind
+    expect([kind("f"), kind("j"), kind("c")]).toEqual(["fork", "join", "choice"])
+    const notes = s.nodes.filter((n: any) => n.kind === "note")
+    expect(notes.map((n: any) => n.label)).toEqual(["one line", "two lines"])
+    expect(s.edges.filter((e: any) => e.from.startsWith("note_")).every((e: any) => e.arrow === "none")).toBe(true)
+  })
+})
+
 describe("mermaid state", () => {
   test("[*], labels, aliases, composites, direction", () => {
     const r = fromMermaid(`stateDiagram-v2

@@ -28,6 +28,25 @@ function mockCtx(dir: string, existingSkill = false) {
 
 const context = () => ({ signal: new AbortController().signal, progress: async () => {}, sessionID: "s", agent: "a", messageID: "m", id: "c" })
 
+describe("plugin package shape (OpenCode loader)", () => {
+  const root = path.join(import.meta.dir, "..")
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"))
+  test("local directory entry: <dir>/server resolves", () => {
+    // OpenCode resolves `<dir>/server` then `<dir>/index` for local directories; package.json main is ignored.
+    expect(fs.existsSync(path.join(root, "server.js"))).toBe(true)
+    expect(fs.readFileSync(path.join(root, "server.js"), "utf8")).toContain("./dist/index.js")
+  })
+  test("package entry: exports ./server and . point at the plugin", () => {
+    expect(pkg.exports["./server"].import).toBe("./dist/index.js")
+    expect(pkg.exports["."].import).toBe("./dist/index.js")
+    expect(pkg.files).toContain("server.js")
+  })
+  test("default export shape", () => {
+    expect(typeof plugin.id).toBe("string")
+    expect(typeof plugin.setup).toBe("function")
+  })
+})
+
 describe("plugin", () => {
   test("registers namespace, tools and skill", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "storyink-plugin-"))

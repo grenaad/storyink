@@ -36,7 +36,8 @@
     "build": "bun scripts/build.ts",
     "typecheck": "bun run gen && tsc --noEmit",
     "test": "bun run gen && bun test",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run build",
+    "gallery": "bun run gen && bun scripts/gallery.ts"
   },
   "dependencies": {
     "motion": "13.4.3",

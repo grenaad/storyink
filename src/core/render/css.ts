@@ -26,7 +26,7 @@ ${accentRules}
 .storyink .si-tag{font-size:${T.tag}px;letter-spacing:${T.tagTracking}em;fill:var(--si-accent);}
 .storyink .si-pill-label{font-size:${T.label - 1}px;}
 .si-group{fill:${v("group")};stroke:${v("groupLine")};stroke-width:1;}
-.si-band{fill:${v("panelAlt")};stroke:none;}
+.si-band{fill:${v("panelAlt")};fill-opacity:0.75;stroke:none;}
 .si-group-composite{fill:${v("panelAlt")};stroke:${v("line")};stroke-width:1;}
 .storyink .si-group-label{font-size:${T.groupLabel}px;letter-spacing:${T.tagTracking}em;fill:${v("inkFaint")};}
 .storyink .si-group-title{font-size:${T.label - 1}px;fill:${v("inkMuted")};}

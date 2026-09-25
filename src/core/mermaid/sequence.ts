@@ -16,7 +16,7 @@ const ARROW_RE = new RegExp(
   `^(.+?)\\s*(${ARROWS.map(([a]) => a.replace(/[-)>]/g, (c) => `\\${c}`)).join("|")})\\s*([+-]?)\\s*(.+?)\\s*:(.*)$`,
 )
 
-const COLOR_WORD = /^(rgba?\([^)]*\)|hsla?\([^)]*\)|#[0-9a-f]{3,8}|transparent|aqua|black|blue|fuchsia|gray|grey|green|lime|maroon|navy|olive|orange|purple|red|silver|teal|white|yellow|lightblue|lightgreen|lightgrey|lightyellow|pink|beige|ivory|lavender|wheat|khaki)\b\s*/i
+const COLOR_WORD = /^(rgba?\([^)]*\)|hsla?\([^)]*\)|#[0-9a-f]{3,8}|transparent|aqua|black|blue|fuchsia|gray|grey|green|lime|maroon|navy|olive|orange|purple|red|silver|teal|white|yellow|lightblue|lightgreen|lightgrey|lightyellow|pink|beige|ivory|lavender|wheat|khaki)(?=\s|$)\s*/i
 
 function stripColor(s: string): string {
   return cleanLabel(s.trim().replace(COLOR_WORD, ""))
@@ -159,7 +159,6 @@ export function parseSequence(src: string): { spec: SequenceSpec; diagnostics: D
         warn("\"end\" without an open block")
         continue
       }
-      endedAt = messages.length
       if (top.kind === "box") {
         if (openBox?.participants.length) boxes.push(openBox)
         openBox = undefined
@@ -169,6 +168,7 @@ export function parseSequence(src: string): { spec: SequenceSpec; diagnostics: D
         if (messages.length - 1 >= top.start) bands.push({ start: top.start, end: messages.length - 1 })
         continue
       }
+      endedAt = messages.length
       const end = messages.length - 1
       if (end < top.start) {
         warn(`empty "${top.kind}" block is dropped`)

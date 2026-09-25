@@ -4,58 +4,233 @@
   "title": "storyink diagram spec",
   "description": "One spec shape for architecture, workflow, sequence, dataflow and lifecycle diagrams. See docs/spec.md.",
   "type": "object",
-  "required": ["type", "title"],
+  "required": [
+    "type",
+    "title"
+  ],
   "properties": {
-    "$schema": { "type": "string" },
-    "type": { "enum": ["architecture", "workflow", "sequence", "dataflow", "lifecycle"] },
-    "title": { "type": "string", "minLength": 1 },
-    "subtitle": { "type": "string" },
-    "direction": { "enum": ["TB", "TD", "LR"], "description": "Graph types only. Defaults: LR for architecture/dataflow, TB otherwise." },
-    "story": { "description": "Reserved for Phase 2 storyboards. Accepted and ignored." }
+    "$schema": {
+      "type": "string"
+    },
+    "type": {
+      "enum": [
+        "architecture",
+        "workflow",
+        "sequence",
+        "dataflow",
+        "lifecycle"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "subtitle": {
+      "type": "string"
+    },
+    "direction": {
+      "enum": [
+        "TB",
+        "TD",
+        "BT",
+        "LR",
+        "RL"
+      ],
+      "description": "Graph types only. Omit to auto-pick TB or LR by aspect ratio (closest to 16:10)."
+    },
+    "story": {
+      "description": "Reserved for Phase 2 storyboards. Accepted and ignored."
+    },
+    "style": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "arrowheads": {
+          "type": "boolean",
+          "description": "Draw arrowheads on graph edges (default false; sequences always have heads)."
+        }
+      }
+    }
   },
   "allOf": [
     {
-      "if": { "properties": { "type": { "const": "sequence" } } },
-      "then": { "$ref": "#/$defs/sequence" },
-      "else": { "$ref": "#/$defs/graph" }
+      "if": {
+        "properties": {
+          "type": {
+            "const": "sequence"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/sequence"
+      },
+      "else": {
+        "$ref": "#/$defs/graph"
+      }
     },
     {
-      "if": { "properties": { "type": { "enum": ["architecture", "dataflow"] } } },
-      "then": { "properties": { "nodes": { "items": { "properties": { "kind": { "$ref": "#/$defs/architectureKind" } } } } } }
+      "if": {
+        "properties": {
+          "type": {
+            "enum": [
+              "architecture",
+              "dataflow"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "nodes": {
+            "items": {
+              "properties": {
+                "kind": {
+                  "$ref": "#/$defs/architectureKind"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     {
-      "if": { "properties": { "type": { "const": "workflow" } } },
-      "then": { "properties": { "nodes": { "items": { "properties": { "kind": { "$ref": "#/$defs/workflowKind" } } } } } }
+      "if": {
+        "properties": {
+          "type": {
+            "const": "workflow"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "nodes": {
+            "items": {
+              "properties": {
+                "kind": {
+                  "$ref": "#/$defs/workflowKind"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     {
-      "if": { "properties": { "type": { "const": "lifecycle" } } },
-      "then": { "properties": { "nodes": { "items": { "properties": { "kind": { "$ref": "#/$defs/lifecycleKind" } } } } } }
+      "if": {
+        "properties": {
+          "type": {
+            "const": "lifecycle"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "nodes": {
+            "items": {
+              "properties": {
+                "kind": {
+                  "$ref": "#/$defs/lifecycleKind"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "$defs": {
-    "id": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:\\-]*$" },
-    "architectureKind": { "enum": ["service", "database", "store", "queue", "client", "user", "external", "cache", "function"] },
-    "workflowKind": { "enum": ["start", "end", "step", "decision", "io"] },
-    "lifecycleKind": { "enum": ["initial", "final", "state", "composite"] },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:\\-]*$"
+    },
+    "architectureKind": {
+      "enum": [
+        "service",
+        "database",
+        "store",
+        "queue",
+        "client",
+        "user",
+        "external",
+        "cache",
+        "function",
+        "note"
+      ]
+    },
+    "workflowKind": {
+      "enum": [
+        "start",
+        "end",
+        "step",
+        "decision",
+        "io",
+        "note"
+      ]
+    },
+    "lifecycleKind": {
+      "enum": [
+        "initial",
+        "final",
+        "state",
+        "composite",
+        "choice",
+        "fork",
+        "join",
+        "note"
+      ]
+    },
     "graph": {
       "type": "object",
-      "required": ["nodes"],
+      "required": [
+        "nodes"
+      ],
       "properties": {
         "nodes": {
           "type": "array",
           "minItems": 1,
           "items": {
             "type": "object",
-            "required": ["id"],
+            "required": [
+              "id"
+            ],
             "additionalProperties": false,
             "properties": {
-              "id": { "$ref": "#/$defs/id" },
-              "label": { "type": "string" },
-              "kind": { "type": "string", "description": "Shape and accent. Default: service / step / state." },
-              "detail": { "type": "string", "description": "Muted second line (technology, responsibility)." },
-              "tag": { "type": "string", "description": "Small uppercase tag above the label. Architecture/dataflow default to the kind; \"\" hides it." },
-              "parent": { "type": "string", "description": "Containing group id, or a composite state id (lifecycle)." },
-              "group": { "type": "string", "description": "Alias of parent." }
+              "id": {
+                "$ref": "#/$defs/id"
+              },
+              "label": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "description": "Shape and accent. Default: service / step / state."
+              },
+              "detail": {
+                "type": "string",
+                "description": "Muted second line (technology, responsibility)."
+              },
+              "tag": {
+                "type": "string",
+                "description": "Small uppercase tag above the label. Architecture/dataflow default to the kind; \"\" hides it."
+              },
+              "parent": {
+                "type": "string",
+                "description": "Containing group id, or a composite state id (lifecycle)."
+              },
+              "group": {
+                "type": "string",
+                "description": "Alias of parent."
+              },
+              "direction": {
+                "enum": [
+                  "TB",
+                  "TD",
+                  "BT",
+                  "LR",
+                  "RL"
+                ],
+                "description": "Composite states: inner layout direction (best-effort)."
+              }
             }
           }
         },
@@ -63,15 +238,41 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["from", "to"],
+            "required": [
+              "from",
+              "to"
+            ],
             "additionalProperties": false,
             "properties": {
-              "id": { "type": "string", "description": "Stable id. Default \"from->to\" (with #n for duplicates)." },
-              "from": { "type": "string", "description": "Node or group id." },
-              "to": { "type": "string", "description": "Node or group id." },
-              "label": { "type": "string" },
-              "style": { "enum": ["solid", "dashed", "thick"] },
-              "arrow": { "enum": ["end", "none", "both"] }
+              "id": {
+                "type": "string",
+                "description": "Stable id. Default \"from->to\" (with #n for duplicates)."
+              },
+              "from": {
+                "type": "string",
+                "description": "Node or group id."
+              },
+              "to": {
+                "type": "string",
+                "description": "Node or group id."
+              },
+              "label": {
+                "type": "string"
+              },
+              "style": {
+                "enum": [
+                  "solid",
+                  "dashed",
+                  "thick"
+                ]
+              },
+              "arrow": {
+                "enum": [
+                  "end",
+                  "none",
+                  "both"
+                ]
+              }
             }
           }
         },
@@ -79,38 +280,88 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id"],
+            "required": [
+              "id"
+            ],
             "additionalProperties": false,
             "properties": {
-              "id": { "$ref": "#/$defs/id" },
-              "label": { "type": "string" },
-              "kind": { "type": "string", "description": "Free-form flavour shown next to the label: vpc, cluster, tier, region..." },
-              "parent": { "type": "string", "description": "Parent group id (nesting)." }
+              "id": {
+                "$ref": "#/$defs/id"
+              },
+              "label": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "description": "Free-form flavour shown next to the label: vpc, cluster, tier, region..."
+              },
+              "parent": {
+                "type": "string",
+                "description": "Parent group id (nesting)."
+              },
+              "direction": {
+                "enum": [
+                  "TB",
+                  "TD",
+                  "BT",
+                  "LR",
+                  "RL"
+                ],
+                "description": "Inner layout direction for this group's members (best-effort)."
+              }
             }
           }
         }
       }
     },
     "messageRef": {
-      "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "string" }],
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "string"
+        }
+      ],
       "description": "0-based index into messages, or a message id."
     },
     "sequence": {
       "type": "object",
-      "required": ["participants", "messages"],
+      "required": [
+        "participants",
+        "messages"
+      ],
       "properties": {
-        "autonumber": { "type": "boolean" },
+        "autonumber": {
+          "type": "boolean"
+        },
         "participants": {
           "type": "array",
           "minItems": 1,
           "items": {
             "type": "object",
-            "required": ["id"],
+            "required": [
+              "id"
+            ],
             "additionalProperties": false,
             "properties": {
-              "id": { "type": "string" },
-              "label": { "type": "string" },
-              "kind": { "enum": ["participant", "actor", "service", "database", "queue", "external"] }
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "participant",
+                  "actor",
+                  "service",
+                  "database",
+                  "queue",
+                  "external"
+                ]
+              }
             }
           }
         },
@@ -118,14 +369,32 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["from", "to"],
+            "required": [
+              "from",
+              "to"
+            ],
             "additionalProperties": false,
             "properties": {
-              "id": { "type": "string" },
-              "from": { "type": "string" },
-              "to": { "type": "string" },
-              "label": { "type": "string" },
-              "kind": { "enum": ["sync", "async", "return", "self"] }
+              "id": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "sync",
+                  "async",
+                  "return",
+                  "self"
+                ]
+              }
             }
           }
         },
@@ -133,12 +402,22 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["participant", "start", "end"],
+            "required": [
+              "participant",
+              "start",
+              "end"
+            ],
             "additionalProperties": false,
             "properties": {
-              "participant": { "type": "string" },
-              "start": { "$ref": "#/$defs/messageRef" },
-              "end": { "$ref": "#/$defs/messageRef" }
+              "participant": {
+                "type": "string"
+              },
+              "start": {
+                "$ref": "#/$defs/messageRef"
+              },
+              "end": {
+                "$ref": "#/$defs/messageRef"
+              }
             }
           }
         },
@@ -146,14 +425,35 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["text"],
+            "required": [
+              "text"
+            ],
             "additionalProperties": false,
             "properties": {
-              "text": { "type": "string" },
-              "over": { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 2 },
-              "left": { "type": "string" },
-              "right": { "type": "string" },
-              "after": { "$ref": "#/$defs/messageRef" }
+              "text": {
+                "type": "string"
+              },
+              "over": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "maxItems": 2
+              },
+              "left": {
+                "type": "string"
+              },
+              "right": {
+                "type": "string"
+              },
+              "after": {
+                "$ref": "#/$defs/messageRef"
+              },
+              "outside": {
+                "type": "boolean",
+                "description": "Draw after every frame that closes at the anchor message (default: inside the innermost frame)."
+              }
             }
           }
         },
@@ -161,24 +461,98 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["kind", "start", "end"],
+            "required": [
+              "kind",
+              "start",
+              "end"
+            ],
             "additionalProperties": false,
             "properties": {
-              "kind": { "enum": ["alt", "opt", "loop", "par", "critical", "break"] },
-              "label": { "type": "string" },
-              "start": { "$ref": "#/$defs/messageRef" },
-              "end": { "$ref": "#/$defs/messageRef" },
+              "kind": {
+                "enum": [
+                  "alt",
+                  "opt",
+                  "loop",
+                  "par",
+                  "critical",
+                  "break"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "start": {
+                "$ref": "#/$defs/messageRef"
+              },
+              "end": {
+                "$ref": "#/$defs/messageRef"
+              },
               "sections": {
                 "type": "array",
                 "items": {
                   "type": "object",
-                  "required": ["start"],
+                  "required": [
+                    "start"
+                  ],
                   "additionalProperties": false,
-                  "properties": { "label": { "type": "string" }, "start": { "$ref": "#/$defs/messageRef" } }
+                  "properties": {
+                    "label": {
+                      "type": "string"
+                    },
+                    "start": {
+                      "$ref": "#/$defs/messageRef"
+                    }
+                  }
                 }
               }
             }
           }
+        },
+        "bands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "start",
+              "end"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "start": {
+                "$ref": "#/$defs/messageRef"
+              },
+              "end": {
+                "$ref": "#/$defs/messageRef"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "Background bands behind message ranges (Mermaid rect)."
+        },
+        "boxes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "participants"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "participants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              }
+            }
+          },
+          "description": "Groups of adjacent participants (Mermaid box)."
         }
       }
     }

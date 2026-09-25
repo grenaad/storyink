@@ -19,7 +19,8 @@ light/dark, SVG/PNG export) plus a static SVG. Warm ink-on-paper style, Commit M
 | states and transitions                    | `lifecycle`    | initial / state / composite / final     |
 
 Node kinds: architecture/dataflow `service database store queue client user external cache function`;
-workflow `start end step decision io`; lifecycle `initial final state composite`.
+workflow `start end step decision io`; lifecycle `initial final state composite choice fork
+join`; any graph may add `note` nodes.
 
 ## 2. Write the spec (or convert Mermaid)
 
@@ -36,7 +37,9 @@ workflow `start end step decision io`; lifecycle `initial final state composite`
 }
 ```
 
-- `direction`: `LR` (default for architecture/dataflow) or `TB` (default otherwise).
+- `direction`: omit it to auto-pick TB/LR (aspect closest to 16:10), or pin `TB` `LR` `BT` `RL`.
+- Graph edges have no arrowheads (Kit style); add `"style": { "arrowheads": true }` if direction
+  must be explicit.
 - Edges: `label`, `style` solid|dashed|thick, `arrow` end|none|both. Edges may target a group.
 - Lifecycle composites: a node with `"kind": "composite"`; children set `"parent"` to it.
 - Sequence: `participants` (kind participant|actor|service|database|queue|external), ordered

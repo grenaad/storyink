@@ -1,18 +1,25 @@
 sequenceDiagram
   autonumber
   actor U as User
-  participant W as Web
-  participant C as Cache
-  participant D as Database
+  box Edge
+    participant W as Web
+    participant C as Cache
+  end
+  box Data
+    participant D as Database
+  end
   U->>+W: GET /product/42
   W->>C: get product:42
   alt cache hit
     C-->>W: product
   else miss
     C-->>W: nil
-    W->>+D: SELECT * FROM products
-    D-->>-W: row
+    rect rgb(240, 240, 240)
+      W->>+D: SELECT * FROM products
+      D-->>-W: row
+    end
     W-)C: set product:42 (ttl 300)
+    Note over W,C: write-through, 300 s TTL
   end
   Note over W,C: stale-while-revalidate after 240s
   W-->>-U: 200 OK

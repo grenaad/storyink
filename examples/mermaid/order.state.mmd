@@ -1,16 +1,24 @@
 stateDiagram-v2
   direction TB
   [*] --> Pending
-  Pending --> Paid : payment captured
-  Pending --> Cancelled : timeout 30m
+  Pending --> check
+  state check <<choice>>
+  check --> Paid : payment captured
+  check --> Cancelled : timeout 30m
   state Fulfilment {
-    [*] --> Picking
-    Picking --> Packed
-    Packed --> Shipped : carrier scan
+    [*] --> split
+    state split <<fork>>
+    split --> Picking
+    split --> Invoicing
+    state merge <<join>>
+    Picking --> merge
+    Invoicing --> merge
+    merge --> Shipped
   }
   Paid --> Fulfilment
   Fulfilment --> Delivered : proof of delivery
   Delivered --> Refunded : return accepted
+  note right of Refunded : within 30 days
   Cancelled --> [*]
   Delivered --> [*]
   Refunded --> [*]

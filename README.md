@@ -49,10 +49,29 @@ JSON containing the browser, flags, sha256 of each image, lint results and gates
 
 ## 3. OpenCode plugin
 
+From npm (once published), pinned or not:
+
 ```jsonc
-// opencode.json
-{ "plugins": ["storyink"] }
+// opencode.json (global ~/.config/opencode/ or project .opencode/)
+{ "plugins": ["storyink"] }            // or "storyink@0.1.0"
 ```
+
+From a local checkout, for development: build first, then point `plugins` at the **directory**
+(OpenCode v2 accepts directories here, not single files):
+
+```sh
+cd ~/projects/storyink && bun install && bun run build
+```
+
+```jsonc
+// <project>/.opencode/opencode.json
+{ "plugins": ["/absolute/path/to/storyink"] }
+```
+
+OpenCode resolves a local plugin directory as `<dir>/server` and then `<dir>/index`. It does not
+read `package.json` `main`, which is why the repo ships a root `server.js` that re-exports
+`dist/index.js`. npm packages resolve `storyink/server` and then `storyink`, and both are exported.
+Rebuild after changes, then restart the server (or touch the config) to reload.
 
 This adds the tools `storyink_render`, `storyink_from_mermaid`, `storyink_validate` and
 `storyink_snapshot`. `storyink_snapshot` returns the contact sheet as an image, so the model can
@@ -71,9 +90,23 @@ npx storyink skill        # prints the SKILL.md path and its content
 
 An MCP server is planned.
 
+## Gallery
+
+`bun run gallery` renders every example and Mermaid sample and writes one light and one dark PNG per
+example to `docs/gallery/`.
+
+| | |
+| --- | --- |
+| ![Checkout platform](docs/gallery/checkout.architecture.light.png) | ![Agent run lifecycle](docs/gallery/agent-run.lifecycle.dark.png) |
+| ![Release pipeline](docs/gallery/release.workflow.light.png) | ![OAuth sequence](docs/gallery/oauth.sequence.dark.png) |
+| ![Analytics pipeline](docs/gallery/analytics.dataflow.dark.png) | ![Order state machine (Mermaid)](docs/gallery/order.state.light.png) |
+
 ## Spec
 
 See [docs/spec.md](docs/spec.md) and [schema/storyink.schema.json](schema/storyink.schema.json).
+Graph edges have no arrowheads by default, matching Kit's style. Set `"style": { "arrowheads": true }`
+to draw them. If you leave out `direction`, the layout picks TB or LR, whichever gets the aspect
+ratio closer to 16:10.
 Examples of each type are in [examples/](examples), and Mermaid samples are in
 [examples/mermaid/](examples/mermaid).
 
@@ -84,6 +117,7 @@ bun install
 bun test          # generates src/generated/* first
 bun run typecheck
 bun run build     # dist/ (ESM for node, .d.ts, CLI with a node shebang)
+bun run gallery   # docs/gallery/*.png (needs Chrome / Playwright headless shell)
 ```
 
 All design tokens (palette, type, geometry, motion) live in `src/theme/tokens.ts` and are

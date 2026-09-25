@@ -251,21 +251,21 @@ export function Diagram({ scene, style, copy = "", className }: DiagramProps): R
       {style ? <style>{style}</style> : null}
       <rect className="si-bg" x={vb.x} y={vb.y} width={vb.w} height={vb.h} />
       <g className="si-bands">
-        {scene.bands.map((b) => (
-          <g key={b.id} data-si={`band:${b.id}`}>
-            <rect className="si-band" x={b.x} y={b.y} width={b.w} height={b.h} />
-            {b.label ? (
-              <text className="si-group-label" x={f(b.x + 8)} y={f(b.y + 13)}>
-                {b.label.toUpperCase()}
-              </text>
-            ) : null}
-          </g>
-        ))}
         {scene.boxes.map((b) => (
           <g key={b.id} data-si={`box:${b.id}`}>
             <rect className="si-group" x={b.x} y={b.y} width={b.w} height={b.h} />
             {b.label ? (
               <text className="si-group-label" x={f(b.x + 8)} y={f(b.y + 14)}>
+                {b.label.toUpperCase()}
+              </text>
+            ) : null}
+          </g>
+        ))}
+        {scene.bands.map((b) => (
+          <g key={b.id} data-si={`band:${b.id}`}>
+            <rect className="si-band" x={b.x} y={b.y} width={b.w} height={b.h} />
+            {b.label ? (
+              <text className="si-group-label" x={f(b.x + 8)} y={f(b.y + 13)}>
                 {b.label.toUpperCase()}
               </text>
             ) : null}

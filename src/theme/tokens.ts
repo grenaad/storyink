@@ -138,7 +138,7 @@ export const type = {
   detail: 11,
   tag: 10,
   tagTracking: 0.08,
-  edgeLabel: 10,
+  edgeLabel: 11,
   groupLabel: 10,
   lineHeight: 1.45,
   title: 30,

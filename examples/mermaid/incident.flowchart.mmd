@@ -5,6 +5,7 @@ flowchart TD
   sev -->|SEV1| war[[Open war room]]
   sev -->|SEV2/3| triage[Triage in channel]
   subgraph Mitigation
+    direction TB
     war --> mitigate[Mitigate impact]
     triage --> mitigate
     mitigate --> ok{Resolved?}

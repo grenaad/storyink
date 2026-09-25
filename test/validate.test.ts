@@ -8,7 +8,7 @@ describe("validate", () => {
     const r = validate(ok)
     expect(r.ok).toBe(true)
     const s = r.spec as any
-    expect(s.direction).toBe("LR")
+    expect(s.direction).toBeUndefined() // auto-picked at layout time
     expect(s.nodes[0]).toMatchObject({ id: "a", label: "a", kind: "service" })
     expect(s.edges[0].id).toBe("a->b")
   })
@@ -39,6 +39,23 @@ describe("validate", () => {
   test("detects nesting cycles", () => {
     const r = validate({ type: "architecture", title: "x", groups: [{ id: "g1", parent: "g2" }, { id: "g2", parent: "g1" }], nodes: [{ id: "a", parent: "g1" }] })
     expect(r.diagnostics.some((d) => d.message.includes("nesting cycle"))).toBe(true)
+  })
+
+  test("style.arrowheads is validated", () => {
+    expect((validate({ ...ok, style: { arrowheads: true } }).spec as any).style).toEqual({ arrowheads: true })
+    const bad = validate({ ...ok, style: { arrowheads: "yes" } })
+    expect(bad.ok).toBe(false)
+    expect(bad.diagnostics[0].path).toBe("style.arrowheads")
+  })
+
+  test("directions: BT/RL accepted, unknown rejected", () => {
+    expect((validate({ ...ok, direction: "rl" }).spec as any).direction).toBe("RL")
+    expect(validate({ ...ok, direction: "up" }).ok).toBe(false)
+  })
+
+  test("sequence boxes must be adjacent", () => {
+    const r = validate({ type: "sequence", title: "s", participants: [{ id: "a" }, { id: "b" }, { id: "c" }], messages: [{ from: "a", to: "b" }], boxes: [{ participants: ["a", "c"] }] })
+    expect(r.ok).toBe(false)
   })
 
   test("story is reserved: warning only", () => {
