@@ -40,8 +40,8 @@ interface Common {
   type: DiagramType
   title: string
   subtitle?: string
-  /** Phase 2 storyboard. Accepted and ignored in Phase 1. */
-  story?: unknown
+  /** Storyboard: a hand-written story, or "auto" to derive one from graph / message order. */
+  story?: Story | "auto"
 }
 
 export interface GraphNode {
@@ -56,6 +56,43 @@ export interface GraphNode {
   parent?: string
   /** Composite states only: direction of their inner layout (best-effort). */
   direction?: Direction
+  /** A rolling counter shown on the node (driven by story `counter` steps). */
+  counter?: NodeCounter
+}
+
+export interface NodeCounter {
+  id: string
+  /** Initial value (default 0). The static/final frame shows the last story value. */
+  value?: number
+  label?: string
+  /** Text before/after the number, e.g. "$" or " req/s". */
+  prefix?: string
+  suffix?: string
+}
+
+/** A pulse reference: an edge / message id, a unique "from->to", or a multi-hop route. */
+export type PulseRef = string | { edge?: string; route?: string[]; duration?: number }
+
+export interface StoryStep {
+  id?: string
+  /** Seconds (absolute), or "+x" = x seconds after the previous step ends. Default "+0". */
+  at?: number | string
+  reveal?: string | string[]
+  /** One pulse, or several in parallel. */
+  pulse?: PulseRef | PulseRef[]
+  highlight?: string | string[] | { ids: string[]; for?: number }
+  caption?: string
+  counter?: { id: string; to: number } | { id: string; to: number }[]
+  /** Chapter marker label (scrubber tick, ←/→). */
+  stop?: string
+}
+
+export interface Story {
+  /** false (default): click-to-play gate. true: play when scrolled into view. */
+  autoplay?: boolean
+  /** "hold" (default) the final frame, or "loop". */
+  end?: "hold" | "loop"
+  steps: StoryStep[]
 }
 
 export interface GraphGroup {

@@ -8,9 +8,13 @@ import {
   PARTICIPANT_KINDS,
   type GraphSpec,
   type MessageRef,
+  type StoryStep,
   type SequenceSpec,
   type Spec,
 } from "./spec.ts"
+import { layoutGraph } from "./layout/graph.ts"
+import { layoutSequence } from "./layout/sequence.ts"
+import { compileStory } from "./story/compile.ts"
 
 export type Severity = "error" | "warning"
 
@@ -146,8 +150,6 @@ export function validate(input: unknown): ValidationResult {
   const title = str(c, value, "title", "", true)
   const subtitle = str(c, value, "subtitle", "", false)
   if (value.$schema !== undefined && typeof value.$schema !== "string") c.error("$schema", `"$schema" must be a string`)
-  if (value.story !== undefined)
-    c.warn("story", "\"story\" is reserved for Phase 2 storyboards and is ignored", "remove it or keep it for later")
   if (!type) return { ok: false, diagnostics: c.diagnostics }
 
   let style: { arrowheads?: boolean } | undefined
@@ -169,8 +171,66 @@ export function validate(input: unknown): ValidationResult {
     ...(subtitle ? { subtitle } : {}),
   }
   const spec = type === "sequence" ? validateSequence(c, value, base) : validateGraph(c, value, type, base)
+  if (value.story !== undefined) {
+    const st = validateStoryShape(c, value.story)
+    if (st !== undefined) spec.story = st
+  }
+  if (!c.failed && spec.story !== undefined) {
+    // Resolve ids and timing against the real layout.
+    try {
+      const scene = type === "sequence" ? layoutSequence(spec as SequenceSpec) : layoutGraph(spec as GraphSpec)
+      c.diagnostics.push(...compileStory(scene, spec).diagnostics)
+    } catch (e) {
+      c.error("story", `story could not be compiled: ${(e as Error).message}`)
+    }
+  }
   const ok = !c.failed
   return ok ? { ok, diagnostics: c.diagnostics, spec } : { ok, diagnostics: c.diagnostics }
+}
+
+const STEP_KEYS = new Set(["id", "at", "reveal", "pulse", "highlight", "caption", "counter", "stop"])
+
+function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefined {
+  if (raw === "auto") return "auto"
+  if (!isObj(raw)) {
+    c.error("story", `"story" must be an object or "auto"`, `{ "steps": [ { "reveal": ["api"] } ] } or "auto"`)
+    return undefined
+  }
+  unknownKeys(c, raw, new Set(["autoplay", "end", "steps"]), "story")
+  if (raw.autoplay !== undefined && typeof raw.autoplay !== "boolean") c.error("story.autoplay", `"autoplay" must be true or false`)
+  const end = oneOf(c, raw.end, ["hold", "loop"] as const, "story.end", "story end")
+  if (!Array.isArray(raw.steps)) {
+    c.error("story.steps", `"steps" must be an array`)
+    return undefined
+  }
+  const steps: StoryStep[] = []
+  raw.steps.forEach((s0, i) => {
+    const p = `story.steps[${i}]`
+    if (!isObj(s0)) return c.error(p, "step must be an object", `{ "at": "+0.3", "pulse": "a->b" }`)
+    unknownKeys(c, s0, STEP_KEYS, p)
+    if (s0.at !== undefined && typeof s0.at !== "number" && typeof s0.at !== "string") c.error(`${p}.at`, `"at" must be seconds or "+x"`)
+    if (typeof s0.at === "number" && (s0.at < 0 || !Number.isFinite(s0.at))) c.error(`${p}.at`, `"at" must be >= 0`)
+    const strList = (v: unknown, key: string) => {
+      if (v === undefined) return
+      const list = Array.isArray(v) ? v : [v]
+      if (!list.every((x) => typeof x === "string")) c.error(`${p}.${key}`, `"${key}" must be an id or a list of ids`)
+    }
+    strList(s0.reveal, "reveal")
+    if (s0.highlight !== undefined && !(isObj(s0.highlight) && Array.isArray(s0.highlight.ids))) strList(s0.highlight, "highlight")
+    if (s0.caption !== undefined && typeof s0.caption !== "string") c.error(`${p}.caption`, `"caption" must be a string`)
+    if (s0.stop !== undefined && typeof s0.stop !== "string") c.error(`${p}.stop`, `"stop" must be a string (chapter label)`)
+    if (s0.counter !== undefined) {
+      const list = Array.isArray(s0.counter) ? s0.counter : [s0.counter]
+      if (!list.every((x) => isObj(x) && typeof x.id === "string" && typeof x.to === "number")) c.error(`${p}.counter`, `"counter" must be { "id": "...", "to": number }`)
+    }
+    if (s0.pulse !== undefined) {
+      const list = Array.isArray(s0.pulse) ? s0.pulse : [s0.pulse]
+      if (!list.every((x) => typeof x === "string" || (isObj(x) && (typeof x.edge === "string" || Array.isArray(x.route)))))
+        c.error(`${p}.pulse`, `"pulse" must be an edge id, "from->to", or { "edge" | "route" }`)
+    }
+    steps.push(s0 as StoryStep)
+  })
+  return { ...(raw.autoplay === true ? { autoplay: true } : {}), ...(end ? { end } : {}), steps }
 }
 
 function validateGraph(
@@ -222,7 +282,7 @@ function validateGraph(
   rawNodes.forEach((n, i) => {
     const p = `nodes[${i}]`
     if (!isObj(n)) return c.error(p, "node must be an object", `{ "id": "api", "label": "API" }`)
-    unknownKeys(c, n, new Set(["id", "label", "kind", "detail", "tag", "parent", "group", "direction"]), p)
+    unknownKeys(c, n, new Set(["id", "label", "kind", "detail", "tag", "parent", "group", "direction", "counter"]), p)
     const id = str(c, n, "id", p, true)
     if (!id) return
     if (!ID_RE.test(id)) c.error(`${p}.id`, `invalid id "${id}"`, "use letters, digits, _ . : -")
@@ -237,7 +297,14 @@ function validateGraph(
       ...(typeof n.tag === "string" ? { tag: n.tag } : {}),
       ...(parent ? { parent } : {}),
       ...(n.direction !== undefined && dirOf(n.direction, `${p}.direction`) ? { direction: dirOf(n.direction, `${p}.direction`) } : {}),
+      ...(counterOf(c, n.counter, `${p}.counter`) ?? {}),
     })
+  })
+  const counterIds = new Set<string>()
+  nodes.forEach((n, i) => {
+    if (!n.counter) return
+    if (counterIds.has(n.counter.id)) c.error(`nodes[${i}].counter.id`, `duplicate counter id "${n.counter.id}"`)
+    counterIds.add(n.counter.id)
   })
 
   // Parents: groups, or composite nodes in lifecycle diagrams.
@@ -314,6 +381,18 @@ function validateGraph(
     edges,
     groups,
   }
+}
+
+function counterOf(c: Collector, v: unknown, path: string): { counter: NonNullable<GraphSpec["nodes"][number]["counter"]> } | undefined {
+  if (v === undefined) return undefined
+  if (!isObj(v) || typeof v.id !== "string" || !v.id) {
+    c.error(path, `"counter" needs an "id"`, `{ "id": "hits", "value": 0, "label": "hits" }`)
+    return undefined
+  }
+  unknownKeys(c, v, new Set(["id", "value", "label", "prefix", "suffix"]), path)
+  if (v.value !== undefined && (typeof v.value !== "number" || !Number.isFinite(v.value))) c.error(`${path}.value`, `"value" must be a number`)
+  const str = (k: string) => (typeof v[k] === "string" ? { [k]: v[k] as string } : {})
+  return { counter: { id: v.id, value: typeof v.value === "number" ? v.value : 0, ...str("label"), ...str("prefix"), ...str("suffix") } }
 }
 
 function hintId(id: string, known: string[]): string {

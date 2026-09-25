@@ -39,7 +39,9 @@ export interface SceneNode extends Box {
   /** Uppercase tag (empty string for none). */
   tag: string
   /** Text layout: y of each label/detail baseline and the tag baseline, relative to the node box. */
-  text: { tagY: number; labelY: number[]; detailY: number[]; cx: number }
+  text: { tagY: number; labelY: number[]; detailY: number[]; cx: number; counterY?: number }
+  /** Rolling counter slot (value = initial; the story drives it). */
+  counter?: { id: string; value: number; label?: string; prefix?: string; suffix?: string }
 }
 
 export interface SceneGroup extends Box {
@@ -72,6 +74,8 @@ export interface SceneEdge {
   /** SVG path data with rounded corners. */
   d: string
   points: Pt[]
+  /** Polyline length (for draw-on dash offsets). */
+  length?: number
   style: EdgeStyle
   arrow: ArrowMode
   heads: Arrowhead[]
@@ -129,6 +133,8 @@ export interface Scene {
   bands: SceneBand[]
   /** Sequence participant boxes (Mermaid box). */
   boxes: SceneBox[]
+  /** Compiled storyboard, when the spec has a story. */
+  timeline?: import("./story/types.ts").Timeline
 }
 
 export interface SceneBand extends Box {

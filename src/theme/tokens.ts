@@ -57,6 +57,19 @@ export interface Palette {
   sageFill: string
   plain: string
   plainFill: string
+  /** Storyboard (STYLE.md §1, §4, §6). */
+  pulse: string
+  pulseBloom: string
+  pulseBloomEdge: string
+  glow: string
+  glowCrest: string
+  flash: string
+  portActive: string
+  playInk: string
+  playInkHover: string
+  control: string
+  controlHover: string
+  endedInk: string
 }
 
 export const palettes: Record<ThemeName, Palette> = {
@@ -88,6 +101,18 @@ export const palettes: Record<ThemeName, Palette> = {
     sageFill: "#d9d3c7",
     plain: "#8a857c",
     plainFill: "#d9d3c7",
+    pulse: "#2b2925",
+    pulseBloom: "#3d3a34",
+    pulseBloomEdge: "#8a857c",
+    glow: "#a39d91",
+    glowCrest: "#2b2925",
+    flash: "#141311",
+    portActive: "#141311",
+    playInk: "#a39e94",
+    playInkHover: "#5e5b54",
+    control: "#8f8a81",
+    controlHover: "#26251f",
+    endedInk: "#6f6a61",
   },
   dark: {
     bg: "#080807",
@@ -116,6 +141,18 @@ export const palettes: Record<ThemeName, Palette> = {
     sageFill: "#35332f",
     plain: "#858585",
     plainFill: "#35332f",
+    pulse: "#ddd8d0",
+    pulseBloom: "#e8e4dc",
+    pulseBloomEdge: "#9a948c",
+    glow: "#8c8882",
+    glowCrest: "#ece9e4",
+    flash: "#f3dfc6",
+    portActive: "#f0f0f0",
+    playInk: "#5e5b54",
+    playInkHover: "#a8a49b",
+    control: "#737373",
+    controlHover: "#d4cec4",
+    endedInk: "#9a9488",
   },
 }
 
@@ -135,6 +172,7 @@ export const fonts = {
 
 export const type = {
   label: 13,
+  counter: 15,
   detail: 11,
   tag: 10,
   tagTracking: 0.08,
@@ -172,6 +210,23 @@ export const geometry = {
   nodeGap: 28,
   groupGap: 24,
   margin: 32,
+}
+
+/** Storyboard timing (STYLE.md §5). All in seconds of scene time. */
+export const story = {
+  beats: { react: 0.3, step: 0.8, settle: 1.2, read: 1 },
+  springs: { react: 0.3, smooth: 0.45, word: 0.16 },
+  pulse: { gather: 0.34, flight: 0.9, flightMin: 0.45, flightMax: 1.6, pxPerSecond: 520, ring: 0.72, cooling: 1.1, dot: 4, halo: 18 },
+  glow: { duration: 1.2, alpha: 0.28, minGap: 1 / 3 },
+  flash: { decay: 1.6 },
+  reveal: { rise: 6, opacityDelay: 0.075 },
+  dimSuperseded: 0.52,
+  endHold: 1.5,
+  endedDim: 0.75,
+  gateDim: 0.55,
+  rewind: { hold: 0.15, duration: 1.25, empty: 0.4, blur: 1.1 },
+  read: { base: 0.25, perWord: 0.075, min: 1, max: 3 },
+  warnTotal: 60,
 }
 
 export const motion = {

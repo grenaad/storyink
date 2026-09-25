@@ -1,11 +1,18 @@
 import type { Scene } from "../scene.ts"
 import { isSequence, type Spec } from "../spec.ts"
+import { compileStory, polyLength } from "../story/compile.ts"
 import { layoutGraph } from "./graph.ts"
 import { layoutSequence } from "./sequence.ts"
 
 /** Pure, deterministic layout of a validated spec into absolute geometry. */
 export function layout(spec: Spec): Scene {
-  return isSequence(spec) ? layoutSequence(spec) : layoutGraph(spec)
+  const scene = isSequence(spec) ? layoutSequence(spec) : layoutGraph(spec)
+  for (const e of scene.edges) e.length = Math.round(polyLength(e.points) * 100) / 100
+  if (spec.story !== undefined) {
+    const { timeline } = compileStory(scene, spec)
+    if (timeline) scene.timeline = timeline
+  }
+  return scene
 }
 
 export { layoutGraph, layoutSequence }

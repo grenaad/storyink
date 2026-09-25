@@ -53,7 +53,10 @@ export interface NodeInput {
   label: string
   detail?: string
   tag?: string
+  counter?: { id: string; value: number; label?: string; prefix?: string; suffix?: string; widest: string }
 }
+
+const COUNTER_H = 24
 
 /** Size a node and lay out its text. Coordinates are filled in later. */
 export function sizeNode(n: NodeInput, opts: { tags: boolean }): SceneNode {
@@ -85,8 +88,9 @@ export function sizeNode(n: NodeInput, opts: { tags: boolean }): SceneNode {
   const labelW = Math.max(...label.map((l) => textWidth(l, T.label)))
   const detailW = detail.length ? Math.max(...detail.map((l) => textWidth(l, T.detail))) : 0
   const tagW = tagText ? textWidth(tagText, T.tag, T.tagTracking) + (shape === "actor" ? 18 : 0) : 0
-  const contentW = Math.max(labelW, detailW, tagW)
-  const contentH = (tagText ? TAG_H : 0) + label.length * LABEL_LH + (detail.length ? 2 + detail.length * DETAIL_LH : 0)
+  const counterW = n.counter ? Math.max(textWidth(n.counter.widest, T.counter), n.counter.label ? textWidth(n.counter.label.toUpperCase(), T.tag, T.tagTracking) + 8 + textWidth(n.counter.widest, T.counter) : 0) : 0
+  const contentW = Math.max(labelW, detailW, tagW, counterW)
+  const contentH = (tagText ? TAG_H : 0) + label.length * LABEL_LH + (detail.length ? 2 + detail.length * DETAIL_LH : 0) + (n.counter ? COUNTER_H : 0)
 
   let w: number
   let h: number
@@ -115,6 +119,8 @@ export function sizeNode(n: NodeInput, opts: { tags: boolean }): SceneNode {
   y += label.length * LABEL_LH
   if (detail.length) y += 2
   const detailY = detail.map((_, i) => y + i * DETAIL_LH + (DETAIL_LH + T.detail * 0.7) / 2)
+  y += detail.length * DETAIL_LH
+  const counterY = n.counter ? y + 4 + T.counter * 0.95 : 0
   const cx = shape === "queue" ? (w - 16) / 2 : w / 2
   return {
     id: n.id,
@@ -128,6 +134,9 @@ export function sizeNode(n: NodeInput, opts: { tags: boolean }): SceneNode {
     y: 0,
     w,
     h,
-    text: { tagY, labelY, detailY, cx },
+    text: { tagY, labelY, detailY, cx, ...(n.counter ? { counterY } : {}) },
+    ...(n.counter
+      ? { counter: { id: n.counter.id, value: n.counter.value, ...(n.counter.label ? { label: n.counter.label } : {}), ...(n.counter.prefix ? { prefix: n.counter.prefix } : {}), ...(n.counter.suffix ? { suffix: n.counter.suffix } : {}) } }
+      : {}),
   }
 }

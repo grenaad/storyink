@@ -319,6 +319,17 @@ function layoutLevel(members: Member[], edges: LevelEdge[], dir: "TB" | "LR"): L
   return dir === "TB" ? { pos, w: crossExtent, h: totalMain } : { pos, w: totalMain, h: crossExtent }
 }
 
+/** Counter slot sizing: the widest value the story will show. */
+function counterSlot(spec: GraphSpec, c: NonNullable<GraphSpec["nodes"][number]["counter"]>) {
+  const values = [c.value ?? 0]
+  if (spec.story && spec.story !== "auto")
+    for (const st of spec.story.steps) for (const x of Array.isArray(st.counter) ? st.counter : st.counter ? [st.counter] : []) if (x.id === c.id && typeof x.to === "number") values.push(x.to)
+  const dec = Math.max(...values.map((v) => (Number.isInteger(v) ? 0 : Math.min(3, String(v).split(".")[1]?.length ?? 0))))
+  const fmt = (v: number) => `${c.prefix ?? ""}${v.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec })}${c.suffix ?? ""}`
+  const widest = values.map(fmt).sort((a, b) => b.length - a.length)[0]
+  return { id: c.id, value: c.value ?? 0, label: c.label, prefix: c.prefix, suffix: c.suffix, widest }
+}
+
 /** Target aspect ratio (w/h) for auto direction. */
 export const AUTO_ASPECT = 1.6
 
@@ -360,7 +371,10 @@ function layoutGraphDir(spec: GraphSpec, direction: Direction): Scene {
   const sized = new Map<string, SceneNode>()
   for (const n of spec.nodes)
     if (!composites.has(n.id))
-      sized.set(n.id, sizeNode({ id: n.id, kind: n.kind ?? "service", label: n.label ?? n.id, detail: n.detail, tag: n.tag }, { tags }))
+      sized.set(
+        n.id,
+        sizeNode({ id: n.id, kind: n.kind ?? "service", label: n.label ?? n.id, detail: n.detail, tag: n.tag, ...(n.counter ? { counter: counterSlot(spec, n.counter) } : {}) }, { tags }),
+      )
 
   const chain = (id: string): string[] => {
     const out: string[] = []

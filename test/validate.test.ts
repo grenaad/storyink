@@ -58,10 +58,11 @@ describe("validate", () => {
     expect(r.ok).toBe(false)
   })
 
-  test("story is reserved: warning only", () => {
+  test("story shape is validated", () => {
     const r = validate({ ...ok, story: { beats: [] } })
-    expect(r.ok).toBe(true)
-    expect(r.diagnostics.find((d) => d.path === "story")?.severity).toBe("warning")
+    expect(r.ok).toBe(false)
+    expect(r.diagnostics.some((d) => d.path === "story.steps")).toBe(true)
+    expect(validate({ ...ok, story: "auto" }).ok).toBe(true)
   })
 
   test("sequence refs and frames", () => {
