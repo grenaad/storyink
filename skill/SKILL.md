@@ -1,0 +1,79 @@
+---
+name: storyink
+description: Create polished architecture, workflow, sequence, data-flow and lifecycle diagrams as standalone HTML/SVG with storyink, then snapshot and visually check them. Use when asked to draw, visualise or diagram a system, flow, API sequence, pipeline or state machine, or to convert Mermaid.
+---
+
+# storyink
+
+Diagrams from a small JSON spec (or Mermaid) into one offline HTML file (pan/zoom viewer,
+light/dark, SVG/PNG export) plus a static SVG. Warm ink-on-paper style, Commit Mono labels.
+
+## 1. Pick the type
+
+| Draw...                                   | `type`         | Units                                   |
+| ----------------------------------------- | -------------- | --------------------------------------- |
+| services, stores, infra, trust boundaries | `architecture` | nodes, edges, groups (VPC/cluster/tier) |
+| data moving through stages                | `dataflow`     | same as architecture                    |
+| a process with steps and decisions        | `workflow`     | start / step / decision / io / end      |
+| calls between parties over time           | `sequence`     | participants, messages, frames, notes   |
+| states and transitions                    | `lifecycle`    | initial / state / composite / final     |
+
+Node kinds: architecture/dataflow `service database store queue client user external cache function`;
+workflow `start end step decision io`; lifecycle `initial final state composite`.
+
+## 2. Write the spec (or convert Mermaid)
+
+```json
+{
+  "type": "architecture", "title": "Checkout", "subtitle": "optional", "direction": "LR",
+  "groups": [{ "id": "vpc", "label": "VPC", "kind": "network" }],
+  "nodes": [
+    { "id": "web", "label": "Web", "kind": "client" },
+    { "id": "api", "label": "API", "kind": "service", "parent": "vpc", "detail": "Go" },
+    { "id": "db", "label": "Orders DB", "kind": "database", "parent": "vpc" }
+  ],
+  "edges": [{ "from": "web", "to": "api", "label": "HTTPS" }, { "from": "api", "to": "db", "style": "dashed" }]
+}
+```
+
+- `direction`: `LR` (default for architecture/dataflow) or `TB` (default otherwise).
+- Edges: `label`, `style` solid|dashed|thick, `arrow` end|none|both. Edges may target a group.
+- Lifecycle composites: a node with `"kind": "composite"`; children set `"parent"` to it.
+- Sequence: `participants` (kind participant|actor|service|database|queue|external), ordered
+  `messages` (kind sync|async|return|self), `activations` / `frames` (alt opt loop par critical
+  break, with `sections` for else/and) / `notes` referencing messages by index or `id`;
+  `autonumber: true`.
+- Keep labels short (<= 26 chars wrap). Put technology in `detail`, not the label.
+- `story` is reserved (ignored for now).
+
+Mermaid in: `flowchart`/`graph`, `sequenceDiagram`, `stateDiagram-v2`. Convert with the
+`storyink_from_mermaid` tool (or `storyink mermaid in.mmd -o spec.json`), then refine the JSON:
+add `kind`, `detail`, `groups`, a real `title`/`subtitle`.
+
+## 3. Render
+
+- OpenCode: `storyink_render` with `spec` (or `mermaid`), `output: "diagrams/x.html"`,
+  optional `svg`. Invalid specs write nothing and return path + message + hint for each error.
+- Elsewhere: `npx storyink render spec.json -o x.html --svg x.svg` (`storyink validate spec.json`
+  first if unsure). Exit code 1 means invalid input.
+
+## 4. Render -> look -> fix (required, max 3 passes)
+
+1. Snapshot both themes: `storyink_snapshot` with `html: "diagrams/x.html"`
+   (CLI: `storyink snapshot x.html -o shots`). It returns per-theme PNGs, a light|dark contact
+   sheet, lint results and a receipt.
+2. Look at the sheet image. Never describe a frame you have not seen.
+3. Check:
+   - [ ] no overlapping nodes, labels or wires through boxes
+   - [ ] no clipped or overflowing labels (lint must be clean)
+   - [ ] readable contrast in light and dark
+   - [ ] legible at 640 px wide (too wide? switch to `TB`, split, or shorten labels)
+   - [ ] balanced layout; groups tell the story; nothing orphaned
+4. Fix the spec (labels, `detail`, grouping, `direction`, edge order), re-render, re-snapshot.
+   Stop after three passes and report what is left.
+
+## 5. Report
+
+State what you delivered: HTML and SVG paths (and sizes), the sheet PNG you looked at, lint
+status, and any known compromises. Tell the user the HTML works offline: pan/zoom, `0` fit,
+`+`/`-`, theme toggle, SVG/PNG export; `#theme=dark`, `#chrome=0`, `#sheet=light,dark`.

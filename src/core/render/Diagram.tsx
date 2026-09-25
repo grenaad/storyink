@@ -46,7 +46,6 @@ function NodeShape({ n }: { n: SceneNode }) {
         <>
           <polygon className="si-face" points={pts(0)} strokeLinejoin="round" />
           <polygon className="si-inset" points={pts(i + 1)} strokeLinejoin="round" />
-          <circle className="si-ink-bar" cx={w / 2} cy={i + 12} r={2} />
         </>
       )
     }
@@ -191,31 +190,40 @@ function LabelView({ e }: { e: SceneEdge }) {
   )
 }
 
-function FrameView({ fr }: { fr: SceneFrame }) {
-  const tagH = 18
-  const tag = fr.kind.toUpperCase()
+function FrameBox({ fr }: { fr: SceneFrame }) {
   return (
     <g className="si-frm" data-si={`frame:${fr.id}`}>
       <rect className="si-frame" x={fr.x} y={fr.y} width={fr.w} height={fr.h} rx={2} />
+      {fr.sections.map((s, k) => (
+        <line key={k} className="si-frame-rule" x1={fr.x} x2={fr.x + fr.w} y1={s.y} y2={s.y} />
+      ))}
+    </g>
+  )
+}
+
+/** Frame tag and guard labels sit above lifelines and activations. */
+function FrameLabels({ fr }: { fr: SceneFrame }) {
+  const tagH = 18
+  const tag = fr.kind.toUpperCase()
+  const guard = (text: string, x: number, y: number, key?: number) => {
+    const w = text.length * 11 * 0.6 + 8
+    return (
+      <g key={key}>
+        <rect className="si-bg" x={f(x - 4)} y={f(y - 11)} width={f(w)} height={15} rx={2} />
+        <text className="si-frame-label" x={f(x)} y={f(y)}>
+          {text}
+        </text>
+      </g>
+    )
+  }
+  return (
+    <g className="si-frm-labels" data-si={`frame-label:${fr.id}`}>
       <path className="si-frame-tag" d={`M${fr.x} ${fr.y}H${f(fr.x + fr.tagW)}V${fr.y + tagH - 5}L${f(fr.x + fr.tagW - 5)} ${fr.y + tagH}H${fr.x}Z`} />
       <text className="si-frame-kind" x={f(fr.x + 8)} y={fr.y + 12.5}>
         {tag}
       </text>
-      {fr.label ? (
-        <text className="si-frame-label" x={f(fr.x + fr.tagW + 8)} y={fr.y + 13}>
-          {`[${fr.label}]`}
-        </text>
-      ) : null}
-      {fr.sections.map((s, k) => (
-        <g key={k}>
-          <line className="si-frame-rule" x1={fr.x} x2={fr.x + fr.w} y1={s.y} y2={s.y} />
-          {s.label ? (
-            <text className="si-frame-label" x={f(fr.x + 8)} y={s.y + 15}>
-              {`[${s.label}]`}
-            </text>
-          ) : null}
-        </g>
-      ))}
+      {fr.label ? guard(`[${fr.label}]`, fr.x + fr.tagW + 8, fr.y + 13) : null}
+      {fr.sections.map((s, k) => (s.label ? guard(`[${s.label}]`, fr.x + 8, s.y + 15, k) : null))}
     </g>
   )
 }
@@ -245,7 +253,7 @@ export function Diagram({ scene, style, copy = "", className }: DiagramProps): R
       </g>
       <g className="si-frames">
         {scene.frames.map((fr) => (
-          <FrameView key={fr.id} fr={fr} />
+          <FrameBox key={fr.id} fr={fr} />
         ))}
       </g>
       <g className="si-lifelines">
@@ -256,6 +264,11 @@ export function Diagram({ scene, style, copy = "", className }: DiagramProps): R
       <g className="si-activations">
         {scene.activations.map((a) => (
           <rect key={a.id} className="si-act" data-si={`activation:${a.id}`} x={a.x} y={a.y} width={a.w} height={a.h} rx={1} />
+        ))}
+      </g>
+      <g className="si-frame-labels">
+        {scene.frames.map((fr) => (
+          <FrameLabels key={fr.id} fr={fr} />
         ))}
       </g>
       <g className="si-edges">
@@ -269,7 +282,7 @@ export function Diagram({ scene, style, copy = "", className }: DiagramProps): R
         ))}
       </g>
       <g className="si-ports">
-        {scene.ports.map((p) => (
+        {scene.ports.filter((p) => !p.covered).map((p) => (
           <circle key={p.id} className="si-port" data-si={`port:${p.id}`} cx={p.x} cy={p.y} r={G.portRadius} />
         ))}
       </g>

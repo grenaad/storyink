@@ -68,8 +68,14 @@ export function layoutSequence(spec: SequenceSpec): Scene {
   }
   const headerH = Math.max(0, ...parts.map((p) => p.h))
   parts.forEach((p, i) => {
+    // Equal header heights; text re-centred.
+    const dy = (headerH - p.h) / 2
+    p.text.tagY += dy
+    p.text.labelY = p.text.labelY.map((y) => y + dy)
+    p.text.detailY = p.text.detailY.map((y) => y + dy)
+    p.h = headerH
     p.x = r2(xs[i] - p.w / 2)
-    p.y = M + 24 + (headerH - p.h)
+    p.y = M + 24
   })
 
   // Rows.
@@ -130,13 +136,14 @@ export function layoutSequence(spec: SequenceSpec): Scene {
     const lh = labelOf(k) ? LABEL_H : 0
     lineY.push(r2(y + lh + 4))
     y += lh + 4 + (self ? 22 : 0) + 22
-    notesAfter(k).forEach((nt) => placeNote(nt, allNotes.indexOf(nt)))
     const closing = byOuter.filter(({ f }) => f.end === k).reverse()
     for (const { i } of closing) {
       y += 8
       frameBottom.set(i, y)
       y += 10
     }
+    // Notes after message k follow any frames that close at k.
+    notesAfter(k).forEach((nt) => placeNote(nt, allNotes.indexOf(nt)))
   }
   const bottom = y + 10
 

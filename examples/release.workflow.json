@@ -1,0 +1,35 @@
+{
+  "$schema": "../schema/storyink.schema.json",
+  "type": "workflow",
+  "title": "Release pipeline",
+  "subtitle": "From merge to production with an automated canary gate",
+  "direction": "TB",
+  "nodes": [
+    { "id": "merge", "label": "Merge to main", "kind": "start" },
+    { "id": "build", "label": "Build and sign image", "kind": "step", "detail": "~4 min" },
+    { "id": "test", "label": "Integration tests", "kind": "step" },
+    { "id": "green", "label": "Tests green?", "kind": "decision" },
+    { "id": "canary", "label": "Deploy 5% canary", "kind": "step" },
+    { "id": "metrics", "label": "Read SLO metrics", "kind": "io", "detail": "15 min window" },
+    { "id": "healthy", "label": "Canary healthy?", "kind": "decision" },
+    { "id": "promote", "label": "Promote to 100%", "kind": "step" },
+    { "id": "rollback", "label": "Roll back canary", "kind": "step" },
+    { "id": "notify", "label": "Page the owner", "kind": "io" },
+    { "id": "live", "label": "Live", "kind": "end" },
+    { "id": "stop", "label": "Stopped", "kind": "end" }
+  ],
+  "edges": [
+    { "from": "merge", "to": "build" },
+    { "from": "build", "to": "test" },
+    { "from": "test", "to": "green" },
+    { "from": "green", "to": "canary", "label": "yes" },
+    { "from": "green", "to": "notify", "label": "no" },
+    { "from": "canary", "to": "metrics" },
+    { "from": "metrics", "to": "healthy" },
+    { "from": "healthy", "to": "promote", "label": "yes" },
+    { "from": "healthy", "to": "rollback", "label": "no" },
+    { "from": "rollback", "to": "notify" },
+    { "from": "promote", "to": "live" },
+    { "from": "notify", "to": "stop" }
+  ]
+}

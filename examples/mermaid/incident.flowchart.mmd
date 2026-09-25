@@ -1,0 +1,17 @@
+%% Incident triage, as a Mermaid flowchart
+flowchart TD
+  alert([Alert fires]) --> ack[Acknowledge in pager]
+  ack --> sev{Severity?}
+  sev -->|SEV1| war[[Open war room]]
+  sev -->|SEV2/3| triage[Triage in channel]
+  subgraph Mitigation
+    war --> mitigate[Mitigate impact]
+    triage --> mitigate
+    mitigate --> ok{Resolved?}
+    ok -- no --> escalate[/Escalate to owner/]
+    escalate --> mitigate
+  end
+  ok -- yes --> review[(Write postmortem)]
+  review --> done([Closed])
+  classDef hot fill:#f00
+  class war hot

@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unpkg.com/storyink/schema/storyink.schema.json",
+  "title": "storyink diagram spec",
+  "description": "One spec shape for architecture, workflow, sequence, dataflow and lifecycle diagrams. See docs/spec.md.",
+  "type": "object",
+  "required": ["type", "title"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "type": { "enum": ["architecture", "workflow", "sequence", "dataflow", "lifecycle"] },
+    "title": { "type": "string", "minLength": 1 },
+    "subtitle": { "type": "string" },
+    "direction": { "enum": ["TB", "TD", "LR"], "description": "Graph types only. Defaults: LR for architecture/dataflow, TB otherwise." },
+    "story": { "description": "Reserved for Phase 2 storyboards. Accepted and ignored." }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "sequence" } } },
+      "then": { "$ref": "#/$defs/sequence" },
+      "else": { "$ref": "#/$defs/graph" }
+    },
+    {
+      "if": { "properties": { "type": { "enum": ["architecture", "dataflow"] } } },
+      "then": { "properties": { "nodes": { "items": { "properties": { "kind": { "$ref": "#/$defs/architectureKind" } } } } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "workflow" } } },
+      "then": { "properties": { "nodes": { "items": { "properties": { "kind": { "$ref": "#/$defs/workflowKind" } } } } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "lifecycle" } } },
+      "then": { "properties": { "nodes": { "items": { "properties": { "kind": { "$ref": "#/$defs/lifecycleKind" } } } } } }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:\\-]*$" },
+    "architectureKind": { "enum": ["service", "database", "store", "queue", "client", "user", "external", "cache", "function"] },
+    "workflowKind": { "enum": ["start", "end", "step", "decision", "io"] },
+    "lifecycleKind": { "enum": ["initial", "final", "state", "composite"] },
+    "graph": {
+      "type": "object",
+      "required": ["nodes"],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "label": { "type": "string" },
+              "kind": { "type": "string", "description": "Shape and accent. Default: service / step / state." },
+              "detail": { "type": "string", "description": "Muted second line (technology, responsibility)." },
+              "tag": { "type": "string", "description": "Small uppercase tag above the label. Architecture/dataflow default to the kind; \"\" hides it." },
+              "parent": { "type": "string", "description": "Containing group id, or a composite state id (lifecycle)." },
+              "group": { "type": "string", "description": "Alias of parent." }
+            }
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["from", "to"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "description": "Stable id. Default \"from->to\" (with #n for duplicates)." },
+              "from": { "type": "string", "description": "Node or group id." },
+              "to": { "type": "string", "description": "Node or group id." },
+              "label": { "type": "string" },
+              "style": { "enum": ["solid", "dashed", "thick"] },
+              "arrow": { "enum": ["end", "none", "both"] }
+            }
+          }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "label": { "type": "string" },
+              "kind": { "type": "string", "description": "Free-form flavour shown next to the label: vpc, cluster, tier, region..." },
+              "parent": { "type": "string", "description": "Parent group id (nesting)." }
+            }
+          }
+        }
+      }
+    },
+    "messageRef": {
+      "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "string" }],
+      "description": "0-based index into messages, or a message id."
+    },
+    "sequence": {
+      "type": "object",
+      "required": ["participants", "messages"],
+      "properties": {
+        "autonumber": { "type": "boolean" },
+        "participants": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "label": { "type": "string" },
+              "kind": { "enum": ["participant", "actor", "service", "database", "queue", "external"] }
+            }
+          }
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["from", "to"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "from": { "type": "string" },
+              "to": { "type": "string" },
+              "label": { "type": "string" },
+              "kind": { "enum": ["sync", "async", "return", "self"] }
+            }
+          }
+        },
+        "activations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["participant", "start", "end"],
+            "additionalProperties": false,
+            "properties": {
+              "participant": { "type": "string" },
+              "start": { "$ref": "#/$defs/messageRef" },
+              "end": { "$ref": "#/$defs/messageRef" }
+            }
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["text"],
+            "additionalProperties": false,
+            "properties": {
+              "text": { "type": "string" },
+              "over": { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 2 },
+              "left": { "type": "string" },
+              "right": { "type": "string" },
+              "after": { "$ref": "#/$defs/messageRef" }
+            }
+          }
+        },
+        "frames": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "start", "end"],
+            "additionalProperties": false,
+            "properties": {
+              "kind": { "enum": ["alt", "opt", "loop", "par", "critical", "break"] },
+              "label": { "type": "string" },
+              "start": { "$ref": "#/$defs/messageRef" },
+              "end": { "$ref": "#/$defs/messageRef" },
+              "sections": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["start"],
+                  "additionalProperties": false,
+                  "properties": { "label": { "type": "string" }, "start": { "$ref": "#/$defs/messageRef" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

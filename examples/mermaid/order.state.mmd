@@ -1,0 +1,16 @@
+stateDiagram-v2
+  direction TB
+  [*] --> Pending
+  Pending --> Paid : payment captured
+  Pending --> Cancelled : timeout 30m
+  state Fulfilment {
+    [*] --> Picking
+    Picking --> Packed
+    Packed --> Shipped : carrier scan
+  }
+  Paid --> Fulfilment
+  Fulfilment --> Delivered : proof of delivery
+  Delivered --> Refunded : return accepted
+  Cancelled --> [*]
+  Delivered --> [*]
+  Refunded --> [*]

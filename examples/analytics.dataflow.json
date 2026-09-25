@@ -1,0 +1,37 @@
+{
+  "$schema": "../schema/storyink.schema.json",
+  "type": "dataflow",
+  "title": "Product analytics pipeline",
+  "subtitle": "Events from three sources into the warehouse and a realtime feature store",
+  "direction": "LR",
+  "groups": [
+    { "id": "sources", "label": "Sources", "kind": "producers" },
+    { "id": "stream", "label": "Streaming", "kind": "realtime" },
+    { "id": "batch", "label": "Batch", "kind": "hourly" }
+  ],
+  "nodes": [
+    { "id": "websdk", "label": "Web SDK", "kind": "client", "parent": "sources" },
+    { "id": "mobilesdk", "label": "Mobile SDK", "kind": "client", "parent": "sources" },
+    { "id": "backend", "label": "Backend events", "kind": "service", "parent": "sources" },
+    { "id": "collector", "label": "Collector", "kind": "service", "detail": "validate · enrich" },
+    { "id": "bus", "label": "events.raw", "kind": "queue", "parent": "stream", "detail": "Kafka" },
+    { "id": "flink", "label": "Sessionizer", "kind": "function", "parent": "stream", "detail": "Flink" },
+    { "id": "features", "label": "Feature store", "kind": "cache", "parent": "stream" },
+    { "id": "lake", "label": "Raw lake", "kind": "store", "parent": "batch", "detail": "S3 · Parquet" },
+    { "id": "dbt", "label": "dbt models", "kind": "function", "parent": "batch" },
+    { "id": "warehouse", "label": "Warehouse", "kind": "database", "parent": "batch", "detail": "BigQuery" },
+    { "id": "bi", "label": "Dashboards", "kind": "external", "detail": "Looker" }
+  ],
+  "edges": [
+    { "from": "websdk", "to": "collector" },
+    { "from": "mobilesdk", "to": "collector" },
+    { "from": "backend", "to": "collector" },
+    { "from": "collector", "to": "bus", "label": "JSON" },
+    { "from": "bus", "to": "flink" },
+    { "from": "flink", "to": "features", "label": "p95 < 2s" },
+    { "from": "bus", "to": "lake", "style": "dashed" },
+    { "from": "lake", "to": "dbt" },
+    { "from": "dbt", "to": "warehouse" },
+    { "from": "warehouse", "to": "bi" }
+  ]
+}

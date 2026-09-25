@@ -527,8 +527,48 @@ function routeEdges(
   }
 
   // Obstacles: every leaf node.
+  // Straighten near-miss pairs: if the two ports of a forward edge differ by
+  // a few px, slide one onto the other's line so the wire needs no jog.
+  const portsOn = new Map<string, Pt[]>()
+  for (const [k, list] of slots) portsOn.set(k, list.map((s) => portAt.get(`${s.plan.i}|${s.end}`)!))
+  for (const p of plans) {
+    if (p.self) continue
+    const e = edges[p.i]
+    const pa = portAt.get(`${p.i}|a`)!
+    const pb = portAt.get(`${p.i}|b`)!
+    const horiz = p.sa === "left" || p.sa === "right"
+    if ((p.sb === "left" || p.sb === "right") !== horiz) continue
+    const ca = horiz ? pa.y : pa.x
+    const cb = horiz ? pb.y : pb.x
+    const d = Math.abs(ca - cb)
+    if (d < 0.5 || d > 18) continue
+    const tryMove = (pt: Pt, id: string, side: Side, to: number) => {
+      const box = boxes.get(id)!
+      const node = nodeById.get(id)
+      if (node && (node.shape === "diamond" || node.shape === "dot" || node.shape === "bullseye" || node.shape === "pill")) return false
+      const lo = (horiz ? box.y : box.x) + 8
+      const hi = (horiz ? box.y + box.h : box.x + box.w) - 8
+      if (to < lo || to > hi) return false
+      const sib = portsOn.get(`${id}|${side}`) ?? []
+      if (sib.some((q) => q !== pt && Math.abs((horiz ? q.y : q.x) - to) < 10)) return false
+      if (horiz) pt.y = r2(to)
+      else pt.x = r2(to)
+      return true
+    }
+    if (!tryMove(pb, e.to, p.sb, ca)) tryMove(pa, e.from, p.sa, cb)
+  }
+
   const obstacles = nodes.map((n) => ({ x: n.x, y: n.y, w: n.w, h: n.h }))
   const router = new Router(obstacles, { margin: 8, stub: G.stub, bend: 28 })
+  router.avoid(
+    groups.map((g) => [
+      { x: g.x, y: g.y },
+      { x: g.x + g.w, y: g.y },
+      { x: g.x + g.w, y: g.y + g.h },
+      { x: g.x, y: g.y + g.h },
+      { x: g.x, y: g.y },
+    ]),
+  )
   const out: SceneEdge[] = []
   const ports: ScenePort[] = []
   const placedLabels: Box[] = []
@@ -588,10 +628,30 @@ function routeEdges(
       arrow,
       heads,
     }
-    if (e.label) edge.label = placeLabel(`${id}:label`, e.label, points, labelSize(e.label), obstacles, placedLabels)
     result[p.i] = edge
-    ports.push({ id: `${id}:out`, node: e.from, edge: id, ...from }, { id: `${id}:in`, node: e.to, edge: id, ...to })
+    ports.push(
+      { id: `${id}:out`, node: e.from, edge: id, end: "out", covered: arrow === "both", ...from },
+      { id: `${id}:in`, node: e.to, edge: id, end: "in", covered: arrow !== "none", ...to },
+    )
   }
+  // Labels after all wires exist, so they can avoid nodes, other labels, wires and group rules.
+  const segsOf = (pts: Pt[]) => pts.slice(1).map((b, k) => [pts[k], b] as const)
+  const groupRules: (readonly [Pt, Pt])[] = []
+  for (const g of groups) {
+    const a = { x: g.x, y: g.y }
+    const b = { x: g.x + g.w, y: g.y }
+    const c = { x: g.x + g.w, y: g.y + g.h }
+    const d = { x: g.x, y: g.y + g.h }
+    groupRules.push([a, b], [b, c], [c, d], [d, a])
+  }
+  const groupTitles = groups.map((g) => ({ x: g.x, y: g.y, w: Math.min(g.w, 260), h: 24 }))
+  plans.forEach((p) => {
+    const e = edges[p.i]
+    if (!e.label) return
+    const edge = result[p.i]
+    const others = result.filter((o) => o !== edge).flatMap((o) => segsOf(o.points))
+    edge.label = placeLabel(`${edge.id}:label`, e.label, edge.points, labelSize(e.label), obstacles, placedLabels, others, groupRules, groupTitles)
+  })
   out.push(...result)
   void groups
   return { edges: out, ports }
@@ -601,7 +661,25 @@ function overlaps(a: Box, b: Box, pad = 0): boolean {
   return a.x < b.x + b.w + pad && b.x < a.x + a.w + pad && a.y < b.y + b.h + pad && b.y < a.y + a.h + pad
 }
 
-function placeLabel(id: string, text: string, points: Pt[], size: { w: number; h: number }, obstacles: Box[], placed: Box[]): SceneLabel {
+function segHitsBox(a: Pt, b: Pt, box: Box): boolean {
+  const x1 = Math.min(a.x, b.x)
+  const x2 = Math.max(a.x, b.x)
+  const y1 = Math.min(a.y, b.y)
+  const y2 = Math.max(a.y, b.y)
+  return x1 < box.x + box.w && x2 > box.x && y1 < box.y + box.h && y2 > box.y
+}
+
+function placeLabel(
+  id: string,
+  text: string,
+  points: Pt[],
+  size: { w: number; h: number },
+  obstacles: Box[],
+  placed: Box[],
+  wires: (readonly [Pt, Pt])[],
+  rules: (readonly [Pt, Pt])[],
+  titles: Box[],
+): SceneLabel {
   const segs: { a: Pt; b: Pt; len: number }[] = []
   for (let i = 0; i + 1 < points.length; i++) {
     const a = points[i]
@@ -610,17 +688,24 @@ function placeLabel(id: string, text: string, points: Pt[], size: { w: number; h
   }
   // Candidates: along each segment, longest first; prefer the middle.
   const cands: Pt[] = []
-  const bySize = [...segs].sort((x, y) => y.len - x.len)
+  const bySize = [...segs].filter((s) => s.len > 4).sort((x, y) => y.len - x.len)
   for (const s of bySize)
-    for (const t of [0.5, 0.35, 0.65, 0.2, 0.8])
+    for (const t of [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8])
       cands.push({ x: s.a.x + (s.b.x - s.a.x) * t, y: s.a.y + (s.b.y - s.a.y) * t })
+  // Own bends: a label must not sit on a corner of its own wire.
+  const own = points.slice(1).map((b, k) => [points[k], b] as const)
   let best: Box | undefined
   let bestScore = Infinity
   cands.forEach((c, k) => {
     const box = { x: c.x - size.w / 2, y: c.y - size.h / 2, w: size.w, h: size.h }
     let score = k * 0.01
     for (const o of obstacles) if (overlaps(box, o, 2)) score += 10
-    for (const o of placed) if (overlaps(box, o, 2)) score += 5
+    for (const o of placed) if (overlaps(box, o, 3)) score += 6
+    for (const [a, b] of wires) if (segHitsBox(a, b, box)) score += 2
+    for (const [a, b] of rules) if (segHitsBox(a, b, box)) score += 1.5
+    for (const t of titles) if (overlaps(box, t, 0)) score += 1.5
+    const hits = own.filter(([a, b]) => segHitsBox(a, b, box)).length
+    if (hits > 1) score += 0.8 * (hits - 1)
     if (score < bestScore) {
       bestScore = score
       best = box

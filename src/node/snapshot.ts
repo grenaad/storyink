@@ -198,7 +198,7 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
     if (opts.sheet !== false && themes.length > 1) {
       const colW = Math.max(500, Math.min(1000, vb.w + 48))
       const sw = colW * themes.length
-      const sh = Math.round(headerH + 40 + (vb.h * (colW - 48)) / Math.max(vb.w, colW - 48) + 32)
+      const sh = Math.round(headerH + 46 + (vb.h * (colW - 48)) / vb.w + 36)
       const png = path.join(outDir, `${base}.sheet.png`)
       try {
         const ms = await shoot(`sheet=${themes.join(",")}&chrome=0${tHash}`, png, sw, sh)

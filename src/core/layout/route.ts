@@ -138,6 +138,11 @@ export class Router {
     return o
   }
 
+  /** Discourage (not forbid) running along these lines, e.g. group borders. */
+  avoid(lines: Pt[][]) {
+    for (let k = 0; k < 3; k++) for (const l of lines) this.record(l)
+  }
+
   private record(points: Pt[]) {
     for (let i = 0; i + 1 < points.length; i++) {
       const p = points[i]

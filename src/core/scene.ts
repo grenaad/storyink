@@ -81,6 +81,9 @@ export interface ScenePort extends Pt {
   id: string
   node: string
   edge: string
+  end: "out" | "in"
+  /** Hidden under an arrowhead (kept for Phase 2 animation). */
+  covered: boolean
 }
 
 export interface SceneLifeline {
