@@ -26,6 +26,14 @@ const quick = process.argv.includes("--quick")
 const THRESHOLD = 35
 const END_THRESHOLD = 60
 const sha = (f: string) => createHash("sha256").update(fs.readFileSync(f)).digest("hex")
+/** Screenshot with one retry: the headless shell occasionally exits without writing the PNG. */
+const shot = async (html: string, png: string, size: { width: number; height: number }) => {
+  for (let i = 0; i < 2; i++) {
+    fs.rmSync(png, { force: true })
+    await screenshotPage(html, png, size, { budgetMs: 300 })
+    if (fs.existsSync(png) && fs.statSync(png).size > 0) return
+  }
+}
 const psnr = (a: string, b: string): number => {
   const r = spawnSync("ffmpeg", ["-hide_banner", "-i", a, "-i", b, "-lavfi", "psnr", "-f", "null", "-"], { encoding: "utf8" })
   const m = /average:(\S+)/.exec(r.stderr)
@@ -52,8 +60,8 @@ for (const [name, file] of ANIMATED) {
       const box = (inner: string, js = "") => `<!doctype html><body style="margin:0"><div style="width:${vb.w}px;height:${vb.h}px;overflow:hidden">${inner}</div>${js}</body>`
       fs.writeFileSync(`${D}/${tag}.smil.html`, box(`<div style="margin-top:-${hh}px">${svg}</div>`, `<script>var s=document.querySelector("svg");s.pauseAnimations();s.setCurrentTime(${t});</script>`))
       fs.writeFileSync(`${D}/${tag}.ref.html`, box(strip(renderSvg(spec, { theme, t }))))
-      await screenshotPage(`${D}/${tag}.smil.html`, `${D}/${tag}.smil.png`, { width: vb.w, height: vb.h }, { budgetMs: 300 })
-      await screenshotPage(`${D}/${tag}.ref.html`, `${D}/${tag}.ref.png`, { width: vb.w, height: vb.h }, { budgetMs: 300 })
+      await shot(`${D}/${tag}.smil.html`, `${D}/${tag}.smil.png`, { width: vb.w, height: vb.h })
+      await shot(`${D}/${tag}.ref.html`, `${D}/${tag}.ref.png`, { width: vb.w, height: vb.h })
       vals.push([t, psnr(`${D}/${tag}.smil.png`, `${D}/${tag}.ref.png`)])
     }
     const min = Math.min(...vals.map((v) => v[1]))
