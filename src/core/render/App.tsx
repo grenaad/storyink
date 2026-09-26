@@ -330,6 +330,11 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
       const t0 = hash.t === "end" ? tl.duration : Number(hash.t) || 0
       const t = reduced ? steppedTime(tl, t0) : t0
       moveTo(cameraAt(scene, tl, t, vp), false)
+      // Chrome's raster of the canvas depends on whether a frame was painted at the fit transform
+      // before this one (frame timing, differs per run), so `#camera=follow&t=` captures flaked.
+      // The canvas stays hidden until the followed camera has painted: one paint path, same pixels.
+      const cv = stage.current?.querySelector<HTMLElement>(".si-canvas")
+      if (cv && cv.style.visibility !== "visible") requestAnimationFrame(() => requestAnimationFrame(() => (cv.style.visibility = "visible")))
       engaged.current = !cameraAtEnd(tl, t)
       return
     }
@@ -579,7 +584,7 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
         </div>
       ) : (
         <div className={`si-stage${story?.mode === "gate" ? " si-gated" : ""}`} ref={stage} onClick={() => story?.mode === "gate" && story.ungate()}>
-          <m.div className="si-canvas" style={{ x, y, scale: k, originX: 0, originY: 0 }}>
+          <m.div className="si-canvas" style={{ x, y, scale: k, originX: 0, originY: 0, ...(hydrated && hash.camera === "follow" && hash.t !== undefined ? { visibility: "hidden" as const } : {}) }}>
             <div
               className="si-figure"
               style={

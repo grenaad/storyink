@@ -375,11 +375,15 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
     const same = sha256(a1) === sha256(a2)
     gates.push({ name: "deterministic", pass: same, detail: same ? `${first.theme} at t=${midT} captured twice: identical` : `${first.theme} at t=${midT} differs between runs` })
     if (follow) {
-      // The follow camera is a pure function of t and the stage: a re-capture matches.
-      const f2 = path.join(tmpRoot, "follow-2.png")
-      await shoot(`theme=${first.theme}&chrome=0${tq(first.at ?? "end")}${mq}${cq}`, f2, FW, Math.round(FW * 0.5625))
-      const ok = sha256(f2) === first.sha256
-      gates.push({ name: "follow-deterministic", pass: ok, detail: ok ? `camera=follow at t=${first.at} captured twice: identical` : `camera=follow at t=${first.at} differs between runs` })
+      // The follow camera is a pure function of t and the stage: every `at` frame re-captures identically.
+      const diff: string[] = []
+      for (const c of captures.filter((x) => x.theme === first.theme)) {
+        const f2 = path.join(tmpRoot, `follow-${diff.length}-${String(c.at)}.png`)
+        await shoot(`theme=${c.theme}&chrome=0${tq(c.at ?? "end")}${mq}${cq}`, f2, FW, Math.round(FW * 0.5625))
+        if (sha256(f2) !== c.sha256) diff.push(String(c.at))
+      }
+      const at = captures.filter((x) => x.theme === first.theme).map((x) => x.at).join(",")
+      gates.push({ name: "follow-deterministic", pass: !diff.length, detail: !diff.length ? `camera=follow at t=${at} captured twice: identical` : `camera=follow at t=${diff.join(",")} differs between runs` })
     }
     if (tl) {
       // End frame = static, and reduced motion = static.

@@ -1,0 +1,661 @@
+{
+  "type": "architecture",
+  "title": "OpenWick system architecture",
+  "subtitle": "Rust server in clean layers, a Bun app, the web UI, plugins and the MT5 bridge",
+  "direction": "LR",
+  "groups": [
+    {
+      "id": "g_bun",
+      "label": "openwick app",
+      "kind": "Bun process"
+    },
+    {
+      "id": "g_rust",
+      "label": "openwick server",
+      "kind": "Rust process",
+      "direction": "TB"
+    },
+    {
+      "id": "g_entry",
+      "label": "Entry",
+      "kind": "L3 · L2.5",
+      "parent": "g_rust",
+      "direction": "LR"
+    },
+    {
+      "id": "g_l2",
+      "label": "API + application",
+      "kind": "L2",
+      "parent": "g_rust",
+      "direction": "LR"
+    },
+    {
+      "id": "g_core",
+      "label": "Core",
+      "kind": "L0 · L1",
+      "parent": "g_rust"
+    },
+    {
+      "id": "g_infra",
+      "label": "Infrastructure",
+      "kind": "L1",
+      "parent": "g_rust",
+      "direction": "TB"
+    },
+    {
+      "id": "g_mt5",
+      "label": "MetaTrader 5",
+      "kind": "Windows terminal",
+      "direction": "TB"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "agent",
+      "label": "AI agent",
+      "kind": "user",
+      "detail": "MCP client"
+    },
+    {
+      "id": "tspkgs",
+      "label": "TS packages",
+      "kind": "client",
+      "tag": "packages/*",
+      "detail": "shared · types · plugin-sdk"
+    },
+    {
+      "id": "web",
+      "label": "Web UI",
+      "kind": "client",
+      "tag": "@openwick/web",
+      "detail": "SolidJS · browser or Electron"
+    },
+    {
+      "id": "tui",
+      "label": "Terminal UI",
+      "kind": "client",
+      "tag": "OpenTUI",
+      "parent": "g_bun",
+      "detail": "chart · orders · account"
+    },
+    {
+      "id": "mcp",
+      "label": "MCP server",
+      "kind": "service",
+      "tag": "mcp sdk",
+      "parent": "g_bun",
+      "detail": "Streamable HTTP · :18081"
+    },
+    {
+      "id": "jsrt",
+      "label": "JS plugin host",
+      "kind": "function",
+      "tag": "plugins/ws",
+      "parent": "g_bun",
+      "detail": "loader · WS bridges"
+    },
+    {
+      "id": "bunc",
+      "label": "cli.ts entry",
+      "kind": "service",
+      "tag": "openwick (Bun)",
+      "parent": "g_bun",
+      "detail": "tui · serve · web · attach"
+    },
+    {
+      "id": "cli",
+      "label": "openwick binary",
+      "kind": "service",
+      "tag": "ow-cli",
+      "parent": "g_entry",
+      "detail": "serve · data · backtest"
+    },
+    {
+      "id": "boot",
+      "label": "Server bootstrap",
+      "kind": "service",
+      "tag": "ow-bootstrap",
+      "parent": "g_entry",
+      "detail": "start() wiring"
+    },
+    {
+      "id": "api",
+      "label": "Axum HTTP API",
+      "kind": "service",
+      "tag": "ow-api",
+      "parent": "g_l2",
+      "detail": "REST · SSE · plugin WS"
+    },
+    {
+      "id": "appc",
+      "label": "AppContainer (DI)",
+      "kind": "service",
+      "tag": "ow-application",
+      "parent": "g_l2",
+      "detail": "services · plugin loading"
+    },
+    {
+      "id": "xc",
+      "label": "MessageBus",
+      "kind": "queue",
+      "tag": "ow-crosscutting",
+      "parent": "g_core",
+      "detail": "egress-only dispatcher"
+    },
+    {
+      "id": "dom",
+      "label": "Domain + ports",
+      "kind": "service",
+      "tag": "ow-domain",
+      "parent": "g_core",
+      "detail": "Gateway · CandleStore · risk"
+    },
+    {
+      "id": "cabi",
+      "label": "Rust C ABI plugins",
+      "kind": "function",
+      "tag": "ow-plugin-sdk · cdylib",
+      "parent": "g_infra",
+      "detail": "openwick_plugin! · ABI 5"
+    },
+    {
+      "id": "srcs",
+      "label": "Source actors",
+      "kind": "service",
+      "tag": "ow-infrastructure",
+      "parent": "g_infra",
+      "detail": "SourceRegistry · 1 task/source"
+    },
+    {
+      "id": "gw",
+      "label": "LiveGateway",
+      "kind": "service",
+      "tag": "ow-infrastructure",
+      "parent": "g_infra",
+      "detail": "hot window · history · risk"
+    },
+    {
+      "id": "conn",
+      "label": "Venue adapters",
+      "kind": "service",
+      "tag": "connectors/*",
+      "parent": "g_infra",
+      "detail": "ow-mt5 · binance · oanda …"
+    },
+    {
+      "id": "rt",
+      "label": "Indicator + bot runtime",
+      "kind": "function",
+      "tag": "ow-infrastructure",
+      "parent": "g_infra",
+      "detail": "IndicatorEngine · BotRouter"
+    },
+    {
+      "id": "db",
+      "label": "openwick.db",
+      "kind": "database",
+      "tag": "libsql",
+      "parent": "g_infra",
+      "detail": "bars · coverage · jobs"
+    },
+    {
+      "id": "redis",
+      "label": "Redis Streams",
+      "kind": "database",
+      "tag": "optional",
+      "detail": "event recording"
+    },
+    {
+      "id": "dll",
+      "label": "Bridge DLL",
+      "kind": "service",
+      "tag": "ow-mt5-bridge",
+      "parent": "g_mt5",
+      "detail": "axum HTTP + WS"
+    },
+    {
+      "id": "ea",
+      "label": "OpenWickBridge EA",
+      "kind": "external",
+      "tag": "MQL5",
+      "parent": "g_mt5",
+      "detail": "OnTick · OnTimer · CTrade"
+    },
+    {
+      "id": "feeds",
+      "label": "News + calendar",
+      "kind": "external",
+      "detail": "ForexFactory · RSS"
+    },
+    {
+      "id": "venues",
+      "label": "Broker + data APIs",
+      "kind": "external",
+      "detail": "Binance · OANDA · IBKR · …"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_agent_mcp",
+      "from": "agent",
+      "to": "mcp",
+      "label": "MCP · HTTP"
+    },
+    {
+      "id": "e_pkgs_tui",
+      "from": "tspkgs",
+      "to": "tui",
+      "label": "imports",
+      "style": "dashed"
+    },
+    {
+      "id": "e_pkgs_web",
+      "from": "tspkgs",
+      "to": "web",
+      "label": "imports",
+      "style": "dashed"
+    },
+    {
+      "id": "e_spawn",
+      "from": "bunc",
+      "to": "g_rust",
+      "label": "spawns sidecar",
+      "style": "dashed"
+    },
+    {
+      "id": "e_tui_api",
+      "from": "tui",
+      "to": "api",
+      "label": "REST + SSE"
+    },
+    {
+      "id": "e_mcp_api",
+      "from": "mcp",
+      "to": "api",
+      "label": "REST"
+    },
+    {
+      "id": "e_js_api",
+      "from": "jsrt",
+      "to": "api",
+      "label": "WebSocket JSON"
+    },
+    {
+      "id": "e_web_api",
+      "from": "web",
+      "to": "api",
+      "label": "REST + SSE"
+    },
+    {
+      "id": "e_cli_boot",
+      "from": "cli",
+      "to": "boot",
+      "label": "start()"
+    },
+    {
+      "id": "e_boot_api",
+      "from": "boot",
+      "to": "api",
+      "label": "router"
+    },
+    {
+      "id": "e_boot_app",
+      "from": "boot",
+      "to": "appc",
+      "label": "AppContainer::new"
+    },
+    {
+      "id": "e_api_app",
+      "from": "api",
+      "to": "appc",
+      "label": "state.app"
+    },
+    {
+      "id": "e_app_dom",
+      "from": "appc",
+      "to": "dom",
+      "label": "Arc<dyn Gateway>"
+    },
+    {
+      "id": "e_dom_gw",
+      "from": "dom",
+      "to": "gw",
+      "label": "implemented by",
+      "style": "dashed"
+    },
+    {
+      "id": "e_src_gw",
+      "from": "srcs",
+      "to": "gw",
+      "label": "ingest()"
+    },
+    {
+      "id": "e_src_conn",
+      "from": "srcs",
+      "to": "conn",
+      "label": "owns"
+    },
+    {
+      "id": "e_gw_rt",
+      "from": "gw",
+      "to": "rt",
+      "label": "fan-out"
+    },
+    {
+      "id": "e_gw_db",
+      "from": "gw",
+      "to": "db",
+      "label": "CandleStore"
+    },
+    {
+      "id": "e_gw_bus",
+      "from": "gw",
+      "to": "xc",
+      "label": "publish"
+    },
+    {
+      "id": "e_bus_api",
+      "from": "xc",
+      "to": "api",
+      "label": "SSE broadcast"
+    },
+    {
+      "id": "e_cabi_rt",
+      "from": "cabi",
+      "to": "rt",
+      "label": "C ABI"
+    },
+    {
+      "id": "e_bus_redis",
+      "from": "xc",
+      "to": "redis",
+      "label": "XADD"
+    },
+    {
+      "id": "e_src_feeds",
+      "from": "srcs",
+      "to": "feeds",
+      "label": "HTTP poll"
+    },
+    {
+      "id": "e_conn_ven",
+      "from": "conn",
+      "to": "venues",
+      "label": "HTTPS · WS"
+    },
+    {
+      "id": "e_conn_dll",
+      "from": "conn",
+      "to": "dll",
+      "label": "HTTP + WS"
+    },
+    {
+      "id": "e_dll_ea",
+      "from": "dll",
+      "to": "ea",
+      "label": "FFI"
+    }
+  ],
+  "story": {
+    "steps": [
+      {
+        "at": 0.3,
+        "reveal": [
+          "dom"
+        ],
+        "stop": "Core",
+        "caption": "ow-domain defines the ports the outer layers code against"
+      },
+      {
+        "at": "+0.4",
+        "reveal": [
+          "xc"
+        ],
+        "caption": "ow-crosscutting adds the shared kernel and the MessageBus"
+      },
+      {
+        "at": "+0.6",
+        "reveal": [
+          "gw"
+        ],
+        "stop": "Gateway",
+        "caption": "LiveGateway implements the Gateway port in front of all sources"
+      },
+      {
+        "at": "+0.4",
+        "reveal": [
+          "db"
+        ],
+        "caption": "It keeps a hot bar window and persists closed bars to LibSQL"
+      },
+      {
+        "at": "+0.4",
+        "reveal": [
+          "srcs"
+        ],
+        "caption": "The SourceRegistry runs one actor task per source"
+      },
+      {
+        "at": "+0.4",
+        "reveal": [
+          "conn"
+        ],
+        "caption": "Connector crates adapt MT5, Binance, OANDA, IBKR and more"
+      },
+      {
+        "at": "+0.4",
+        "pulse": "e_src_gw",
+        "caption": "Adapter events enter the gateway only through ingest()"
+      },
+      {
+        "at": "+0.6",
+        "pulse": "e_conn_dll",
+        "stop": "Venues",
+        "caption": "ow-mt5 talks HTTP and WebSocket to a bridge inside MT5"
+      },
+      {
+        "at": "+0",
+        "reveal": [
+          "dll"
+        ]
+      },
+      {
+        "at": "+0.4",
+        "pulse": "e_dll_ea",
+        "caption": "The EA loads the bridge DLL over FFI and trades via CTrade"
+      },
+      {
+        "at": "+0",
+        "reveal": [
+          "ea"
+        ]
+      },
+      {
+        "at": "+0.4",
+        "pulse": "e_conn_ven",
+        "caption": "Other venues are reached with HTTPS and WebSocket clients"
+      },
+      {
+        "at": "+0",
+        "reveal": [
+          "venues"
+        ]
+      },
+      {
+        "at": "+0.4",
+        "pulse": "e_src_feeds",
+        "caption": "News and economic-calendar feeds are polled over HTTP"
+      },
+      {
+        "at": "+0",
+        "reveal": [
+          "feeds"
+        ]
+      },
+      {
+        "at": "+0.6",
+        "pulse": "e_gw_rt",
+        "stop": "Plugins",
+        "caption": "ingest() fans each event out to indicators and bots"
+      },
+      {
+        "at": "+0",
+        "reveal": [
+          "rt"
+        ]
+      },
+      {
+        "at": "+0.4",
+        "reveal": [
+          "cabi"
+        ],
+        "caption": "Rust plugins are cdylibs loaded in-process over the C ABI"
+      },
+      {
+        "at": "+0",
+        "pulse": "e_cabi_rt"
+      },
+      {
+        "at": "+0.6",
+        "reveal": [
+          "appc"
+        ],
+        "stop": "API",
+        "caption": "ow-application builds the container and reaches the Gateway port"
+      },
+      {
+        "at": "+0.4",
+        "reveal": [
+          "api"
+        ],
+        "caption": "ow-api serves REST, SSE and plugin WebSockets with Axum"
+      },
+      {
+        "at": "+0.4",
+        "pulse": {
+          "route": [
+            "e_gw_bus",
+            "e_bus_api"
+          ]
+        },
+        "caption": "Events leave through the MessageBus as one SSE broadcast"
+      },
+      {
+        "at": "+0.4",
+        "pulse": "e_bus_redis",
+        "caption": "The same bytes can also be recorded to Redis Streams"
+      },
+      {
+        "at": "+0",
+        "reveal": [
+          "redis"
+        ]
+      },
+      {
+        "at": "+0.4",
+        "reveal": [
+          "cli"
+        ],
+        "caption": "The openwick binary (ow-cli) starts the server via start()"
+      },
+      {
+        "at": "+0",
+        "pulse": "e_cli_boot"
+      },
+      {
+        "at": "+0",
+        "reveal": [
+          "boot"
+        ]
+      },
+      {
+        "at": "+0.1",
+        "highlight": [
+          "boot"
+        ],
+        "caption": "ow-bootstrap wires the bus, sinks, sources and the router"
+      },
+      {
+        "at": "+0.6",
+        "reveal": [
+          "bunc"
+        ],
+        "stop": "Clients",
+        "caption": "The Bun app (cli.ts) is the entry for TUI, serve and web modes"
+      },
+      {
+        "at": "+0.4",
+        "pulse": "e_spawn",
+        "caption": "It spawns the Rust binary as a sidecar and waits for /health"
+      },
+      {
+        "at": "+0.4",
+        "reveal": [
+          "tui"
+        ],
+        "caption": "The terminal UI talks to the API over REST plus SSE"
+      },
+      {
+        "at": "+0",
+        "pulse": "e_tui_api"
+      },
+      {
+        "at": "+0.4",
+        "reveal": [
+          "jsrt"
+        ],
+        "caption": "JS plugins load in Bun and speak JSON over WebSocket"
+      },
+      {
+        "at": "+0",
+        "pulse": "e_js_api"
+      },
+      {
+        "at": "+0.4",
+        "reveal": [
+          "web"
+        ],
+        "caption": "The SolidJS web UI, in a browser or Electron, uses the same API"
+      },
+      {
+        "at": "+0",
+        "pulse": "e_web_api"
+      },
+      {
+        "at": "+0.4",
+        "reveal": [
+          "agent"
+        ],
+        "caption": "AI agents call MCP tools that proxy to the REST API"
+      },
+      {
+        "at": "+0",
+        "pulse": "e_agent_mcp"
+      },
+      {
+        "at": "+0",
+        "reveal": [
+          "mcp"
+        ]
+      },
+      {
+        "at": "+0",
+        "pulse": "e_mcp_api"
+      },
+      {
+        "at": "+0.4",
+        "reveal": [
+          "tspkgs"
+        ],
+        "caption": "Shared TS packages carry the OpenAPI-generated wire types"
+      },
+      {
+        "at": "+0.4",
+        "highlight": [
+          "gw"
+        ],
+        "caption": "Every path meets at one façade: the LiveGateway"
+      }
+    ]
+  }
+}
