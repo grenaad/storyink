@@ -96,3 +96,44 @@ export function wirePath(points: Pt[], elbowRadius: number, cornerRadius: number
   }
   return roundedPolyline(p, cornerRadius)
 }
+
+/**
+ * Flatten a wire path (absolute `M L H V Q`, as the builders above emit) into a dense polyline
+ * that follows the drawn curve: each quadratic corner is sampled so the chord error stays well
+ * under 0.1 px. Pulse routes, trails and draw-on lengths use this, so everything animated along a
+ * wire lies on the same rounded geometry as the wire itself.
+ */
+export function flattenPath(d: string): Pt[] {
+  const out: Pt[] = []
+  const toks = d.match(/[MLHVQ]|-?\d*\.?\d+(?:e[-+]?\d+)?/gi) ?? []
+  let i = 0
+  let cur: Pt = { x: 0, y: 0 }
+  const num = () => Number(toks[i++])
+  const push = (p: Pt) => {
+    const q = out[out.length - 1]
+    if (!q || Math.abs(q.x - p.x) > 1e-6 || Math.abs(q.y - p.y) > 1e-6) out.push({ x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 })
+    cur = p
+  }
+  while (i < toks.length) {
+    const c = toks[i++].toUpperCase()
+    if (c === "M" || c === "L") push({ x: num(), y: num() })
+    else if (c === "H") push({ x: num(), y: cur.y })
+    else if (c === "V") push({ x: cur.x, y: num() })
+    else if (c === "Q") {
+      const p0 = cur
+      const p1 = { x: num(), y: num() }
+      const p2 = { x: num(), y: num() }
+      // Segments from the control polygon length: ~1 per 1.5 px, at least 8.
+      const len = Math.hypot(p1.x - p0.x, p1.y - p0.y) + Math.hypot(p2.x - p1.x, p2.y - p1.y)
+      const n = Math.max(8, Math.ceil(len / 1.5))
+      for (let k = 1; k <= n; k++) {
+        const u = k / n
+        const a = (1 - u) * (1 - u)
+        const b = 2 * u * (1 - u)
+        const e = u * u
+        push({ x: a * p0.x + b * p1.x + e * p2.x, y: a * p0.y + b * p1.y + e * p2.y })
+      }
+    }
+  }
+  return out
+}

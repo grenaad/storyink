@@ -4,6 +4,7 @@ import type { PulseRef, Spec, Story, StoryStep } from "../spec.ts"
 import type { Diagnostic } from "../validate.ts"
 import { autoStory } from "./auto.ts"
 import { springSettle } from "./ease.ts"
+import { flattenPath } from "../layout/paths.ts"
 import type { Timeline, TimelineDraw, TimelineGlow, TimelinePulse } from "./types.ts"
 
 const REACT_SETTLE = springSettle(S.springs.react)
@@ -123,11 +124,16 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
       const spans: TimelinePulse["spans"] = []
       let L = 0
       for (const id of ids) {
-        const pts = edgeById.get(id)!.points
+        // The drawn (rounded) wire, not its corner points: the dot and trail stay on the curve.
+        const pts = flattenPath(edgeById.get(id)!.d)
         const len = polyLength(pts)
+        // Keep each hop's own start (skip it only when it repeats the previous end), so the route
+        // never cuts a corner off the next wire; the dot crosses the node straight between hops.
+        const last = points[points.length - 1]
+        if (last) L += Math.hypot(pts[0].x - last.x, pts[0].y - last.y)
         spans.push({ edge: id, s0: L, s1: L + len })
         L += len
-        points.push(...(points.length ? pts.slice(1) : pts))
+        points.push(...(last && Math.hypot(last.x - pts[0].x, last.y - pts[0].y) < 1e-6 ? pts.slice(1) : pts))
       }
       const flight = typeof ref === "object" && ref.duration ? ref.duration : Math.min(S.pulse.flightMax, Math.max(S.pulse.flightMin, L / S.pulse.pxPerSecond))
       const tf0 = t0 + S.pulse.gather
