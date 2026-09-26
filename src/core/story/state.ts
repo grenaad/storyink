@@ -2,11 +2,17 @@ import { story as S } from "../../theme/tokens.ts"
 import type { Pt, Scene } from "../scene.ts"
 import { clamp01, easeOutCubic, inOutCubic, react, smooth, smoothstep, spring } from "./ease.ts"
 import type { Frame, GlowFrame, PulseFrame, Timeline } from "./types.ts"
-import { composeTitle, truncate } from "./compile.ts"
+import { composeTitle, readTime, truncate } from "./compile.ts"
 
 export interface StateOptions {
   /** Reduced motion: springs become steps, no pulses or glows. */
   reduced?: boolean
+  /**
+   * Stepped playback (implies `reduced`): `t` names the step in effect (see `steppedTime`) and
+   * the frame is that step's settled state: its pulses have landed (wires drawn), while
+   * reveals, counters and captions of later steps have not begun.
+   */
+  stepped?: boolean
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100
@@ -69,7 +75,13 @@ export function counterValue(c: Timeline["counters"][string], t: number, reduced
  */
 export function storyState(scene: Scene, tl: Timeline | undefined, t: number, opts: StateOptions = {}): Frame {
   if (!tl) return restFrame(t)
-  const reduced = opts.reduced === true
+  const reduced = opts.reduced === true || opts.stepped === true
+  // Completion clock: in stepped mode, draws finish as of the end of the step in effect.
+  let tc = t
+  if (opts.stepped) {
+    const k = steppedIndex(tl, t)
+    if (k >= 0 && k < tl.steps.length) tc = Math.max(t, Math.min(tl.steps[k].t1, tl.duration))
+  }
   const step = (dt: number) => (dt >= 0 ? 1 : 0)
   const rise = (dt: number) => (reduced ? step(dt) : react(dt))
   const frame: Frame = { t, el: {}, grow: {}, draw: {}, pulses: [], glows: [], flash: {}, counters: {}, captions: [], settled: t >= tl.lastEvent }
@@ -88,7 +100,7 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
   const pulseById = new Map(tl.pulses.map((p) => [p.id, p]))
   for (const [id, d] of Object.entries(tl.draw)) {
     let v: number
-    if (reduced) v = step(t - d.t1)
+    if (reduced) v = step(tc - d.t1)
     else if (d.mode === "flight" && d.pulse) {
       const p = pulseById.get(d.pulse)!
       const u = inOutCubic((t - p.tf0) / (p.tf1 - p.tf0))
@@ -290,3 +302,71 @@ export function beatCaption(tl: Timeline, frame: Frame, beat: Beat): string | un
 
 /** Minimum beat-tile width for a diagram (wide diagrams get fewer, larger tiles). */
 export const beatTileMin = (w: number): number => (w > 1000 ? 660 : w > 640 ? 440 : 340)
+
+/** Reduced-motion hold for a step without a caption (STYLE.md: a beat of ~1.2–1.8 s). */
+export const STEP_BEAT = 1.5
+
+/** One stop of stepped (reduced-motion) playback: the settled time of a step and how long it holds. */
+export interface SteppedStop {
+  /** Step index (-1 = before the story, `steps.length` = the final frame). */
+  step: number
+  /** Story time whose reduced frame is this step's settled state. */
+  t: number
+  /** Seconds to hold before advancing (0 for the final frame). */
+  hold: number
+}
+
+/**
+ * Stepped playback schedule (reduced motion, "Play steps"): each step shown
+ * settled (its reveals, draws, counters and caption applied at once) for its
+ * reading time, then the final frame. Pure data: the same for every run.
+ */
+export function steppedSchedule(tl: Timeline): SteppedStop[] {
+  const out: SteppedStop[] = []
+  tl.steps.forEach((s, i) => {
+    const next = tl.steps[i + 1]
+    // Steps that start together share one stop (the later one).
+    if (next && next.t0 <= s.t0 + 1e-9) return
+    out.push({ step: i, t: stopTime(tl, i), hold: s.caption ? readTime(s.caption) : STEP_BEAT })
+  })
+  out.push({ step: tl.steps.length, t: tl.duration, hold: 0 })
+  return out
+}
+
+/**
+ * The stop time of step i: its end, or just before the next step starts when that is sooner
+ * (a "+0" chain), so the time always names step i. `stepped` state applies step i's
+ * completions up to its end regardless.
+ */
+function stopTime(tl: Timeline, i: number): number {
+  const s = tl.steps[i]
+  const next = tl.steps[i + 1]
+  const end = Math.min(s.t1, tl.duration)
+  const t = next && next.t0 <= end ? next.t0 - 1e-4 : end
+  return Math.max(s.t0, Math.round(t * 1e4) / 1e4)
+}
+
+/** Index into `steppedSchedule` of the step in effect at `t` (-1 before the first step starts). */
+export function steppedIndex(tl: Timeline, t: number): number {
+  if (t >= tl.duration - 1e-9) return tl.steps.length
+  let k = -1
+  for (let i = 0; i < tl.steps.length; i++) if (tl.steps[i].t0 <= t + 1e-9) k = i
+  return k
+}
+
+/** Position in `steppedSchedule` of the stop in effect at `t` (-1 before the first step). */
+export function steppedStop(tl: Timeline, t: number): number {
+  const k = steppedIndex(tl, t)
+  if (k < 0) return -1
+  return steppedSchedule(tl).findIndex((x) => x.step >= k)
+}
+
+/**
+ * Quantise any `t` to the settled time of the step in effect (reduced motion).
+ * Before the first step: 0. At or after the end: the duration (final frame).
+ */
+export function steppedTime(tl: Timeline, t: number): number {
+  const j = steppedStop(tl, t)
+  if (j < 0) return 0
+  return steppedSchedule(tl)[j].t
+}
