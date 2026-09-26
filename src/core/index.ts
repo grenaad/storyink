@@ -10,7 +10,7 @@ export { renderSvg, renderHtml, toScene, fontCss, StoryinkError, type SvgOptions
 export { parseHash, type HashParams } from "./render/App.tsx"
 export * as tokens from "../theme/tokens.ts"
 export { VERSION } from "../generated/meta.ts"
-export { storyState, restFrame, beatTimes, counterValue, steppedSchedule, steppedIndex, steppedStop, steppedTime, STEP_BEAT, STEP_MOVE, stepBoundary, stepMoveTarget, stepMoveSpeed, type StateOptions, type SteppedStop } from "./story/state.ts"
+export { storyState, restFrame, beatTimes, counterValue, steppedSchedule, steppedIndex, steppedStop, steppedTime, STEP_BEAT, STEP_MOVE, stepBoundary, stepMoveTarget, stepMoveSpeed, beatGroups, beatStops, beatChapters, beatTicks, type StateOptions, type SteppedStop } from "./story/state.ts"
 export { CAMERA, cameraAt, cameraAtEnd, centreOn, clampCamera, deadZoneRect, fitCamera, fitIsReadable, followStep, inView, readableScale, stepAt, stepFocus, toScreen, type Camera, type Viewport } from "./story/camera.ts"
 export { compileStory, resolveEdge, readTime, type CompileResult } from "./story/compile.ts"
 export { autoStory } from "./story/auto.ts"

@@ -2,7 +2,7 @@ import { animate, useMotionValue, useMotionValueEvent, type AnimationPlaybackCon
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react"
 import { story as S } from "../../theme/tokens.ts"
 import type { Scene } from "../scene.ts"
-import { beatCaption, beatTileMin, beatTimes, stepBoundary, stepMoveSpeed, stepMoveTarget, steppedSchedule, steppedStop, steppedTime, storyState } from "../story/state.ts"
+import { beatCaption, beatChapters, beatStops, beatTicks, beatTileMin, beatTimes, stepBoundary, stepMoveSpeed, stepMoveTarget, steppedSchedule, steppedStop, steppedTime, storyState } from "../story/state.ts"
 import type { Frame, Timeline } from "../story/types.ts"
 import { Diagram } from "./Diagram.tsx"
 
@@ -220,17 +220,12 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
     else play()
   }, [pause, play, replay])
 
-  // Reduced motion steps between settled step states instead of step starts.
-  const marks = useMemo(() => (tl ? (opts.reduced ? steppedSchedule(tl).map((x) => x.t) : [...tl.steps.map((s) => s.t0), duration]) : []), [tl, duration, opts.reduced])
-  const chapters = useMemo(() => {
-    if (!tl) return []
-    if (!opts.reduced) return [0, ...tl.steps.filter((s) => s.stop).map((s) => s.t0), duration]
-    const sched = steppedSchedule(tl)
-    return [sched[0].t, ...tl.steps.flatMap((s, i) => (s.stop ? [sched[i].t] : [])), duration]
-  }, [tl, duration, opts.reduced])
+  // Both motion modes move between settled beats (a pulse and the reveal it causes are one beat).
+  const marks = useMemo(() => (tl ? beatStops(tl) : []), [tl])
+  const chapters = useMemo(() => (tl ? beatChapters(tl) : []), [tl])
   const step = useCallback(
     (dir: 1 | -1, useChapters = false): Promise<void> => {
-      const list = useChapters && chapters.length > 2 ? chapters : marks
+      const list = useChapters && chapters.length > 1 ? chapters : marks
       const now = clock.get()
       if (opts.reduced || !tl) {
         // Stepped playback: jump between settled steps.
@@ -492,8 +487,8 @@ export function Transport({ c, tl }: { c: StoryControls; tl: Timeline }): ReactE
       >
         <div className="si-scrub-track" />
         <div className="si-scrub-fill" style={{ width: pct(c.t) }} />
-        {tl.steps.map((s) => (
-          <span key={s.id} className={`si-tick${s.stop ? " si-tick-stop" : ""}`} style={{ left: pct(s.t0) }} title={s.label}>
+        {beatTicks(tl).map((s) => (
+          <span key={s.id} className={`si-tick${s.stop ? " si-tick-stop" : ""}`} style={{ left: pct(s.t) }} title={s.label}>
             {s.stop ? <span className="si-tick-label">{s.stop}</span> : null}
           </span>
         ))}

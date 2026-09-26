@@ -295,7 +295,9 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
     motion: story.motion ?? "full",
     ...(story.camera ? { camera: story.camera } : {}),
     loop: story.end === "loop",
-    steps: steps.map((s) => ({ ...s, t0: r3(s.t0), t1: r3(s.t1) })),
+    // Step ends round up, so a step's settled stop is never a hair before its own events (a dot
+    // 0.4 ms short of arrival is still drawn in flight).
+    steps: steps.map((s) => ({ ...s, t0: r3(s.t0), t1: Math.ceil(s.t1 * 1000 - 1e-6) / 1000 })),
     appear,
     draw,
     pulses,

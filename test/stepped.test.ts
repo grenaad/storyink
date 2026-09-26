@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import fs from "node:fs"
-import { parseHash, steppedIndex, steppedSchedule, steppedStop, steppedTime, storyState, STEP_BEAT, toScene } from "../src/core/index.ts"
+import { beatGroups, parseHash, steppedIndex, steppedSchedule, steppedStop, steppedTime, storyState, STEP_BEAT, toScene } from "../src/core/index.ts"
 import { resolveMotion } from "../src/core/render/App.tsx"
 import { readTime } from "../src/core/story/compile.ts"
 
@@ -8,19 +8,23 @@ const scene = (f: string) => toScene(JSON.parse(fs.readFileSync(`examples/${f}`,
 const stories = ["checkout.architecture.json", "oauth.sequence.json"].map(scene)
 
 describe("stepped playback (reduced motion)", () => {
-  test("schedule: one settled stop per step plus the final frame; holds are reading times", () => {
+  test("schedule: one settled stop per beat plus the final frame; holds are the beat's reading time", () => {
     for (const s of stories) {
       const tl = s.timeline!
       const sched = steppedSchedule(tl)
       expect(sched.length).toBeGreaterThan(tl.steps.length / 2)
       expect(sched[sched.length - 1]).toEqual({ step: tl.steps.length, t: tl.duration, hold: 0 })
-      sched.slice(0, -1).forEach((x) => {
+      const groups = beatGroups(tl)
+      expect(sched.length).toBe(groups.length + 1)
+      sched.slice(0, -1).forEach((x, k) => {
         const st = tl.steps[x.step]
+        expect(x.step).toBe(groups[k][groups[k].length - 1])
+        const cap = groups[k].map((i) => tl.steps[i].caption).filter((c) => c).pop()
         // The stop time names its own step and lies within it.
         expect(steppedIndex(tl, x.t)).toBe(x.step)
         expect(x.t).toBeGreaterThanOrEqual(st.t0)
         expect(x.t).toBeLessThanOrEqual(st.t1 + 1e-9)
-        expect(x.hold).toBe(st.caption ? readTime(st.caption) : STEP_BEAT)
+        expect(x.hold).toBe(cap ? readTime(cap) : STEP_BEAT)
         expect(x.hold).toBeGreaterThanOrEqual(1)
         expect(x.hold).toBeLessThanOrEqual(3)
       })

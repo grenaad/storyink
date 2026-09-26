@@ -209,7 +209,9 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
   if (cur >= 0) {
     const c = tl.captions[cur]
     const words = c.text.split(/\s+/)
-    const W = Math.min(2.8, Math.max(0.12, Math.min(c.t1 - c.t0, 1.2) - 0.08))
+    // The words finish typing within their step (so a step move / stepped stop shows the whole line).
+    const span = (tl.steps[c.step]?.t1 ?? c.t1) - c.t0
+    const W = Math.min(2.8, Math.max(0.12, Math.min(c.t1 - c.t0, 1.2, span) - 0.08))
     const f = Math.min(S.springs.word, W / 2)
     const stagger = words.length > 1 ? (W - 1.5 * f) / (words.length - 1) : 0
     const fadeOut = c.handoff ? 1 : reduced ? 1 : 1 - smoothstep((t - (c.t1 - 0.3)) / 0.3)
@@ -231,6 +233,42 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
   return frame
 }
 
+/**
+ * The story's **beats**: consecutive step indices that read as one change. A step joins the next
+ * when the next starts with it (same `t0`), or is chained straight on ("+0", within 50 ms of this
+ * step's end) and either adds no chapter `stop` or caption of its own, or (without a `stop`)
+ * reveals the box this step's pulse arrives at. So a pulse and the reveal of its
+ * target are always one beat. One definition for step moves (→ / ←), stepped (reduced) playback,
+ * scrubber ticks and beat tiles (tiles may merge further to fit `MAX_BEATS`).
+ */
+export function beatGroups(tl: Timeline): number[][] {
+  const groups: number[][] = []
+  let open: number[] = []
+  tl.steps.forEach((s, i) => {
+    open.push(i)
+    const next = tl.steps[i + 1]
+    const chained = !!next && next.t0 - s.t1 <= 0.05 && !next.stop
+    const joins = next && (next.t0 <= s.t0 + 1e-9 || (chained && (!next.caption || revealsTarget(tl, i, i + 1))))
+    if (!joins) {
+      groups.push(open)
+      open = []
+    }
+  })
+  if (open.length) groups.push(open)
+  return groups
+}
+
+/**
+ * Whether step j reveals (at its t0) a box that step i's pulses arrive at. (Highlights aren't
+ * distinguishable from the arrival glow in the timeline, which starts at the same time.)
+ */
+function revealsTarget(tl: Timeline, i: number, j: number): boolean {
+  const t0 = tl.steps[j].t0
+  const targets = tl.pulses.filter((p) => p.id.startsWith(`pulse-${i}-`) && p.target).map((p) => p.target!)
+  if (!targets.length) return false
+  return targets.some((id) => Math.abs((tl.appear[id] ?? -1) - t0) < 1e-6)
+}
+
 /** Time of a beat tile: after the step lands, before the next one moves. */
 export interface Beat {
   id: string
@@ -249,18 +287,7 @@ export const MAX_BEATS = 12
  * caption) until at most `max` tiles remain. The last tile is the final frame.
  */
 export function beatTimes(tl: Timeline, max = MAX_BEATS): Beat[] {
-  const groups: number[][] = []
-  let open: number[] = []
-  tl.steps.forEach((s, i) => {
-    open.push(i)
-    const next = tl.steps[i + 1]
-    const chained = next && next.t0 - s.t1 <= 0.05 && !next.stop && !next.caption
-    if (!chained) {
-      groups.push(open)
-      open = []
-    }
-  })
-  if (open.length) groups.push(open)
+  const groups = beatGroups(tl)
   const major = (g: number[]) => g.some((i) => tl.steps[i].stop || tl.steps[i].caption)
   while (groups.length > max) {
     // Merge the minor group with its closest neighbour in time.
@@ -323,12 +350,13 @@ export interface SteppedStop {
  */
 export function steppedSchedule(tl: Timeline): SteppedStop[] {
   const out: SteppedStop[] = []
-  tl.steps.forEach((s, i) => {
-    const next = tl.steps[i + 1]
-    // Steps that start together share one stop (the later one).
-    if (next && next.t0 <= s.t0 + 1e-9) return
-    out.push({ step: i, t: stopTime(tl, i), hold: s.caption ? readTime(s.caption) : STEP_BEAT })
-  })
+  // One stop per beat, at its last step's settled time, held for the beat's caption.
+  for (const g of beatGroups(tl)) {
+    const last = g[g.length - 1]
+    // Hold for the caption on screen at the stop (the beat's last).
+    const cap = g.map((i) => tl.steps[i].caption).filter((c) => c).pop()
+    out.push({ step: last, t: stopTime(tl, last), hold: cap ? readTime(cap) : STEP_BEAT })
+  }
   out.push({ step: tl.steps.length, t: tl.duration, hold: 0 })
   return out
 }
@@ -399,4 +427,28 @@ export function stepMoveSpeed(dir: 1 | -1, elapsed: number, remaining: number): 
   const e = STEP_MOVE.ease
   const k = Math.min(1, elapsed / e, remaining / (v * e))
   return v * Math.max(STEP_MOVE.minSpeed, k)
+}
+
+/**
+ * Step-move boundaries: every beat's settled stop time, then the end. → / ← land on these, so a
+ * move includes a pulse and the reveal, highlight, counter and caption it causes.
+ */
+export function beatStops(tl: Timeline): number[] {
+  return steppedSchedule(tl).map((x) => x.t)
+}
+
+/** Chapter boundaries (Shift+→ / ←): the settled stop of each beat holding a `stop`, and the end. */
+export function beatChapters(tl: Timeline): number[] {
+  const sched = steppedSchedule(tl)
+  const groups = beatGroups(tl)
+  return [...groups.flatMap((g, k) => (g.some((i) => tl.steps[i].stop) ? [sched[k].t] : [])), tl.duration]
+}
+
+/** Scrubber ticks: one per beat at its first step's start, labelled with its chapter stop if any. */
+export function beatTicks(tl: Timeline): { id: string; t: number; label: string; stop?: string }[] {
+  return beatGroups(tl).map((g) => {
+    const first = tl.steps[g[0]]
+    const stop = g.map((i) => tl.steps[i].stop).find((x) => x)
+    return { id: first.id, t: first.t0, label: first.label, ...(stop ? { stop } : {}) }
+  })
 }
