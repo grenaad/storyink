@@ -4,7 +4,7 @@ import type { Plugin } from "@opencode/plugin"
 import { fromMermaid } from "./core/mermaid/index.ts"
 import { formatDiagnostic, type Diagnostic } from "./core/validate.ts"
 import { readSkill, skillPath } from "./node/assets.ts"
-import { parseSource, snapshot, writeAnimatedSvg, writeDiagram, type SnapshotReceipt } from "./node/index.ts"
+import { parseSource, setStoryMotion, snapshot, writeAnimatedSvg, writeDiagram, type SnapshotReceipt } from "./node/index.ts"
 import type { ThemeName } from "./theme/tokens.ts"
 
 export const PLUGIN_ID = "storyink"
@@ -101,6 +101,11 @@ const plugin = {
             svg: { type: "string", description: "Optional output .svg path" },
             theme: { ...THEME, description: "Pin the theme; default follows the viewer's system preference" },
             story: { type: "string", enum: ["auto"], description: "Add an auto-generated storyboard (only when the user asked for an animated diagram)" },
+            motion: {
+              type: "string",
+              enum: ["full", "reduced", "system"],
+              description: 'Story playback motion: "full" (default, animates even when the reader\'s OS reduces motion), "reduced" (step by step), "system" (follow prefers-reduced-motion)',
+            },
             animatedSvg: {
               type: ["boolean", "string"],
               enum: [true, false, "both"],
@@ -123,6 +128,7 @@ const plugin = {
             svg?: string
             theme?: ThemeName
             story?: "auto"
+            motion?: "full" | "reduced" | "system"
             animatedSvg?: boolean | "both"
             animatedSvgPath?: string
             once?: boolean
@@ -131,6 +137,7 @@ const plugin = {
           if (context.signal.aborted) throw new Error("aborted")
           const s = specFrom(i)
           if (s.ok && s.spec && i.story === "auto" && s.spec.story === undefined) s.spec.story = "auto"
+          if (s.ok && s.spec && i.motion) setStoryMotion(s.spec, i.motion)
           if (!s.ok || !s.spec)
             return {
               content: `storyink: spec is invalid, nothing written.\n${summarize(s.diagnostics)}`,

@@ -4,7 +4,7 @@ import { fromMermaid } from "./core/mermaid/index.ts"
 import { formatDiagnostic, type Diagnostic } from "./core/validate.ts"
 import { VERSION } from "./generated/meta.ts"
 import { readSkill, skillPath } from "./node/assets.ts"
-import { loadSpec, parseSource, snapshot, writeAnimatedSvg, writeDiagram } from "./node/index.ts"
+import { loadSpec, parseSource, setStoryMotion, snapshot, writeAnimatedSvg, writeDiagram } from "./node/index.ts"
 import type { ThemeName } from "./theme/tokens.ts"
 
 const COLOR = !!process.stdout.isTTY && !process.env.NO_COLOR
@@ -21,6 +21,7 @@ const HELP = `${bold("storyink")} ${dim(VERSION)} - diagrams from JSON or Mermai
 
 ${bold("Usage")}
   storyink render <in.json|in.mmd|-> [-o out.html] [--svg out.svg] [--theme light|dark] [--story auto]
+                 [--motion full|reduced|system]   story playback motion (default full; system = OS setting)
                  [--animated-svg out.svg [--theme light|dark|both] [--once] [--font system|embed]]
                    animated SVG (SMIL) for READMEs / PRs: plays inside <img>, no script
   storyink mermaid <in.mmd> [-o out.json]
@@ -115,6 +116,11 @@ async function main(argv: string[]): Promise<number> {
     if (storyFlag !== undefined) {
       if (storyFlag !== "auto") throw new Error(`--story takes "auto", got "${storyFlag}"`)
       if (loaded.spec.story === undefined) loaded.spec.story = "auto"
+    }
+    const motion = str(a, "--motion")
+    if (motion !== undefined) {
+      if (motion !== "full" && motion !== "reduced" && motion !== "system") throw new Error(`--motion must be full, reduced or system, got "${motion}"`)
+      if (!setStoryMotion(loaded.spec, motion)) process.stderr.write(`${yellow("warn ")} --motion ignored: the spec has no story (add --story auto)\n`)
     }
     const svg = str(a, "--svg")
     const animated = str(a, "--animated-svg")

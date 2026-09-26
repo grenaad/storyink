@@ -67,6 +67,16 @@ export function writeDiagram(
   return res
 }
 
+/**
+ * Set the story's playback motion (`story.motion`). `"story": "auto"` becomes
+ * `{ "steps": "auto", "motion": m }`. Returns false when the spec has no story.
+ */
+export function setStoryMotion(spec: Spec, motion: "full" | "reduced" | "system"): boolean {
+  if (spec.story === undefined) return false
+  spec.story = spec.story === "auto" ? { steps: "auto", motion } : { ...spec.story, motion }
+  return true
+}
+
 export interface AnimatedWriteResult {
   ok: boolean
   diagnostics: Diagnostic[]
