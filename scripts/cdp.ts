@@ -69,6 +69,31 @@ export async function session(flags: string[], size = { width: 1600, height: 900
     send, ev,
     async go(url: string) { await send("Page.navigate", { url }); await Bun.sleep(1200) },
     async shot(file: string) { const s = await send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(file, Buffer.from(s.result.data, "base64")) },
+    /** On-screen centre of the first element matching `selector` (null if absent or zero-size). */
+    async center(selector: string): Promise<{ x: number; y: number } | null> {
+      const v = await ev(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return null;const b=e.getBoundingClientRect();if(!b.width||!b.height)return null;return JSON.stringify({x:b.x+b.width/2,y:b.y+b.height/2})})()`)
+      return v ? JSON.parse(v) : null
+    },
+    /** Real mouse input (Input.dispatchMouseEvent), not element.click(). */
+    async mouse(type: "mouseMoved" | "mousePressed" | "mouseReleased", x: number, y: number, buttons = type === "mouseReleased" ? 0 : type === "mousePressed" ? 1 : 0) {
+      await send("Input.dispatchMouseEvent", { type, x, y, button: type === "mouseMoved" && !buttons ? "none" : "left", buttons, clickCount: type === "mouseMoved" ? 0 : 1 })
+    },
+    /** Move, press and release at an element's centre (or at a point). */
+    async click(target: string | { x: number; y: number }) {
+      const p = typeof target === "string" ? await this.center(target) : target
+      if (!p) throw new Error(`click: no element ${String(target)}`)
+      await this.mouse("mouseMoved", p.x, p.y)
+      await this.mouse("mousePressed", p.x, p.y)
+      await this.mouse("mouseReleased", p.x, p.y)
+      return p
+    },
+    /** Press at `a`, move in steps to `b`, release. */
+    async drag(a: { x: number; y: number }, b: { x: number; y: number }, steps = 8) {
+      await this.mouse("mouseMoved", a.x, a.y)
+      await this.mouse("mousePressed", a.x, a.y)
+      for (let i = 1; i <= steps; i++) await this.mouse("mouseMoved", a.x + ((b.x - a.x) * i) / steps, a.y + ((b.y - a.y) * i) / steps, 1)
+      await this.mouse("mouseReleased", b.x, b.y)
+    },
     async key(k: string, code = k) { for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, key: k, code, ...(k.length === 1 ? { text: type === "keyDown" ? k : undefined } : {}) }) },
     close() { ws.close(); try { process.kill(-child.pid!, "SIGKILL") } catch {}; fs.rmSync(dir, { recursive: true, force: true }) },
   }

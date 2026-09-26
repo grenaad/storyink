@@ -82,6 +82,9 @@ export function resolveMotion(o: { hash?: "full" | "reduced"; stored?: string | 
 
 export const MOTION_KEY = "storyink-motion"
 
+/** Pointerdown targets that never start a pan (controls inside the stage). */
+export const NO_PAN = "button, input, select, textarea, a, [role=slider], .si-tools, .si-transport, .si-gate, [data-no-pan]"
+
 function Btn({ label, title, onClick, children, pressed, still }: { label: string; title: string; onClick: () => void; children?: ReactNode; pressed?: boolean; still?: boolean }) {
   return (
     <m.button
@@ -281,6 +284,8 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
     }
   }, [fit])
 
+  /** Called when a manual pan starts (the follow camera suspends on it). */
+  const onPanRef = useRef<() => void>(() => {})
   // Wheel zoom at cursor, drag to pan, keyboard.
   useEffect(() => {
     const el = stage.current
@@ -290,22 +295,34 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
       const r = el.getBoundingClientRect()
       zoomAt(Math.exp(-ev.deltaY * (ev.ctrlKey ? 0.01 : 0.0015)), ev.clientX - r.left, ev.clientY - r.top)
     }
-    let drag: { id: number; sx: number; sy: number; ox: number; oy: number } | undefined
+    let drag: { id: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | undefined
     const down = (ev: PointerEvent) => {
       if (ev.button !== 0) return
-      drag = { id: ev.pointerId, sx: ev.clientX, sy: ev.clientY, ox: x.get(), oy: y.get() }
-      el.setPointerCapture(ev.pointerId)
-      el.classList.add("si-dragging")
+      // This native listener runs before React's root listener, so a React stopPropagation on the
+      // controls is too late: capturing here would swallow their click. Pan only from the surface.
+      if ((ev.target as Element | null)?.closest?.(NO_PAN)) return
+      drag = { id: ev.pointerId, sx: ev.clientX, sy: ev.clientY, ox: x.get(), oy: y.get(), moved: false }
     }
     const move = (ev: PointerEvent) => {
       if (!drag || drag.id !== ev.pointerId) return
+      // Capture only once the pointer really moves, so a plain click on the surface stays a click.
+      if (!drag.moved) {
+        if (Math.hypot(ev.clientX - drag.sx, ev.clientY - drag.sy) < 3) return
+        drag.moved = true
+        try {
+          el.setPointerCapture(ev.pointerId)
+        } catch {}
+        el.classList.add("si-dragging")
+        onPanRef.current()
+      }
       x.set(drag.ox + ev.clientX - drag.sx)
       y.set(drag.oy + ev.clientY - drag.sy)
     }
     const up = (ev: PointerEvent) => {
       if (!drag || drag.id !== ev.pointerId) return
+      const moved = drag.moved
       drag = undefined
-      el.classList.remove("si-dragging")
+      if (moved) el.classList.remove("si-dragging")
     }
     const key = (ev: KeyboardEvent) => {
       if (ev.target instanceof HTMLInputElement || ev.metaKey || ev.ctrlKey || ev.altKey) return
