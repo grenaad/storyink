@@ -86,9 +86,18 @@ describe("stepped playback (reduced motion)", () => {
     }
   })
 
-  test("motion precedence: #motion hash > stored choice > OS setting", () => {
+  test("motion precedence: #motion hash > stored choice > author story.motion (default full) > OS (only for system)", () => {
     expect(resolveMotion({ system: false })).toBe("full")
-    expect(resolveMotion({ system: true })).toBe("reduced")
+    // Default "full" ignores the OS setting.
+    expect(resolveMotion({ system: true })).toBe("full")
+    expect(resolveMotion({ system: true, author: "full" })).toBe("full")
+    expect(resolveMotion({ system: true, author: "system" })).toBe("reduced")
+    expect(resolveMotion({ system: false, author: "system" })).toBe("full")
+    expect(resolveMotion({ system: false, author: "reduced" })).toBe("reduced")
+    expect(resolveMotion({ system: false, author: "reduced", stored: "full" })).toBe("full")
+    expect(resolveMotion({ system: true, author: "full", stored: "reduced" })).toBe("reduced")
+    expect(resolveMotion({ system: false, author: "full", stored: "full", hash: "reduced" })).toBe("reduced")
+    expect(resolveMotion({ system: true, author: "system" , stored: "junk" })).toBe("reduced")
     expect(resolveMotion({ system: true, stored: "full" })).toBe("full")
     expect(resolveMotion({ system: false, stored: "reduced" })).toBe("reduced")
     expect(resolveMotion({ system: false, stored: "junk" })).toBe("full")
@@ -96,5 +105,21 @@ describe("stepped playback (reduced motion)", () => {
     expect(resolveMotion({ system: true, stored: "reduced", hash: "full" })).toBe("full")
     expect(parseHash("#motion=reduced").motion).toBe("reduced")
     expect(parseHash("#motion=x").motion).toBeUndefined()
+  })
+})
+
+describe("story.motion (author override)", () => {
+  const base = JSON.parse(fs.readFileSync("examples/checkout.architecture.json", "utf8"))
+  test("defaults to full; accepts full | reduced | system; rejects others", () => {
+    expect(toScene(base).timeline!.motion).toBe("full")
+    expect(toScene({ ...base, story: "auto" }).timeline!.motion).toBe("full")
+    for (const m of ["full", "reduced", "system"] as const) expect(toScene({ ...base, story: { ...base.story, motion: m } }).timeline!.motion).toBe(m)
+    expect(() => toScene({ ...base, story: { ...base.story, motion: "slow" } })).toThrow(/motion/)
+  })
+  test('{ "steps": "auto", "motion" } derives the auto story with the option', () => {
+    const a = toScene({ ...base, story: "auto" }).timeline!
+    const b = toScene({ ...base, story: { steps: "auto", motion: "system" } }).timeline!
+    expect(b.motion).toBe("system")
+    expect(b.steps.map((s) => s.t0)).toEqual(a.steps.map((s) => s.t0))
   })
 })

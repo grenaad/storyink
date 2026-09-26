@@ -68,12 +68,15 @@ export function parseHash(hash: string): HashParams {
 }
 
 /**
- * Effective motion mode. Precedence: `#motion=` hash, then the stored viewer choice
- * (`localStorage["storyink-motion"]`), then the OS `prefers-reduced-motion`.
+ * Effective motion mode. Precedence: `#motion=` hash, then the reader's stored toolbar choice
+ * (`localStorage["storyink-motion"]`), then the author's `story.motion` (default "full"). The OS
+ * `prefers-reduced-motion` is consulted only when the author chose "system".
  */
-export function resolveMotion(o: { hash?: "full" | "reduced"; stored?: string | null; system: boolean }): "full" | "reduced" {
+export function resolveMotion(o: { hash?: "full" | "reduced"; stored?: string | null; author?: "full" | "reduced" | "system"; system: boolean }): "full" | "reduced" {
   if (o.hash) return o.hash
   if (o.stored === "full" || o.stored === "reduced") return o.stored
+  const author = o.author ?? "full"
+  if (author !== "system") return author
   return o.system ? "reduced" : "full"
 }
 
@@ -157,7 +160,7 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
   const [exportCurrent, setExportCurrent] = useState(false)
   const vb = scene.viewBox
   const tl = scene.timeline
-  const reduced = resolveMotion({ hash: hash.motion, stored: storedMotion, system: sysReduced }) === "reduced"
+  const reduced = resolveMotion({ hash: hash.motion, stored: storedMotion, author: tl?.motion, system: sysReduced }) === "reduced"
   const story = useStory(scene, tl, {
     ...(hash.t !== undefined ? { t: hash.t } : {}),
     ...(hash.autoplay !== undefined ? { autoplay: hash.autoplay } : {}),
