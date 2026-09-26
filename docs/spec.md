@@ -215,11 +215,28 @@ animated SVG (SMIL) has no follow camera.
 **Page contract:** `#t=<seconds|end>` seeks (paused), `#autoplay=0|1`, `#motion=full|reduced`,
 `#camera=follow|fit` (with `#t=`, `follow` shows the followed view),
 `#static=1` (runtime off, final frame), `#sheet=beats` (one tile per step + final frame).
-`window.__storyink = { ready, duration, steps: [{ id, label, t0, t1, stop? }], setTime(t), play(), pause(), replay(), state(), camera() }`;
+`window.__storyink = { ready, duration, steps: [{ id, label, t0, t1, stop? }], setTime(t), play(), pause(), replay(), step(dir, chapter?), stepAnimated(), state(), camera() }`;
+`step(1 | -1, chapter?)` is the animated step move below and returns a Promise that resolves when
+the move ends (or is interrupted); `stepAnimated()` is the running move `{ dir, target }` or null.
+`state()` reads the clock and mode directly (no render lag).
 `camera()` returns `{ mode, follow, k, x, y, goal, step, engaged, suspended, userK, viewport }`
 (a diagram point p is drawn at `x + (p.x − viewBox.x)·k`).
-Keys: space play/pause, ←/→ previous/next step (Shift: chapter), R replay, M motion, F follow,
+Keys: space play/pause, →/← step moves (Shift: by chapter), R replay, M motion, F follow,
 0 fit, +/− zoom.
+
+**Step moves (→ / ←).** In full motion the arrows animate instead of jumping:
+- **→** plays forward at normal speed from the current time to the **next step boundary** (a step
+  start, or the end) and pauses there. While playing, → becomes "advance one step": it plays on to
+  the next boundary and pauses. **Shift+→** does the same to the next chapter (`stop`).
+- **←** rewinds: time runs **backwards at 2×** (pulses fly back) to the **previous boundary**, then
+  pauses, with a short bounce-free ease in and out (0.12 s, never below 0.3× so it always
+  arrives). No blur (the blur stays with R's tape rewind). **Shift+←** goes to the previous chapter.
+- **Repeated presses** in the direction of a running move extend its target to the following
+  boundary; the opposite key reverses toward the boundary adjacent to the current time.
+- **Space** pauses a move; the scrubber still seeks immediately; R is the tape-rewind replay.
+- The follow camera follows moves like playback, backwards too.
+- **Reduced motion** keeps instant jumps between settled steps.
+Core: `stepBoundary`, `stepMoveTarget`, `stepMoveSpeed`, `STEP_MOVE`.
 
 ## Animated SVG
 

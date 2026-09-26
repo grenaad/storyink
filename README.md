@@ -123,7 +123,8 @@ Add a `story` to play a diagram as a sequence of beats in the HTML viewer:
 
 `"story": "auto"` (or `--story auto`) derives the beats from the graph or message order. Playback
 has a click-to-play gate, play/pause, a tape-rewind replay and a scrubber with step and chapter
-ticks. Space, ←/→ and R control it.
+ticks. Space, ←/→ and R control it: → plays to the next step and pauses, ← rewinds at 2× to the
+previous one (Shift: by chapter; repeated presses extend the move).
 
 Motion is **full by default, even when the reader's system asks for reduced motion**. Authors can
 set `"story": { "motion": "reduced" }` (always step by step) or `"motion": "system"` (follow

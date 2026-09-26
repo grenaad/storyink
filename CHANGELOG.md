@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.3
+
+- **Fix: `snapshot --camera follow` wasn't deterministic on real diagrams** (`follow-deterministic`
+  failed on OpenWick's 24- and 18-node architecture/data-flow diagrams). The DOM, camera and
+  transform were identical across runs; what varied was Chrome's paint history. Some runs painted a
+  frame at the fit transform before the followed camera was placed, which changed the canvas
+  raster (anti-aliasing of some node boxes and text). With `#camera=follow&t=` the canvas now stays
+  hidden until the followed camera has painted. `follow-deterministic` now re-captures every
+  `at` frame, not only the first.
+- **Arrow keys animate step moves.** → plays forward to the next step boundary and pauses (while
+  playing: advance one step); ← rewinds backwards at 2× to the previous boundary with a short
+  bounce-free ease. Shift goes by chapter, repeated presses extend the target, and the opposite key
+  reverses. Space pauses a move, the follow camera follows it (backwards too), and reduced motion
+  still jumps.
+  - `window.__storyink.step(dir, chapter?)` animates the same way and returns a Promise;
+    `stepAnimated()` is the running move. `state()` reads the clock/mode without render lag.
+  - Core: `stepBoundary`, `stepMoveTarget`, `stepMoveSpeed`, `STEP_MOVE`.
+- `verify:viewer` drives → / ← / Shift / Space with real key events (CDP `Input.dispatchKeyEvent`).
+
 ## 0.3.2
 
 - **Fix: clicking the transport's play/pause did nothing** (space worked). The stage's native
