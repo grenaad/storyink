@@ -105,6 +105,10 @@ body{background:${v("bg")};color:${v("ink")};font-family:${fonts.mono};-webkit-f
 .si-gate-disc{position:absolute;left:50%;top:50%;width:240px;height:240px;margin:-120px 0 0 -120px;border-radius:50%;background:color-mix(in srgb, ${v("bg")} 35%, transparent);backdrop-filter:blur(7px);-webkit-mask:radial-gradient(closest-side,#000 35%,transparent);mask:radial-gradient(closest-side,#000 35%,transparent);pointer-events:none;}
 .si-gate-ring{position:absolute;inset:0;border:2.4px solid color-mix(in srgb, ${v("pulse")} 7%, transparent);border-radius:14px;filter:blur(2.5px);animation:si-ring 7.5s linear infinite;pointer-events:none;opacity:0;}
 .si-gate-ring-2{animation-delay:-3.75s;}
+.si-gate-still .si-gate-play,.si-gate-still:hover .si-gate-play,.si-gated:hover .si-gate-still .si-gate-play{transition:none;transform:none;}
+.si-nochrome .si-gate-still{display:none;}
+.si-reduced .si-figure,.si-reduced .si-figure.si-settling{transition:none;}
+.si-btn[aria-pressed="true"]{color:${v("ink")};border-color:${v("chromeLine")};}
 @keyframes si-ring{0%{transform:scale(1.05);opacity:0}2%{opacity:.9}100%{transform:scale(5.5);opacity:0}}
 .si-transport{position:absolute;left:16px;bottom:16px;display:flex;align-items:center;gap:2px;padding:5px 10px 5px 5px;border:1px solid ${v("chromeLine")};background:${v("chrome")};border-radius:4px;color:${v("control")};font-size:11px;}
 .si-tbtn{appearance:none;border:0;background:none;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;color:inherit;cursor:pointer;border-radius:3px;transition:color .15s ease-out;}

@@ -2,7 +2,7 @@ import { animate, useMotionValue, useMotionValueEvent, type AnimationPlaybackCon
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react"
 import { story as S } from "../../theme/tokens.ts"
 import type { Scene } from "../scene.ts"
-import { beatCaption, beatTileMin, beatTimes, storyState } from "../story/state.ts"
+import { beatCaption, beatTileMin, beatTimes, steppedSchedule, steppedStop, steppedTime, storyState } from "../story/state.ts"
 import type { Frame, Timeline } from "../story/types.ts"
 import { Diagram } from "./Diagram.tsx"
 
@@ -70,17 +70,55 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
     (x: number) => {
       stop()
       setBlur(0)
-      clock.set(Math.max(0, Math.min(duration, x)))
+      const v = Math.max(0, Math.min(duration, x))
+      // Reduced motion: quantised to the settled state of the step in effect.
+      clock.set(opts.reduced && tl ? steppedTime(tl, v) : v)
       setMode(x >= duration ? "ended" : "paused")
       setSettled(false)
     },
-    [clock, duration],
+    [clock, duration, opts.reduced, tl],
   )
   const play = useCallback(() => {
     if (!tl) return
     if (opts.reduced) {
-      // Reduced motion: toggle between the first and the final frame, no tween.
-      seek(clock.get() >= duration ? 0 : duration)
+      // Reduced motion ("Play steps"): jump to each step's settled state, hold for its
+      // reading time, advance. No pulses, tweens or draw-on in between.
+      stop()
+      setBlur(0)
+      setSettled(false)
+      const sched = steppedSchedule(tl)
+      const now = clock.get()
+      let k = now >= duration - 1e-3 ? 0 : Math.max(0, steppedStop(tl, now))
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let stopped = false
+      started.current = true
+      const show = () => {
+        if (stopped) return
+        const s0 = sched[k]
+        clock.set(s0.t)
+        if (k >= sched.length - 1) {
+          ctl.current = undefined
+          if (tl.loop) {
+            k = 0
+            timer = setTimeout(show, S.beats.read * 1000)
+            return
+          }
+          setMode("ended")
+          return
+        }
+        timer = setTimeout(() => {
+          k++
+          show()
+        }, s0.hold * 1000)
+      }
+      setMode("playing")
+      ctl.current = {
+        stop: () => {
+          stopped = true
+          clearTimeout(timer)
+        },
+      } as AnimationPlaybackControls
+      show()
       return
     }
     stop()
@@ -122,7 +160,12 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
     stop()
     setSettled(false)
     const t0 = clock.get()
-    if (opts.reduced || t0 <= 0.01) return play()
+    if (opts.reduced) {
+      // Restart from step 1, no tape rewind.
+      clock.set(0)
+      return play()
+    }
+    if (t0 <= 0.01) return play()
     // Tape rewind: hold, rewind on `tape`, a short empty beat, then play (STYLE.md §5).
     const { hold, duration: rd, empty } = S.rewind
     const total = hold + rd + empty
@@ -154,8 +197,14 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
     else play()
   }, [pause, play, replay])
 
-  const marks = useMemo(() => (tl ? [...tl.steps.map((s) => s.t0), duration] : []), [tl, duration])
-  const chapters = useMemo(() => (tl ? [0, ...tl.steps.filter((s) => s.stop).map((s) => s.t0), duration] : []), [tl, duration])
+  // Reduced motion steps between settled step states instead of step starts.
+  const marks = useMemo(() => (tl ? (opts.reduced ? steppedSchedule(tl).map((x) => x.t) : [...tl.steps.map((s) => s.t0), duration]) : []), [tl, duration, opts.reduced])
+  const chapters = useMemo(() => {
+    if (!tl) return []
+    if (!opts.reduced) return [0, ...tl.steps.filter((s) => s.stop).map((s) => s.t0), duration]
+    const sched = steppedSchedule(tl)
+    return [sched[0].t, ...tl.steps.flatMap((s, i) => (s.stop ? [sched[i].t] : [])), duration]
+  }, [tl, duration, opts.reduced])
   const step = useCallback(
     (dir: 1 | -1, useChapters = false) => {
       const list = useChapters && chapters.length > 2 ? chapters : marks
@@ -179,7 +228,9 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
       return
     }
     if (opts.reduced) {
-      seek(duration)
+      // Final frame with a static play affordance; autoplay is ignored.
+      clock.set(duration)
+      setMode("gate")
       return
     }
     if (opts.autoplay ?? tl.autoplay) {
@@ -201,7 +252,22 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
     setMode("gate")
     return undefined
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tl, opts.still, opts.t, opts.reduced, opts.autoplay])
+  }, [tl, opts.still, opts.t, opts.autoplay])
+
+  // Switching motion mode mid-playback continues from the current step in the new mode.
+  const firstReduced = useRef(true)
+  useEffect(() => {
+    if (firstReduced.current) {
+      firstReduced.current = false
+      return
+    }
+    if (!tl || opts.still) return
+    if (modeRef.current === "playing" || modeRef.current === "rewinding") {
+      if (opts.reduced) clock.set(steppedTime(tl, clock.get()))
+      playRef.current()
+    } else if (opts.reduced && modeRef.current === "paused") clock.set(steppedTime(tl, clock.get()))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opts.reduced])
 
   // Pause off-screen or in a hidden tab; resume only if it was playing.
   useEffect(() => {
@@ -243,10 +309,10 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
     return () => clearTimeout(id)
   }, [mode])
 
-  const frame = useMemo(() => storyState(scene, tl, t, { reduced: opts.reduced }), [scene, tl, t, opts.reduced])
-  const frameAt = useCallback((x: number) => storyState(scene, tl, x, { reduced: opts.reduced }), [scene, tl, opts.reduced])
+  const frame = useMemo(() => storyState(scene, tl, t, { reduced: opts.reduced, stepped: opts.reduced }), [scene, tl, t, opts.reduced])
+  const frameAt = useCallback((x: number) => storyState(scene, tl, x, { reduced: opts.reduced, stepped: opts.reduced }), [scene, tl, opts.reduced])
   if (!tl) return undefined
-  const dim = mode === "gate" ? S.gateDim : mode === "ended" && settled ? S.endedDim : 1
+  const dim = mode === "gate" ? (opts.reduced ? 1 : S.gateDim) : mode === "ended" && settled ? S.endedDim : 1
   return { t, frame, mode, dim, blur, reduced: opts.reduced, play, pause, toggle, seek, replay, step, ungate, frameAt }
 }
 
@@ -277,11 +343,11 @@ function ReplayIcon() {
 }
 
 /** The click-to-play gate (STYLE.md §6): dimmed t = 0 frame, centred play triangle, idle rings. */
-export function Gate({ onPlay }: { onPlay: () => void }): ReactElement {
+export function Gate({ onPlay, still = false }: { onPlay: () => void; still?: boolean }): ReactElement {
   return (
     <button
       type="button"
-      className="si-gate"
+      className={`si-gate${still ? " si-gate-still" : ""}`}
       aria-label="Play animation"
       onClick={(e) => {
         e.stopPropagation()
@@ -289,8 +355,12 @@ export function Gate({ onPlay }: { onPlay: () => void }): ReactElement {
       }}
     >
       <span className="si-gate-disc" />
-      <span className="si-gate-ring" />
-      <span className="si-gate-ring si-gate-ring-2" />
+      {still ? null : (
+        <>
+          <span className="si-gate-ring" />
+          <span className="si-gate-ring si-gate-ring-2" />
+        </>
+      )}
       <span className="si-gate-play">
         <svg viewBox="3 2 19 20" aria-hidden="true">
           <path d="M6 4 20 12 6 20Z" fill="currentColor" stroke="currentColor" strokeWidth="3" strokeLinejoin="round" />

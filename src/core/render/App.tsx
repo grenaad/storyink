@@ -67,7 +67,19 @@ export function parseHash(hash: string): HashParams {
   }
 }
 
-function Btn({ label, title, onClick, children }: { label: string; title: string; onClick: () => void; children?: ReactNode }) {
+/**
+ * Effective motion mode. Precedence: `#motion=` hash, then the stored viewer choice
+ * (`localStorage["storyink-motion"]`), then the OS `prefers-reduced-motion`.
+ */
+export function resolveMotion(o: { hash?: "full" | "reduced"; stored?: string | null; system: boolean }): "full" | "reduced" {
+  if (o.hash) return o.hash
+  if (o.stored === "full" || o.stored === "reduced") return o.stored
+  return o.system ? "reduced" : "full"
+}
+
+export const MOTION_KEY = "storyink-motion"
+
+function Btn({ label, title, onClick, children, pressed, still }: { label: string; title: string; onClick: () => void; children?: ReactNode; pressed?: boolean; still?: boolean }) {
   return (
     <m.button
       type="button"
@@ -75,8 +87,8 @@ function Btn({ label, title, onClick, children }: { label: string; title: string
       aria-label={label}
       title={title}
       onClick={onClick}
-      whileHover={M.hover}
-      whileTap={M.press}
+      {...(pressed !== undefined ? { "aria-pressed": pressed } : {})}
+      {...(still ? {} : { whileHover: M.hover, whileTap: M.press })}
       transition={M.spring}
     >
       {children ?? label}
@@ -140,11 +152,12 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
   const [theme, setTheme] = useState<ThemeName | undefined>(undefined)
   const [hydrated, setHydrated] = useState(false)
   const [sysReduced, setSysReduced] = useState(false)
+  const [storedMotion, setStoredMotion] = useState<string | null>(null)
   const [override, setOverride] = useState<Frame | undefined>(undefined)
   const [exportCurrent, setExportCurrent] = useState(false)
   const vb = scene.viewBox
   const tl = scene.timeline
-  const reduced = hash.motion === "reduced" || (hash.motion !== "full" && sysReduced)
+  const reduced = resolveMotion({ hash: hash.motion, stored: storedMotion, system: sysReduced }) === "reduced"
   const story = useStory(scene, tl, {
     ...(hash.t !== undefined ? { t: hash.t } : {}),
     ...(hash.autoplay !== undefined ? { autoplay: hash.autoplay } : {}),
@@ -205,6 +218,9 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
     const h = parseHash(location.hash)
     setHash(h)
     if (typeof matchMedia === "function") setSysReduced(matchMedia("(prefers-reduced-motion: reduce)").matches)
+    try {
+      setStoredMotion(localStorage.getItem(MOTION_KEY))
+    } catch {}
     setHydrated(true)
     let stored: ThemeName | undefined
     try {
@@ -242,8 +258,9 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
 
   const liveFrame = override ?? story?.frame
   useEffect(() => {
-    if (story && hooks?.onFrame) hooks.onFrame(story.frame, story.mode === "playing")
-  }, [story?.frame, story?.mode, hooks])
+    // Reduced motion: counters jump to exact values (no rolling reels).
+    if (story && hooks?.onFrame) hooks.onFrame(story.frame, story.mode === "playing" && !reduced)
+  }, [story?.frame, story?.mode, hooks, reduced])
 
   useEffect(() => {
     const onResize = () => fit(false)
@@ -297,6 +314,7 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
       } else if (st && ev.key === "ArrowRight") st.step(1, ev.shiftKey)
       else if (st && ev.key === "ArrowLeft") st.step(-1, ev.shiftKey)
       else if (st && (ev.key === "r" || ev.key === "R")) st.replay()
+      else if (st && (ev.key === "m" || ev.key === "M")) toggleMotionRef.current()
       else if (ev.key === "0") fit(true)
       else if (ev.key === "+" || ev.key === "=") zoomAt(1.25, undefined, undefined, true)
       else if (ev.key === "-" || ev.key === "_") zoomAt(0.8, undefined, undefined, true)
@@ -316,6 +334,23 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
       removeEventListener("keydown", key)
     }
   }, [fit, zoomAt, x, y])
+
+  const toggleMotion = () => {
+    const next = reduced ? "full" : "reduced"
+    setStoredMotion(next)
+    try {
+      localStorage.setItem(MOTION_KEY, next)
+    } catch {}
+    // The hash wins over the stored choice, so keep it in step with an explicit click.
+    if (hash.motion) {
+      const p = new URLSearchParams(location.hash.replace(/^#/, ""))
+      p.set("motion", next)
+      history.replaceState(null, "", `#${p.toString()}`)
+      setHash((h) => ({ ...h, motion: next }))
+    }
+  }
+  const toggleMotionRef = useRef(toggleMotion)
+  toggleMotionRef.current = toggleMotion
 
   const toggleTheme = () => {
     const next: ThemeName = (theme ?? systemTheme()) === "dark" ? "light" : "dark"
@@ -340,7 +375,7 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
 
   return (
     <LazyMotion features={domAnimation} strict>
-    <div className={`si-app${hash.chrome ? "" : " si-nochrome"}${hash.beats && tl ? " si-sheet-mode" : ""}`}>
+    <div className={`si-app${hash.chrome ? "" : " si-nochrome"}${reduced ? " si-reduced" : ""}${hash.beats && tl ? " si-sheet-mode" : ""}`}>
       <header className="si-head">
         <p className="si-kind">{TYPE_LABEL[scene.type]}</p>
         <h1 className="si-title">{scene.title}</h1>
@@ -373,7 +408,7 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
               <div className="si-counters" />
             </div>
           </m.div>
-          {story?.mode === "gate" ? <Gate onPlay={story.ungate} /> : null}
+          {story?.mode === "gate" ? <Gate onPlay={story.ungate} still={reduced} /> : null}
           {story && tl ? <Transport c={story} tl={tl} /> : null}
           <div className="si-tools" onPointerDown={(e) => e.stopPropagation()}>
             <Btn label="−" title="Zoom out (-)" onClick={() => zoomAt(0.8, undefined, undefined, true)} />
@@ -384,6 +419,18 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
               {resolved === "dark" ? <Sun /> : <Moon />}
             </Btn>
             <span className="si-sep" />
+            {tl ? (
+              <>
+                <Btn
+                  label={reduced ? "Motion: reduced" : "Motion: full"}
+                  title={reduced ? "Reduced motion: plays step by step. Click for full motion (M)" : "Full motion. Click to play step by step (M)"}
+                  pressed={reduced}
+                  still={reduced}
+                  onClick={toggleMotion}
+                />
+                <span className="si-sep" />
+              </>
+            ) : null}
             {tl ? (
               <Btn label={exportCurrent ? "Frame: now" : "Frame: end"} title="Export the final frame or the frame on screen" onClick={() => setExportCurrent((v) => !v)} />
             ) : null}
