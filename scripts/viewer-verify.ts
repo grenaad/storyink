@@ -3,7 +3,8 @@
  *  - live counter reels: never visible while their node is hidden (reel opacity ≤ node opacity),
  *    always inside their node's box; across full play from the gate, reduced → full mid-play,
  *    reload with the stored choice, resize and theme toggle;
- *  - reduced motion: stepped playback with no pulse in flight.
+ *  - OS prefers-reduced-motion with the author default (full): animated gate and real playback;
+ *  - #motion=reduced: stepped playback with no pulse in flight.
  * Usage: bun scripts/viewer-verify.ts
  */
 import fs from "node:fs"
@@ -43,7 +44,24 @@ await s.ev(`document.querySelector(".si-gate").click()`)
 await watch(s, "full play from the gate", 12000)
 s.close()
 s = await session(["--force-prefers-reduced-motion"])
+// OS reduced + author default "full": the animated gate, then real animation.
 await s.go(url)
+await s.ev(`localStorage.clear()`)
+await s.go(url)
+const gate = JSON.parse(await s.ev(`JSON.stringify({t: window.__storyink.state().t, rings: document.querySelectorAll(".si-gate-ring").length, label: document.querySelector("button[aria-pressed]")?.getAttribute("aria-label")})`))
+await s.ev(`document.querySelector(".si-gate").click()`)
+let flight = 0
+for (let i = 0; i < 80; i++) {
+  flight = Math.max(flight, Number(await s.ev(`document.querySelectorAll('.si-stage [data-si^="pulse:"]').length`)))
+  await Bun.sleep(40)
+}
+const okFull = gate.rings === 2 && gate.t === 0 && gate.label === "Motion: full" && flight > 0
+if (!okFull) fail++
+console.log(`${okFull ? "pass" : "FAIL"} OS reduced + default full: gate t=${gate.t} rings=${gate.rings} "${gate.label}", pulses in flight during play (max ${flight})`)
+// Explicit #motion=reduced: stepped playback.
+await s.go(url + "#motion=reduced")
+await s.ev("location.reload()")
+await Bun.sleep(1200)
 let pulses = 0
 await s.ev(`document.querySelector(".si-gate").click()`)
 for (let i = 0; i < 60; i++) {
@@ -54,7 +72,7 @@ if (pulses) fail++
 console.log(`${pulses ? "FAIL" : "pass"} reduced: stepped playback, ${pulses} pulse samples in flight over 3 s`)
 await s.ev(`document.querySelector('button[aria-pressed]').click()`)
 await watch(s, "reduced → full mid-play", 4000)
-await s.go(url)
+await s.go(url.replace(/#.*/, "") + "#")
 await s.ev(`document.querySelector(".si-gate").click()`)
 await watch(s, "reload (stored full), play", 3000)
 await s.send("Emulation.setDeviceMetricsOverride", { width: 1100, height: 800, deviceScaleFactor: 1, mobile: false })
