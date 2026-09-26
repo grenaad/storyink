@@ -16,7 +16,7 @@ export function createCounterOverlay(scene: Scene) {
   const ids = tl ? Object.keys(tl.counters) : []
   let mounted = false
   let live = false
-  const reels = new Map<string, { ctl: RollingNumberController; el: HTMLElement; target: number }>()
+  const reels = new Map<string, { ctl: RollingNumberController; el: HTMLElement; target: number; node: string }>()
 
   const mount = () => {
     if (mounted || !tl || !ids.length) return
@@ -33,8 +33,10 @@ export function createCounterOverlay(scene: Scene) {
       const c = tl.counters[id]
       const el = document.createElement("span")
       el.className = "si-counter-live"
-      el.style.left = `${b.x - vb.x}px`
-      el.style.top = `${b.y - vb.y + 1}px`
+      // getBBox is in the node group's local space: add the node's position.
+      const n = scene.nodes.find((x) => x.id === c.node)
+      el.style.left = `${(n?.x ?? 0) + b.x - vb.x}px`
+      el.style.top = `${(n?.y ?? 0) + b.y - vb.y + 1}px`
       el.style.display = "none"
       const pre = document.createElement("span")
       pre.textContent = c.prefix ?? ""
@@ -50,7 +52,7 @@ export function createCounterOverlay(scene: Scene) {
         duration: 500,
         pauseOffscreen: false,
       } as never)
-      reels.set(id, { ctl, el, target: c.start })
+      reels.set(id, { ctl, el, target: c.start, node: c.node })
     }
   }
 
@@ -76,6 +78,10 @@ export function createCounterOverlay(scene: Scene) {
       }
       if (!live) return
       for (const [id, r] of reels) {
+        // Follow the node's reveal (opacity and rise).
+        const v = frame.el[r.node]
+        r.el.style.opacity = v && v.o < 1 ? String(v.o) : ""
+        r.el.style.transform = v?.dy ? `translateY(${v.dy}px)` : ""
         const c = tl.counters[id]
         let target = c.start
         for (const e of c.events) if (frame.t >= e.t) target = e.to
