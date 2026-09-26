@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0
+
+- **Animated SVG (SMIL):** the story plays inside a plain `<img>`, so in GitHub READMEs and PR
+  comments (camo), docs and chat previews, where no script runs.
+  - `renderAnimatedSvg(spec, { theme, once, font, hold, reset, fps })` / `animatedSvg()` in
+    `storyink/core`; `writeAnimatedSvg()` and `pictureSnippet()` in `storyink/node`.
+  - CLI: `storyink render x.json --animated-svg x.svg [--theme light|dark|both] [--once] [--font system|embed]`;
+    `both` writes `.light.svg` + `.dark.svg` and prints the `<picture>` snippet. Specs without a
+    story use the auto story (with a warning).
+  - Plugin: `storyink_render` takes `animatedSvg: true | "both"`, `animatedSvgPath`, `once`, `font`.
+  - Built by sampling `storyState(t)` (the viewer's frame function) and compressing each track
+    to SMIL keyframes; one shared cycle (story, 3 s hold, 0.4 s reset) or `once` (freeze).
+    Base values are the final frame. Theme-pinned, no custom properties, deterministic.
+  - `bun run gallery:animated`, `bun run verify:smil` (frame parity PSNR, `<img>` playback, font).
+- `Frame` pulse trail segments carry `k`, `s0`, `s1`; captions carry their index `i`.
+- `screenshotPage()` in `storyink/node`: screenshot any local page.
+
 ## 0.2.1
 
 - **Fix:** `storyink_snapshot` no longer inlines the full-resolution contact sheet. Tall beat

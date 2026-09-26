@@ -6,6 +6,19 @@ Mermaid) into **one offline HTML file** (a React + Motion viewer over server-ren
 
 One package, four ways to use it: library, CLI, OpenCode plugin, and a skill for other agents.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grenaad/storyink/main/docs/gallery/checkout.architecture.animated.dark.svg">
+  <img alt="Checkout platform, animated story" src="https://raw.githubusercontent.com/grenaad/storyink/main/docs/gallery/checkout.architecture.animated.light.svg">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grenaad/storyink/main/docs/gallery/oauth.sequence.animated.dark.svg">
+  <img alt="OAuth sequence, animated story" src="https://raw.githubusercontent.com/grenaad/storyink/main/docs/gallery/oauth.sequence.animated.light.svg">
+</picture>
+
+*Animated SVGs (SMIL, no script): they play inside a plain `<img>`, so in a README or a PR
+comment too. See [Animated SVG](#animated-svg-readmes-and-prs).*
+
 ```sh
 npx storyink render examples/checkout.architecture.json -o checkout.html --svg checkout.svg
 ```
@@ -35,6 +48,7 @@ both and has the OpenCode plugin as its default export. Runs on Node ≥ 20 and 
 
 ```
 storyink render <in.json|in.mmd|-> [-o out.html] [--svg out.svg] [--theme light|dark] [--story auto]
+                [--animated-svg out.svg [--theme light|dark|both] [--once] [--font system|embed]]
 storyink mermaid <in.mmd> [-o out.json]
 storyink validate <in> [--json]
 storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats]|--no-sheet] [--at 0.5,1.2,end] [--scale 2] [-o dir] [--json]
@@ -118,10 +132,41 @@ receipt gates check that the end frame and the reduced-motion page match the sta
 
 ![Checkout beats](docs/gallery/checkout.architecture.beats.light.png)
 
+## Animated SVG (READMEs and PRs)
+
+GitHub shows images in READMEs and PR comments as a plain `<img>` through its camo proxy, so no
+script runs and nothing outside the file loads. `--animated-svg` compiles the story into **SMIL**
+inside one self-contained SVG that plays there:
+
+```sh
+storyink render examples/checkout.architecture.json --animated-svg docs/checkout.svg --theme both
+# wrote docs/checkout.light.svg, docs/checkout.dark.svg and prints:
+```
+
+```html
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/checkout.dark.svg">
+  <img alt="Checkout platform" src="docs/checkout.light.svg">
+</picture>
+```
+
+- An SVG image doesn't follow the page theme, so each file is **pinned** to one theme; the
+  `<picture>` picks one. `--theme light|dark` writes a single file.
+- It loops: story, a 3 s hold on the final frame, a 0.4 s reset. `--once` plays once and freezes.
+- The attributes' base values are the final frame, so viewers without SMIL show the static diagram.
+- Fonts: `--font system` (default) uses the system mono stack; `--font embed` embeds Commit Mono
+  (+~127 KB) for the exact look. See the size table in [docs/spec.md](docs/spec.md#animated-svg).
+- No story in the spec? The auto story is used (with a warning).
+- Library: `renderAnimatedSvg(spec, { theme, once, font })` from `storyink/core`; plugin:
+  `storyink_render` with `animatedSvg: true | "both"`, `once`, `font`.
+- GitHub's image proxy caches by URL: when a diagram changes, give it a new file name (or URL).
+
 ## Gallery
 
 `bun run gallery` renders every example and Mermaid sample and writes one light and one dark PNG per
-example to `docs/gallery/`.
+example to `docs/gallery/`. `bun run gallery:animated` writes the animated SVGs of the story
+examples (`*.animated.light.svg` / `*.animated.dark.svg`); `bun run verify:smil` checks them in
+headless Chrome (frame parity with the viewer's frames, `<img>` playback, embedded font).
 
 | | |
 | --- | --- |

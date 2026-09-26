@@ -104,6 +104,20 @@ Loop: render, then `storyink_snapshot` with `sheet: "beats"` (CLI `--sheet beats
 
 Max 3 passes. Stills can't show smoothness or real-time pacing: say so when reporting.
 
+**Animated SVG** for READMEs, PR comments and docs, where only an `<img>` is allowed (no script):
+`storyink_render` with `animatedSvg: "both"` (CLI `--animated-svg x.svg --theme both`) writes
+`x.light.svg` + `x.dark.svg` (SMIL, loops; `once: true` plays once). Paste the returned snippet:
+
+```html
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="x.dark.svg">
+  <img alt="…" src="x.light.svg">
+</picture>
+```
+
+Default font is the system mono (small); `font: "embed"` for the exact look (+~127 KB). No story
+in the spec → auto story. On GitHub, a changed diagram needs a new file name (camo caches by URL).
+
 ## Images and context
 
 - `storyink_snapshot` returns **one compact preview** (JPEG, ≤ 1024 px, a few hundred KB at most)

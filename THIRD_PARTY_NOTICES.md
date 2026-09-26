@@ -48,3 +48,10 @@ site are included. Serif headings use system fonts ("Iowan Old Style", Charter, 
 
 storyink parses a subset of Mermaid syntax with its own hand-written parsers; no Mermaid
 or merman code is included.
+
+## PR Lens (patterns only)
+
+The animated SVG export follows the constraints and SMIL patterns of PR Lens's GitHub-safe SVG
+renderer (<https://github.com/coldteadotai/pr-lens>, MIT License, Copyright (c) 2026 Coldtea AI):
+self-contained files, no script or custom properties, animation as SMIL so it plays inside an
+`<img>` behind GitHub's image proxy. No PR Lens code is included.

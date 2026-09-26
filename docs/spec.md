@@ -146,3 +146,51 @@ activations, frames and notes following their messages.
 `#static=1` (runtime off, final frame), `#sheet=beats` (one tile per step + final frame).
 `window.__storyink = { ready, duration, steps: [{ id, label, t0, t1, stop? }], setTime(t), play(), pause(), replay(), state() }`.
 Keys: space play/pause, ←/→ previous/next step (Shift: chapter), R replay.
+
+## Animated SVG
+
+`storyink render x.json --animated-svg x.svg [--theme light|dark|both] [--once] [--font system|embed]`,
+`renderAnimatedSvg(spec, { theme, once, font, hold, reset, fps })` (`storyink/core`), or
+`storyink_render` with `animatedSvg: true | "both"`. One self-contained SVG per theme whose story
+plays with **SMIL**, so it animates inside a plain `<img>`: GitHub READMEs, PR comments (camo),
+docs sites, chat previews.
+
+How it's built: the story is sampled at 60 fps through the same `storyState(t)` the HTML viewer
+uses (no second animation model). Each element attribute becomes a track (opacity, rise
+`translate`, `stroke-dashoffset`, activation `height`, pulse `cx`/`cy`/`r`, trail dash window,
+glow radius and opacity, label flash `fill`), compressed with Douglas–Peucker to the points linear
+interpolation needs (tolerance 0.01 opacity, 0.3 px), and written as `<animate>` /
+`<animateTransform>` with `keyTimes`/`values`. Every animation shares one `dur` and `begin="0s"`.
+Captions are `<text>` lines in a header under the title (opacity × word reveal). Counters are one
+`<text>` per value shown, switched with discrete `visibility` (SMIL can't change text).
+
+- **Loop** (default): story → hold (final frame for 3 s after the last event) → 0.4 s tween back to
+  the first frame → repeat. `once`: plays once, `fill="freeze"` on the final frame.
+- **Fallback:** base attribute values are the final frame; no SMIL = the static diagram.
+- **Self-contained:** no script, `foreignObject`, external `href`/`url()`, CSS custom properties,
+  `@import` or media queries; colours are literal (theme-pinned). The output is deterministic.
+- **Fonts:** `system` (default) uses `ui-monospace, SF Mono, Menlo, monospace` (Commit Mono if
+  installed); `embed` adds Commit Mono as data-URI `@font-face` (+~127 KB), which Chrome renders
+  in `<img>` mode. Default is `system`: files are 2–2.5× smaller, and the fallbacks share Commit
+  Mono's 0.6 em advance, so the layout holds; use `embed` when the exact look matters.
+
+| example (story)          | light, system | light, embed | dark, system | dark, embed |
+| ------------------------ | ------------- | ------------ | ------------ | ----------- |
+| checkout.architecture    | 84 KB         | 209 KB       | 84 KB        | 208 KB      |
+| oauth.sequence           | 113 KB        | 237 KB       | 113 KB       | 237 KB      |
+| order.state (auto story) | 141 KB        | 266 KB       | 141 KB       | 265 KB      |
+
+**Limits:** no transport (play/pause, scrubbing), no click-to-play gate, no tape-rewind blur; it
+always loops (or plays once) from load. No reduced-motion variant: SVG-as-image can't see the page,
+and Chrome plays SMIL in `<img>` even with `prefers-reduced-motion: reduce`; use the static SVG
+where motion must not start by itself. Captions show whole-line fades (no per-word stagger); counters
+switch values at 30 fps rather than rolling digits, and the counter value doesn't flash. The theme
+never follows the viewer: use the `<picture>` snippet. GitHub's camo caches by URL: rename the file
+when the diagram changes.
+
+```html
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="x.dark.svg">
+  <img alt="…" src="x.light.svg">
+</picture>
+```
