@@ -47,7 +47,12 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
   const err = (path: string, message: string, hint?: string) => diagnostics.push({ severity: "error", path, message, hint })
   const warn = (path: string, message: string, hint?: string) => diagnostics.push({ severity: "warning", path, message, hint })
   if (spec.story === undefined) return { diagnostics }
-  const story: Story = spec.story === "auto" ? autoStory(scene, spec) : spec.story
+  const story: Story & { steps: StoryStep[] } =
+    spec.story === "auto"
+      ? (autoStory(scene, spec) as Story & { steps: StoryStep[] })
+      : spec.story.steps === "auto"
+        ? { ...spec.story, steps: autoStory(scene, spec).steps as StoryStep[] }
+        : (spec.story as Story & { steps: StoryStep[] })
   const seq = scene.type === "sequence"
 
   const nodeIds = new Set(scene.nodes.map((n) => n.id))
@@ -287,6 +292,7 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
     duration: r3(duration),
     lastEvent: r3(lastEvent),
     autoplay: story.autoplay === true,
+    motion: story.motion ?? "full",
     loop: story.end === "loop",
     steps: steps.map((s) => ({ ...s, t0: r3(s.t0), t1: r3(s.t1) })),
     appear,

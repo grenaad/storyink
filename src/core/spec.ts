@@ -92,8 +92,18 @@ export interface Story {
   autoplay?: boolean
   /** "hold" (default) the final frame, or "loop". */
   end?: "hold" | "loop"
-  steps: StoryStep[]
+  /**
+   * Playback motion (default "full"): "full" always animates, "reduced" always plays step by
+   * step, "system" follows the reader's `prefers-reduced-motion`. The reader's toolbar choice
+   * and `#motion=` still win.
+   */
+  motion?: StoryMotion
+  /** Steps, or "auto" to derive them (like `"story": "auto"`, with the options above). */
+  steps: StoryStep[] | "auto"
 }
+
+export type StoryMotion = "full" | "reduced" | "system"
+export const STORY_MOTIONS = ["full", "reduced", "system"] as const
 
 export interface GraphGroup {
   id: string

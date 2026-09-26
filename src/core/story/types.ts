@@ -52,6 +52,8 @@ export interface Timeline {
   duration: number
   lastEvent: number
   autoplay: boolean
+  /** Author's playback motion ("full" default; "system" follows prefers-reduced-motion). */
+  motion: "full" | "reduced" | "system"
   loop: boolean
   steps: TimelineStep[]
   /** Element id → time it is revealed. Absent = visible from t = 0. */

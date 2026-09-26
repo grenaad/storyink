@@ -196,11 +196,17 @@ function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefin
     c.error("story", `"story" must be an object or "auto"`, `{ "steps": [ { "reveal": ["api"] } ] } or "auto"`)
     return undefined
   }
-  unknownKeys(c, raw, new Set(["autoplay", "end", "steps"]), "story")
+  unknownKeys(c, raw, new Set(["autoplay", "end", "motion", "steps"]), "story")
+  const motion = oneOf(c, raw.motion, ["full", "reduced", "system"] as const, "story.motion", "story motion")
+  const opts = { ...(raw.autoplay === true ? { autoplay: true } : {}), ...(motion ? { motion } : {}) }
   if (raw.autoplay !== undefined && typeof raw.autoplay !== "boolean") c.error("story.autoplay", `"autoplay" must be true or false`)
   const end = oneOf(c, raw.end, ["hold", "loop"] as const, "story.end", "story end")
+  if (raw.steps === "auto") {
+    const e0 = oneOf(c, raw.end, ["hold", "loop"] as const, "story.end", "story end")
+    return { ...opts, ...(e0 ? { end: e0 } : {}), steps: "auto" }
+  }
   if (!Array.isArray(raw.steps)) {
-    c.error("story.steps", `"steps" must be an array`)
+    c.error("story.steps", `"steps" must be an array or "auto"`)
     return undefined
   }
   const steps: StoryStep[] = []
@@ -230,7 +236,7 @@ function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefin
     }
     steps.push(s0 as StoryStep)
   })
-  return { ...(raw.autoplay === true ? { autoplay: true } : {}), ...(end ? { end } : {}), steps }
+  return { ...opts, ...(end ? { end } : {}), steps }
 }
 
 function validateGraph(

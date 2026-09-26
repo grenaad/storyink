@@ -54,6 +54,14 @@
             "autoplay": {
               "type": "boolean"
             },
+            "motion": {
+              "enum": [
+                "full",
+                "reduced",
+                "system"
+              ],
+              "description": "Playback motion (default full). full: always animate; reduced: always step through settled steps; system: follow prefers-reduced-motion. The reader's toolbar choice and #motion= win."
+            },
             "end": {
               "enum": [
                 "hold",
@@ -61,181 +69,189 @@
               ]
             },
             "steps": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "id": {
-                    "type": "string"
-                  },
-                  "at": {
-                    "oneOf": [
-                      {
-                        "type": "number",
-                        "minimum": 0
-                      },
-                      {
-                        "type": "string",
-                        "pattern": "^\\+\\s*\\d+(\\.\\d+)?$"
-                      }
-                    ]
-                  },
-                  "reveal": {
-                    "oneOf": [
-                      {
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
                         "type": "string"
                       },
-                      {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      }
-                    ]
-                  },
-                  "pulse": {
-                    "oneOf": [
-                      {
+                      "at": {
+                        "oneOf": [
+                          {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^\\+\\s*\\d+(\\.\\d+)?$"
+                          }
+                        ]
+                      },
+                      "reveal": {
                         "oneOf": [
                           {
                             "type": "string"
                           },
                           {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "properties": {
-                              "edge": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        ]
+                      },
+                      "pulse": {
+                        "oneOf": [
+                          {
+                            "oneOf": [
+                              {
                                 "type": "string"
                               },
-                              "route": {
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                  "edge": {
+                                    "type": "string"
+                                  },
+                                  "route": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "minItems": 1
+                                  },
+                                  "duration": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "type": "array",
+                            "items": {
+                              "oneOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "edge": {
+                                      "type": "string"
+                                    },
+                                    "route": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      },
+                                      "minItems": 1
+                                    },
+                                    "duration": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      },
+                      "highlight": {
+                        "oneOf": [
+                          {
+                            "oneOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
                                 "type": "array",
                                 "items": {
                                   "type": "string"
-                                },
-                                "minItems": 1
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "ids"
+                            ],
+                            "properties": {
+                              "ids": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
                               },
-                              "duration": {
-                                "type": "number",
-                                "exclusiveMinimum": 0
+                              "for": {
+                                "type": "number"
                               }
                             }
                           }
                         ]
                       },
-                      {
-                        "type": "array",
-                        "items": {
-                          "oneOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
+                      "caption": {
+                        "type": "string"
+                      },
+                      "counter": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "id",
+                              "to"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "to": {
+                                "type": "number"
+                              }
+                            }
+                          },
+                          {
+                            "type": "array",
+                            "items": {
                               "type": "object",
+                              "required": [
+                                "id",
+                                "to"
+                              ],
                               "additionalProperties": false,
                               "properties": {
-                                "edge": {
+                                "id": {
                                   "type": "string"
                                 },
-                                "route": {
-                                  "type": "array",
-                                  "items": {
-                                    "type": "string"
-                                  },
-                                  "minItems": 1
-                                },
-                                "duration": {
-                                  "type": "number",
-                                  "exclusiveMinimum": 0
+                                "to": {
+                                  "type": "number"
                                 }
                               }
                             }
-                          ]
-                        }
-                      }
-                    ]
-                  },
-                  "highlight": {
-                    "oneOf": [
-                      {
-                        "oneOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
                           }
                         ]
                       },
-                      {
-                        "type": "object",
-                        "required": [
-                          "ids"
-                        ],
-                        "properties": {
-                          "ids": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          },
-                          "for": {
-                            "type": "number"
-                          }
-                        }
+                      "stop": {
+                        "type": "string"
                       }
-                    ]
-                  },
-                  "caption": {
-                    "type": "string"
-                  },
-                  "counter": {
-                    "oneOf": [
-                      {
-                        "type": "object",
-                        "required": [
-                          "id",
-                          "to"
-                        ],
-                        "additionalProperties": false,
-                        "properties": {
-                          "id": {
-                            "type": "string"
-                          },
-                          "to": {
-                            "type": "number"
-                          }
-                        }
-                      },
-                      {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "required": [
-                            "id",
-                            "to"
-                          ],
-                          "additionalProperties": false,
-                          "properties": {
-                            "id": {
-                              "type": "string"
-                            },
-                            "to": {
-                              "type": "number"
-                            }
-                          }
-                        }
-                      }
-                    ]
-                  },
-                  "stop": {
-                    "type": "string"
+                    }
                   }
+                },
+                {
+                  "const": "auto",
+                  "description": "Derive the steps (like \"story\": \"auto\")"
                 }
-              }
+              ]
             }
           }
         }

@@ -322,7 +322,7 @@ function layoutLevel(members: Member[], edges: LevelEdge[], dir: "TB" | "LR"): L
 /** Counter slot sizing: the widest value the story will show. */
 function counterSlot(spec: GraphSpec, c: NonNullable<GraphSpec["nodes"][number]["counter"]>) {
   const values = [c.value ?? 0]
-  if (spec.story && spec.story !== "auto")
+  if (spec.story && spec.story !== "auto" && spec.story.steps !== "auto")
     for (const st of spec.story.steps) for (const x of Array.isArray(st.counter) ? st.counter : st.counter ? [st.counter] : []) if (x.id === c.id && typeof x.to === "number") values.push(x.to)
   const dec = Math.max(...values.map((v) => (Number.isInteger(v) ? 0 : Math.min(3, String(v).split(".")[1]?.length ?? 0))))
   const fmt = (v: number) => `${c.prefix ?? ""}${v.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec })}${c.suffix ?? ""}`
