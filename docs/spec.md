@@ -104,7 +104,7 @@ when they have no outgoing edges. Unknown lines produce warnings, never crashes.
 ## Storyboard (`story`, opt-in)
 
 A spec may carry `"story": { ... }` or `"story": "auto"`. The HTML then plays the diagram as
-a sequence of beats; the SVG, the no-JS page, exports (by default), `#t=end`, reduced motion and
+a sequence of beats; the SVG, the no-JS page, exports (by default), `#t=end`, reduced motion on load and
 print all show the **final frame, which is exactly the static diagram**.
 
 ```jsonc
@@ -141,6 +141,24 @@ elapses, whichever is last. After the last event the story holds 1.5 s. Glows ar
 sources, then pulse breadth-first waves and reveal what they reach (edges into a group enter its
 entry states, notes appear with their target); sequences pulse every message in order, with
 activations, frames and notes following their messages.
+
+### Reduced motion: "Play steps"
+
+When motion is reduced, the viewer doesn't animate; it **steps**. The page loads on the final frame
+with a static play button (no idle rings; `autoplay` is ignored). Play shows each step's
+**settled** state at once (reveals shown, its pulses landed and wires drawn, counters at their new
+value, the caption whole), holds it for its reading time (the caption's read time, otherwise
+1.5 s), then advances, and ends on the final frame. There are no pulses in flight, trails, rings,
+glows, flashes or tweens. Pause, ←/→ (Shift: chapters) and the scrubber move between settled steps
+(`#t=` is quantised to the step in effect); R restarts from step 1 without the tape rewind.
+Core: `steppedSchedule(timeline)`, `steppedTime(timeline, t)` and
+`storyState(scene, timeline, t, { stepped: true })`.
+
+Motion mode precedence: `#motion=full|reduced` > the viewer's **Motion** toolbar toggle (saved in
+`localStorage["storyink-motion"]`, shortcut `M`) > the OS `prefers-reduced-motion`. Switching
+mid-playback continues from the current step in the new mode. `storyink snapshot --motion reduced
+--at …` captures stepped frames; the `reduced=stepped` gate checks that reduced frames mid-story
+show no pulse in flight.
 
 **Page contract:** `#t=<seconds|end>` seeks (paused), `#autoplay=0|1`, `#motion=full|reduced`,
 `#static=1` (runtime off, final frame), `#sheet=beats` (one tile per step + final frame).

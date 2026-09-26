@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.1
+
+- **Fix: Play did nothing under reduced motion.** With Reduce Motion on (OS or `#motion=reduced`),
+  Play now walks the story step by step ("Play steps"): each step's settled state at once (reveals,
+  landed pulses, counters, the whole caption), held for its reading time (caption read time or
+  1.5 s), then the next, ending on the final frame. No pulses, trails, glows or tweens. Pause, ←/→,
+  Shift+←/→, R (restart from step 1, no rewind) and the scrubber work on settled steps. The page
+  loads on the final frame with a static play button; `autoplay` is ignored.
+- Viewer toolbar: **Motion: full / reduced** toggle (`aria-pressed`, shortcut `M`), saved in
+  `localStorage`; `#motion=` still wins. Switching mid-playback continues from the current step.
+- Core: `steppedSchedule`, `steppedTime`, `steppedIndex`, `steppedStop`, `STEP_BEAT` and
+  `storyState(…, { stepped: true })`.
+- Snapshot: `--motion reduced` (tool `motion`) captures stepped `at` frames; new gate `reduced=stepped`.
+- Fix: live counter reels were placed at the node-local position (top-left of the diagram) and
+  shown before their node was revealed; they now sit on their node and follow its reveal.
+
 ## 0.3.0
 
 - **Animated SVG (SMIL):** the story plays inside a plain `<img>`, so in GitHub READMEs and PR

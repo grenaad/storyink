@@ -100,7 +100,9 @@ Loop: render, then `storyink_snapshot` with `sheet: "beats"` (CLI `--sheet beats
 - [ ] nothing appears before its cause
 - [ ] each beat changes one visible thing
 - [ ] no half-drawn tile once a step has settled
-- [ ] the last frame is the static diagram (gates `end=static`, `reduced=static` pass)
+- [ ] the last frame is the static diagram (gates `end=static`, `reduced=static`, `reduced=stepped` pass)
+- Reduced-motion viewers get stepped playback (settled steps, no motion); check with
+  `motion: "reduced"` + `at` frames if the steps must read well on their own.
 
 Max 3 passes. Stills can't show smoothness or real-time pacing: say so when reporting.
 
