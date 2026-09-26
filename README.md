@@ -48,11 +48,12 @@ both and has the OpenCode plugin as its default export. Runs on Node ≥ 20 and 
 
 ```
 storyink render <in.json|in.mmd|-> [-o out.html] [--svg out.svg] [--theme light|dark] [--story auto]
+                [--motion full|reduced|system] [--camera follow|fit]
                 [--animated-svg out.svg [--theme light|dark|both] [--once] [--font system|embed]]
 storyink mermaid <in.mmd> [-o out.json]
 storyink validate <in> [--json]
 storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats]|--no-sheet] [--at 0.5,1.2,end] [--scale 2] [-o dir] [--json]
-                  [--preview out.jpg [--preview-size 1024]] [--motion reduced]
+                  [--preview out.jpg [--preview-size 1024]] [--motion reduced] [--camera follow]
 storyink skill
 ```
 
@@ -131,6 +132,13 @@ for auto stories. Readers switch with the toolbar's **Motion** toggle (`M`, reme
 `#motion=full|reduced` overrides everything. In reduced mode Play walks the story step by step:
 each step's settled state shown at once and held for its reading time, with no travelling pulses
 or tweens, and the page opens on the final frame.
+
+The camera **follows the story** while it plays. When the whole diagram would render its labels
+too small, Play zooms to a readable scale and pans from step to step, moving only when the active
+step leaves the middle 80 % of the view, then eases back to fit at the end. Your own zoom is kept
+and a drag pauses following until the next step that is out of view. Toggle it with **Follow**
+(`F`, remembered), `#camera=fit`, or `"story": { "camera": "fit" }` / `--camera fit`.
+`storyink snapshot --camera follow --at …` captures the followed view.
 
 The final frame is always the static diagram. Every frame is a pure function of time
 (`storyState(scene, timeline, t)`), so `#t=2.5` seeks exactly and

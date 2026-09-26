@@ -175,10 +175,51 @@ mid-playback continues from the current step in the new mode. `storyink snapshot
 --at …` captures stepped frames; the `reduced=stepped` gate checks that reduced frames mid-story
 show no pulse in flight.
 
+### Follow camera (`story.camera`)
+
+Large diagrams fit the window at a scale where the 11 px labels are unreadable. While the story
+plays, the viewer's camera **follows** it (`story.camera: "follow"`, the default; `"fit"` keeps
+the whole diagram in view):
+- **Focus per step.** `stepFocus(scene, timeline, i)` (core) is the padded (24 px) bounding box of
+  everything step i animates: reveals (including groups, activations and notes revealed with
+  them), pulse routes, faded-in wires, highlights and arrival glows, counter nodes.
+- **On Play.** If fit renders labels below 10 px, the camera zooms to the **readable scale**
+  (labels ≈ 12.4 px on screen: 12.5/11 snapped down to a 1/64 step, capped at 2×) on the current
+  step's focus. If fit is readable it stays at fit and only pans when needed.
+- **While playing** it keeps the step's focus inside a **dead zone**, the inner 80 % of the stage
+  (above the transport bar), moving only when the focus leaves it. A move centres the focus with
+  a bounce-free spring (`visualDuration` 0.75 s), keeps the zoom and never pans past the
+  diagram's edge (24 px margin). A focus larger than the dead zone zooms out just enough; the next
+  smaller focus zooms back.
+- **Reader input.** A manual zoom (wheel, −/+, Fit) becomes the follow scale: follow then only
+  pans. A drag during playback suspends follow for the current step; it resumes on the next step
+  whose focus is out of view.
+- **The end.** Once every event has settled (final hold, ended) it eases back to fit.
+- **Reduced motion** (stepped playback): the camera jumps, no easing.
+- **Seeking** with the scrubber or ←/→ moves the camera to that step (animated in full motion,
+  jumped in reduced). `#t=` loads and `setTime()` don't move it.
+- **Follow toggle** in the toolbar (`aria-pressed`, shortcut `F`), saved in
+  `localStorage["storyink-follow"]` (`on`/`off`). Precedence: `#camera=` > the toggle >
+  `story.camera`. Set it on auto stories with `{ "steps": "auto", "camera": "fit" }`,
+  `storyink render --camera fit` or tool `storyink_render` `camera`.
+
+Determinism: the followed view is a pure function of (t, stage size, base scale):
+`cameraAt(scene, timeline, t, viewport, k?)` plays the dead-zone moves forward from fit through
+steps 0…i (the same moves the live viewer makes when nobody touches it). `#camera=follow&t=…`
+places that camera on load; `storyink snapshot --camera follow --at …` (tool `camera`) captures it
+in a 16:9 stage (`--width`, default 1280×720) with a `follow-deterministic` gate. Everything else
+(snapshots without `--camera`, beat sheets, `#t=` alone, gates) stays at fit. Other core helpers:
+`fitCamera`, `readableScale`, `followStep`, `inView`, `stepAt`, `CAMERA` (parameters). The
+animated SVG (SMIL) has no follow camera.
+
 **Page contract:** `#t=<seconds|end>` seeks (paused), `#autoplay=0|1`, `#motion=full|reduced`,
+`#camera=follow|fit` (with `#t=`, `follow` shows the followed view),
 `#static=1` (runtime off, final frame), `#sheet=beats` (one tile per step + final frame).
-`window.__storyink = { ready, duration, steps: [{ id, label, t0, t1, stop? }], setTime(t), play(), pause(), replay(), state() }`.
-Keys: space play/pause, ←/→ previous/next step (Shift: chapter), R replay.
+`window.__storyink = { ready, duration, steps: [{ id, label, t0, t1, stop? }], setTime(t), play(), pause(), replay(), state(), camera() }`;
+`camera()` returns `{ mode, follow, k, x, y, goal, step, engaged, suspended, userK, viewport }`
+(a diagram point p is drawn at `x + (p.x − viewBox.x)·k`).
+Keys: space play/pause, ←/→ previous/next step (Shift: chapter), R replay, M motion, F follow,
+0 fit, +/− zoom.
 
 ## Animated SVG
 

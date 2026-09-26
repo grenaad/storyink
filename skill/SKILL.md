@@ -105,6 +105,9 @@ Loop: render, then `storyink_snapshot` with `sheet: "beats"` (CLI `--sheet beats
   `story` (or `motion` on `storyink_render`) to honour it, `"reduced"` to always step.
 - Reduced-motion viewers get stepped playback (settled steps, no motion); check with
   `motion: "reduced"` + `at` frames if the steps must read well on their own.
+- On large diagrams the viewer's camera follows the story (readable zoom, pans step to step, fit
+  at the end). To see what a reader sees mid-story, snapshot with `camera: "follow"` + `at`;
+  `"camera": "fit"` in `story` (or `camera` on `storyink_render`) turns it off.
 
 Max 3 passes. Stills can't show smoothness or real-time pacing: say so when reporting.
 

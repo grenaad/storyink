@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.2
+
+- **Fix: clicking the transport's play/pause did nothing** (space worked). The stage's native
+  `pointerdown` listener, which starts a pan, ran before React's root listener, so the controls'
+  React `stopPropagation` came too late: the stage captured the pointer and the button's `click`
+  never fired. Pans now start only on the diagram surface (not on buttons, the scrubber, the
+  toolbar, the transport, the gate or `[data-no-pan]`) and capture the pointer only after 3 px of
+  movement, so a still click on the surface stays a click. Quick repeated −/+ clicks now compound.
+- **Follow camera.** While a story plays on a large diagram, the viewer zooms to a readable scale
+  (labels ≈ 12.4 px, when fit would render them below 10 px) and pans to each step, moving only
+  when the step's focus leaves the inner 80 % of the view (bounce-free spring, 0.75 s), then eases
+  back to fit at the end. Manual zoom is kept (follow pans); a drag suspends follow until the next
+  out-of-view step; reduced motion jumps; scrubbing and ←/→ move the camera too.
+  - Toolbar **Follow** toggle (`aria-pressed`, `F`), saved in `localStorage["storyink-follow"]`.
+  - `story.camera: "follow" | "fit"` (default follow), `render --camera`, tool `storyink_render`
+    `camera`; `#camera=follow|fit`; `window.__storyink.camera()`.
+  - Core: `stepFocus`, `cameraAt` (pure: t + stage + scale → camera), `followStep`,
+    `readableScale`, `fitCamera`, `inView`, `stepAt`, `CAMERA`.
+  - `storyink snapshot --camera follow --at …` (tool `camera`) captures the followed view in a
+    16:9 stage, with a `follow-deterministic` gate. Default snapshots and beat sheets stay at fit.
+- `bun run verify:viewer` drives every control with real mouse input (CDP
+  `Input.dispatchMouseEvent`) in full and reduced motion, and checks the follow camera on a
+  25-node diagram (readable zoom, pans, drag suspend/resume, end at fit, toggle persistence,
+  reduced jumps).
+- Not in the animated SVG (SMIL): a follow camera there would need an animated `viewBox`; a
+  possible follow-up.
+
 ## 0.3.1
 
 - **Fix: Play did nothing under reduced motion.** With Reduce Motion on (OS or `#motion=reduced`),
