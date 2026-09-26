@@ -370,3 +370,33 @@ export function steppedTime(tl: Timeline, t: number): number {
   if (j < 0) return 0
   return steppedSchedule(tl)[j].t
 }
+
+/** Animated step moves (→ / ←): backward speed (story seconds per second) and the reverse ease (s). */
+export const STEP_MOVE = { back: 2, ease: 0.12, minSpeed: 0.3 } as const
+
+/** The next boundary strictly past `from` in direction `dir` (0 and `duration` are the ends). */
+export function stepBoundary(list: number[], from: number, dir: 1 | -1, duration: number): number {
+  return dir > 0 ? (list.find((x) => x > from + 0.02) ?? duration) : ([...list].reverse().find((x) => x < from - 0.02) ?? 0)
+}
+
+/**
+ * Target of an animated step move. A press in the direction of a running move extends it to the
+ * following boundary; otherwise (no move, or the opposite direction) it heads to the boundary
+ * adjacent to `now`.
+ */
+export function stepMoveTarget(list: number[], now: number, dir: 1 | -1, duration: number, current?: { dir: 1 | -1; target: number }): number {
+  if (current && current.dir === dir) return stepBoundary(list, current.target, dir, duration)
+  return stepBoundary(list, now, dir, duration)
+}
+
+/**
+ * Speed of a move at a moment: forward plays at 1×; backward at `STEP_MOVE.back`× with a short
+ * bounce-free ease in and out (never below `minSpeed` of full so it always arrives).
+ */
+export function stepMoveSpeed(dir: 1 | -1, elapsed: number, remaining: number): number {
+  if (dir > 0) return 1
+  const v = STEP_MOVE.back
+  const e = STEP_MOVE.ease
+  const k = Math.min(1, elapsed / e, remaining / (v * e))
+  return v * Math.max(STEP_MOVE.minSpeed, k)
+}

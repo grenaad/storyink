@@ -318,7 +318,13 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
     w.__storyink.play = () => storyRef.current?.play()
     w.__storyink.pause = () => storyRef.current?.pause()
     w.__storyink.replay = () => storyRef.current?.replay()
-    w.__storyink.state = () => ({ t: storyRef.current?.t ?? 0, mode: storyRef.current?.mode ?? "static" })
+    /** Animated step move (as → / ←); resolves when it ends. `stepAnimated()` is the running move or null. */
+    w.__storyink.step = (dir: number, chapter?: boolean) => {
+      armed.current = true
+      return storyRef.current?.step(dir < 0 ? -1 : 1, !!chapter) ?? Promise.resolve()
+    }
+    w.__storyink.stepAnimated = () => storyRef.current?.moving() ?? null
+    w.__storyink.state = () => ({ t: storyRef.current?.now() ?? 0, mode: storyRef.current?.modeNow() ?? "static" })
     w.__storyink.camera = () => cameraRef.current()
   }, [tl])
 

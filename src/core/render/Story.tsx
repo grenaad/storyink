@@ -2,7 +2,7 @@ import { animate, useMotionValue, useMotionValueEvent, type AnimationPlaybackCon
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react"
 import { story as S } from "../../theme/tokens.ts"
 import type { Scene } from "../scene.ts"
-import { beatCaption, beatTileMin, beatTimes, steppedSchedule, steppedStop, steppedTime, storyState } from "../story/state.ts"
+import { beatCaption, beatTileMin, beatTimes, stepBoundary, stepMoveSpeed, stepMoveTarget, steppedSchedule, steppedStop, steppedTime, storyState } from "../story/state.ts"
 import type { Frame, Timeline } from "../story/types.ts"
 import { Diagram } from "./Diagram.tsx"
 
@@ -21,7 +21,16 @@ export interface StoryControls {
   toggle: () => void
   seek: (t: number) => void
   replay: () => void
-  step: (dir: 1 | -1, chapters?: boolean) => void
+  /**
+   * → / ←: full motion plays forward (1×) or backward (2×) to the next / previous step (or chapter)
+   * boundary and pauses; resolves when the move ends or is interrupted. Reduced motion jumps.
+   */
+  step: (dir: 1 | -1, chapters?: boolean) => Promise<void>
+  /** The clock and mode now (the rendered `t` / `mode` can lag by a frame). */
+  now: () => number
+  modeNow: () => Mode
+  /** The running step move, if any. */
+  moving: () => { dir: 1 | -1; target: number } | null
   ungate: () => void
   /** Render synchronously at another time (for exporting a specific frame). */
   frameAt: (t: number) => Frame
@@ -55,16 +64,30 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
   const started = useRef(false)
   const modeRef = useRef<Mode>("ended")
   modeRef.current = mode
+  /** Set the mode and its ref together, so the page API reads it before React re-renders. */
+  const setModeSync = (v: Mode | ((m: Mode) => Mode)) => {
+    const n = typeof v === "function" ? v(modeRef.current) : v
+    modeRef.current = n
+    setMode(n)
+  }
   useMotionValueEvent(clock, "change", (v) => setT(v))
 
+  /** The running animated step move; its promises resolve when it ends or is interrupted. */
+  const move = useRef<{ dir: 1 | -1; target: number; done: (() => void)[] } | null>(null)
+  const endMove = () => {
+    const m = move.current
+    move.current = null
+    m?.done.forEach((f) => f())
+  }
   const stop = () => {
     ctl.current?.stop()
     ctl.current = undefined
+    endMove()
   }
   const pause = useCallback(() => {
     stop()
     setBlur(0)
-    setMode((m) => (m === "gate" ? m : "paused"))
+    setModeSync((m) => (m === "gate" ? m : "paused"))
   }, [])
   const seek = useCallback(
     (x: number) => {
@@ -73,7 +96,7 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
       const v = Math.max(0, Math.min(duration, x))
       // Reduced motion: quantised to the settled state of the step in effect.
       clock.set(opts.reduced && tl ? steppedTime(tl, v) : v)
-      setMode(x >= duration ? "ended" : "paused")
+      setModeSync(x >= duration ? "ended" : "paused")
       setSettled(false)
     },
     [clock, duration, opts.reduced, tl],
@@ -103,7 +126,7 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
             timer = setTimeout(show, S.beats.read * 1000)
             return
           }
-          setMode("ended")
+          setModeSync("ended")
           return
         }
         timer = setTimeout(() => {
@@ -111,7 +134,7 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
           show()
         }, s0.hold * 1000)
       }
-      setMode("playing")
+      setModeSync("playing")
       ctl.current = {
         stop: () => {
           stopped = true
@@ -125,7 +148,7 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
     setSettled(false)
     const from = clock.get() >= duration - 1e-3 ? 0 : clock.get()
     clock.set(from)
-    setMode("playing")
+    setModeSync("playing")
     started.current = true
     // The clock driver: the only place that reads wall time.
     let raf = 0
@@ -139,7 +162,7 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
       if (v >= duration) {
         ctl.current = undefined
         if (tl.loop) replayRef.current()
-        else setMode("ended")
+        else setModeSync("ended")
         return
       }
       raf = requestAnimationFrame(tick)
@@ -169,7 +192,7 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
     // Tape rewind: hold, rewind on `tape`, a short empty beat, then play (STYLE.md §5).
     const { hold, duration: rd, empty } = S.rewind
     const total = hold + rd + empty
-    setMode("rewinding")
+    setModeSync("rewinding")
     ctl.current = animate(clock, [t0, t0, 0, 0], {
       duration: total,
       times: [0, hold / total, (hold + rd) / total, 1],
@@ -206,14 +229,72 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
     return [sched[0].t, ...tl.steps.flatMap((s, i) => (s.stop ? [sched[i].t] : [])), duration]
   }, [tl, duration, opts.reduced])
   const step = useCallback(
-    (dir: 1 | -1, useChapters = false) => {
+    (dir: 1 | -1, useChapters = false): Promise<void> => {
       const list = useChapters && chapters.length > 2 ? chapters : marks
       const now = clock.get()
-      const target = dir > 0 ? list.find((x) => x > now + 0.02) ?? duration : [...list].reverse().find((x) => x < now - 0.02) ?? 0
-      seek(target)
+      if (opts.reduced || !tl) {
+        // Stepped playback: jump between settled steps.
+        seek(stepBoundary(list, now, dir, duration))
+        return Promise.resolve()
+      }
+      const cur = move.current
+      const target = stepMoveTarget(list, now, dir, duration, cur ?? undefined)
+      if (cur && cur.dir === dir) {
+        // Same direction while moving: extend; the running driver picks the new target up.
+        cur.target = target
+        return new Promise((r) => cur.done.push(r))
+      }
+      stop()
+      setBlur(0)
+      setSettled(false)
+      if (Math.abs(target - now) < 1e-4) {
+        setModeSync(now >= duration - 1e-3 ? "ended" : "paused")
+        return Promise.resolve()
+      }
+      const m = { dir, target, done: [] as (() => void)[] }
+      move.current = m
+      const p = new Promise<void>((r) => m.done.push(r))
+      started.current = true
+      setModeSync("playing")
+      // The move's clock driver (wall time, like play()).
+      let raf = 0
+      let last = 0
+      let t0 = 0
+      let stopped = false
+      const tick = (nowMs: number) => {
+        if (stopped || move.current !== m) return
+        // Wall time, unclamped (like play()): a throttled frame rate must not slow the story.
+        const dt = (nowMs - last) / 1000
+        last = nowMs
+        const c = clock.get()
+        const v = stepMoveSpeed(dir, (nowMs - t0) / 1000, Math.abs(m.target - c))
+        const next = c + dir * v * dt
+        if (dir > 0 ? next >= m.target - 1e-6 : next <= m.target + 1e-6) {
+          clock.set(m.target)
+          ctl.current = undefined
+          setModeSync(m.target >= duration - 1e-3 ? "ended" : "paused")
+          endMove()
+          return
+        }
+        clock.set(next)
+        raf = requestAnimationFrame(tick)
+      }
+      raf = requestAnimationFrame((n) => {
+        last = n
+        t0 = n
+        tick(n)
+      })
+      ctl.current = {
+        stop: () => {
+          stopped = true
+          cancelAnimationFrame(raf)
+        },
+      } as AnimationPlaybackControls
+      return p
     },
-    [marks, chapters, clock, duration, seek],
+    [marks, chapters, clock, duration, seek, opts.reduced, tl],
   )
+  const moving = useCallback(() => (move.current ? { dir: move.current.dir, target: move.current.target } : null), [])
   const ungate = useCallback(() => {
     if (modeRef.current !== "gate") return
     clock.set(0)
@@ -230,12 +311,12 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
     if (opts.reduced) {
       // Final frame with a static play affordance; autoplay is ignored.
       clock.set(duration)
-      setMode("gate")
+      setModeSync("gate")
       return
     }
     if (opts.autoplay ?? tl.autoplay) {
       clock.set(0)
-      setMode("paused")
+      setModeSync("paused")
       // Play when scrolled into view (once).
       const el = opts.stage.current
       if (!el || typeof IntersectionObserver === "undefined") return play()
@@ -249,7 +330,7 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
       return () => io.disconnect()
     }
     clock.set(0)
-    setMode("gate")
+    setModeSync("gate")
     return undefined
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tl, opts.still, opts.t, opts.autoplay])
@@ -275,9 +356,10 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
     const el = opts.stage.current
     const away = () => {
       if (modeRef.current === "playing") {
-        resumeOnReturn.current = true
+        // A step move just stops; playback resumes on return.
+        resumeOnReturn.current = !move.current
         stop()
-        setMode("paused")
+        setModeSync("paused")
       }
     }
     const back = () => {
@@ -313,7 +395,7 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
   const frameAt = useCallback((x: number) => storyState(scene, tl, x, { reduced: opts.reduced, stepped: opts.reduced }), [scene, tl, opts.reduced])
   if (!tl) return undefined
   const dim = mode === "gate" ? (opts.reduced ? 1 : S.gateDim) : mode === "ended" && settled ? S.endedDim : 1
-  return { t, frame, mode, dim, blur, reduced: opts.reduced, play, pause, toggle, seek, replay, step, ungate, frameAt }
+  return { t, frame, mode, dim, blur, reduced: opts.reduced, play, pause, toggle, seek, replay, step, moving, now: () => clock.get(), modeNow: () => modeRef.current, ungate, frameAt }
 }
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}.${Math.floor((s % 1) * 10)}`
