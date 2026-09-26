@@ -39,7 +39,8 @@
     "prepublishOnly": "bun run build",
     "gallery": "bun run gen && bun scripts/gallery.ts",
     "gallery:animated": "bun run gen && bun scripts/animated-gallery.ts",
-    "verify:smil": "bun run gen && bun scripts/smil-verify.ts"
+    "verify:smil": "bun run gen && bun scripts/smil-verify.ts",
+    "verify:viewer": "bun run build && bun scripts/viewer-verify.ts"
   },
   "dependencies": {
     "@kitlangton/rolling-number": "0.4.1",

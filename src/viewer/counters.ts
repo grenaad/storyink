@@ -33,6 +33,7 @@ export function createCounterOverlay(scene: Scene) {
       const c = tl.counters[id]
       const el = document.createElement("span")
       el.className = "si-counter-live"
+      el.dataset.node = c.node
       // getBBox is in the node group's local space: add the node's position.
       const n = scene.nodes.find((x) => x.id === c.node)
       el.style.left = `${(n?.x ?? 0) + b.x - vb.x}px`

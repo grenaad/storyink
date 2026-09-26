@@ -15,6 +15,8 @@
 - Snapshot: `--motion reduced` (tool `motion`) captures stepped `at` frames; new gate `reduced=stepped`.
 - Fix: live counter reels were placed at the node-local position (top-left of the diagram) and
   shown before their node was revealed; they now sit on their node and follow its reveal.
+  `bun run verify:viewer` checks this in headless Chrome (full play, reduced → full, reload,
+  resize, theme toggle) along with stepped playback.
 
 ## 0.3.0
 
