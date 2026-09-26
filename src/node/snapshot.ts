@@ -21,6 +21,8 @@ export interface SnapshotOptions {
   sheet?: boolean | "themes" | "beats"
   /** Story times to capture: seconds or "end" (default ["end"]). */
   at?: (number | "end")[]
+  /** Motion mode for the `at` captures: "reduced" captures stepped (settled-step) frames. Beat sheets are unaffected. */
+  motion?: "full" | "reduced"
   /** Output directory (default: next to the HTML file). */
   outDir?: string
   /** Device scale factor (default 1). */
@@ -218,6 +220,7 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   const headerH = (scene.subtitle ? 128 : 100) + (tl ? 54 : 0)
   const ats: (number | "end")[] = opts.at?.length ? opts.at : opts.t ? [opts.t === "end" ? "end" : Number(opts.t)] : ["end"]
   const tq = (at: number | "end") => (tl ? `&t=${at === "end" ? "end" : +at.toFixed(3)}` : "")
+  const mq = opts.motion ? `&motion=${opts.motion}` : ""
   const sheetMode = opts.sheet === false ? false : opts.sheet === "beats" ? "beats" : "themes"
   const W = Math.round(Math.max(500, opts.width ?? Math.min(1600, vb.w + 64)))
   const s = Math.min(1, (W - 64) / vb.w)
@@ -347,9 +350,9 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   try {
     for (const theme of themes)
       for (const at of ats) {
-        const tag = at === "end" ? "" : `.t${+at.toFixed(2)}`
+        const tag = `${at === "end" ? "" : `.t${+at.toFixed(2)}`}${opts.motion === "reduced" ? ".reduced" : ""}`
         const png = path.join(outDir, `${base}.${theme}${tag}.png`)
-        const ms = await shoot(`theme=${theme}&chrome=0${tq(at)}`, png, W, H)
+        const ms = await shoot(`theme=${theme}&chrome=0${tq(at)}${mq}`, png, W, H)
         captures.push({ theme, at, png, sha256: sha256(png), bytes: fs.statSync(png).size, width: W * scale, height: H * scale, ms })
       }
     // Determinism gate: same t twice, same pixels (a mid-story frame when there is a story).
@@ -372,6 +375,14 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
       const sStat = sha256(stat)
       gates.push({ name: "end=static", pass: sha256(end) === sStat, detail: sha256(end) === sStat ? "t=end matches the static diagram" : "t=end differs from the static diagram" })
       gates.push({ name: "reduced=static", pass: sha256(red) === sStat, detail: sha256(red) === sStat ? "reduced motion shows the static diagram" : "reduced motion differs from the static diagram" })
+      // Reduced motion mid-story: a settled step, never a pulse in flight.
+      const probes = tl.steps.map((st) => +((st as { t0: number; t1: number }).t0 / 2 + (st as { t1: number }).t1 / 2).toFixed(3)).filter((_, i, a) => i % Math.max(1, Math.ceil(a.length / 3)) === 0)
+      let inFlight = 0
+      for (const pt of probes) {
+        const d = await run(browser.path, [...baseFlags, fresh(), `--window-size=${W},${H}`, "--dump-dom", url(`theme=${first.theme}&chrome=0&motion=reduced&t=${pt}`)], { timeoutMs, untilStdout: /<\/html>\s*$/, signal: opts.signal })
+        if (/data-si="pulse:/.test(d.stdout)) inFlight++
+      }
+      gates.push({ name: "reduced=stepped", pass: inFlight === 0, detail: inFlight === 0 ? `reduced motion at t=${probes.join(",")}: settled steps, no pulse in flight` : `${inFlight} reduced frame(s) show a pulse in flight` })
     }
     const beats: Capture[] = []
     if (sheetMode === "beats" && tl) {

@@ -26,7 +26,7 @@ ${bold("Usage")}
   storyink mermaid <in.mmd> [-o out.json]
   storyink validate <in> [--json]
   storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats]|--no-sheet]
-                   [--at 0.5,1.2,end] [--scale 2] [-o dir] [--json]
+                   [--at 0.5,1.2,end] [--motion reduced] [--scale 2] [-o dir] [--json]
                    [--preview out.jpg [--preview-size 1024]]   compact one-image preview for agents
   storyink skill            print the SKILL.md path and content
   storyink --help | --version
@@ -49,7 +49,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const _: string[] = []
   const flags = new Map<string, string | true>()
-  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size", "--animated-svg", "--font"])
+  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size", "--animated-svg", "--font", "--motion"])
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "-" || !a.startsWith("-")) _.push(a)
@@ -187,6 +187,7 @@ async function main(argv: string[]): Promise<number> {
         : {}),
       ...(str(a, "--at") ? { at: str(a, "--at")!.split(",").map((x) => (x.trim() === "end" ? ("end" as const) : Number(x))) } : {}),
       scale,
+      ...(str(a, "--motion") === "reduced" || str(a, "--motion") === "full" ? { motion: str(a, "--motion") as "full" | "reduced" } : {}),
       ...(str(a, "-o", "--out") ? { outDir: str(a, "-o", "--out") } : {}),
       ...(str(a, "--t") ? { t: str(a, "--t") } : {}),
     })

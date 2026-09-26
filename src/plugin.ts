@@ -238,6 +238,7 @@ const plugin = {
               enum: ["overview", "full", "none"],
               description: 'Inline image: "overview" (default: one compact image; beat sheets reflow into more columns), "full" (normal sheet layout, split into ≤ 3 downscaled parts when tall), "none" (paths only)',
             },
+            motion: { type: "string", enum: ["full", "reduced"], description: 'Motion mode for `at` frames: "reduced" = stepped playback (settled step states)' },
             maxImageSize: { type: "number", description: "Longest side of the returned image in px (default 1024, 256–2048)" },
           },
           required: ["html"],
@@ -254,6 +255,7 @@ const plugin = {
             sheet?: "themes" | "beats" | "none"
             image?: "overview" | "full" | "none"
             maxImageSize?: number
+            motion?: "full" | "reduced"
           }
           const image = i.image ?? "overview"
           const r = await snapshot(abs(i.html), {
@@ -261,6 +263,7 @@ const plugin = {
             ...(i.at ? { at: i.at.map((x) => (x === "end" ? ("end" as const) : Number(x))) } : {}),
             sheet: i.sheet === "none" ? false : i.sheet === "beats" ? "beats" : true,
             ...(i.themes ? { themes: i.themes } : {}),
+            ...(i.motion ? { motion: i.motion } : {}),
             ...(i.width ? { width: i.width } : {}),
             ...(i.outDir ? { outDir: abs(i.outDir) } : {}),
             signal: context.signal,
