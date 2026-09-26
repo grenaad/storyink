@@ -6,6 +6,8 @@ import { BeatSheet, Captions, Gate, Transport, useStory } from "./Story.tsx"
 import { motion as M, palettes, cssVar, type Palette, type ThemeName } from "../../theme/tokens.ts"
 import type { Scene } from "../scene.ts"
 import { Diagram } from "./Diagram.tsx"
+import { CAMERA, cameraAt, cameraAtEnd, fitCamera, followStep, readableScale, stepAt, stepFocus, type Camera, type Viewport } from "../story/camera.ts"
+import { steppedTime } from "../story/state.ts"
 
 export interface AppProps {
   scene: Scene
@@ -42,6 +44,8 @@ export interface HashParams {
   /** Beat sheet layout: fixed column count and a tile range (for compact previews). */
   cols?: number
   range?: [number, number]
+  /** `#camera=follow|fit`: follow the story (also places a `#t=` frame) or keep the whole diagram in view. */
+  camera?: "follow" | "fit"
 }
 
 export function parseHash(hash: string): HashParams {
@@ -62,6 +66,7 @@ export function parseHash(hash: string): HashParams {
     ...(autoplay === "1" || autoplay === "0" ? { autoplay: autoplay === "1" } : {}),
     ...(motion === "full" || motion === "reduced" ? { motion } : {}),
     ...(p.get("static") === "1" ? { still: true } : {}),
+    ...(p.get("camera") === "follow" || p.get("camera") === "fit" ? { camera: p.get("camera") as "follow" | "fit" } : {}),
     ...(Number(p.get("cols")) >= 1 ? { cols: Math.min(12, Math.floor(Number(p.get("cols")))) } : {}),
     ...(/^\d+-\d+$/.test(p.get("range") ?? "") ? { range: p.get("range")!.split("-").map(Number) as [number, number] } : {}),
   }
@@ -81,6 +86,19 @@ export function resolveMotion(o: { hash?: "full" | "reduced"; stored?: string | 
 }
 
 export const MOTION_KEY = "storyink-motion"
+
+export const FOLLOW_KEY = "storyink-follow"
+
+/**
+ * Whether the camera follows the story. Precedence: `#camera=` hash, then the reader's stored
+ * toolbar choice (`localStorage["storyink-follow"]` = "on" | "off"), then the author's
+ * `story.camera` (default "follow").
+ */
+export function resolveFollow(o: { hash?: "follow" | "fit"; stored?: string | null; author?: "follow" | "fit" }): boolean {
+  if (o.hash) return o.hash === "follow"
+  if (o.stored === "on" || o.stored === "off") return o.stored === "on"
+  return (o.author ?? "follow") === "follow"
+}
 
 /** Pointerdown targets that never start a pan (controls inside the stage). */
 export const NO_PAN = "button, input, select, textarea, a, [role=slider], .si-tools, .si-transport, .si-gate, [data-no-pan]"
@@ -151,6 +169,8 @@ function applyTheme(next: ThemeName, animated: boolean) {
 /** Viewer shell. Server-rendered with defaults, then hydrated; hash state applies after hydration. */
 export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): ReactElement {
   const stage = useRef<HTMLDivElement>(null)
+  /** Called when a manual pan starts (the follow camera suspends on it). */
+  const onPanStart = useRef<() => void>(() => {})
   const x = useMotionValue(0)
   const y = useMotionValue(0)
   const k = useMotionValue(1)
@@ -172,28 +192,63 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
     stage,
   })
 
+  const [storedFollow, setStoredFollow] = useState<string | null>(null)
+  const follow = resolveFollow({ hash: hash.camera, stored: storedFollow, author: tl?.camera })
+  /** The camera the viewer is heading to (animations ease the motion values towards it). */
+  const goal = useRef<Camera>({ k: 1, x: 0, y: 0 })
+  /** The reader's own zoom (wheel, −/+, Fit): follow keeps it and pans. */
+  const userK = useRef<number | undefined>(undefined)
+  /** Step during which the reader panned: follow waits for the next out-of-view step. */
+  const suspended = useRef<number | null>(null)
+  /** The camera is off fit because of follow (so the end eases back and resizes re-follow). */
+  const engaged = useRef(false)
+  /** Follow reacts to playback and to the reader's seeks, never to a `#t=` load or setTime(). */
+  const armed = useRef(false)
+
+  const viewport = useCallback((): Viewport | undefined => {
+    const el = stage.current
+    if (!el) return undefined
+    return { w: el.clientWidth, h: el.clientHeight, bottom: hash.chrome ? 56 : 0 }
+  }, [hash.chrome])
+
+  const moveTo = useCallback(
+    (c: Camera, anim: boolean) => {
+      goal.current = c
+      if (anim) {
+        animate(k, c.k, CAMERA.spring)
+        animate(x, c.x, CAMERA.spring)
+        animate(y, c.y, CAMERA.spring)
+      } else {
+        k.stop()
+        x.stop()
+        y.stop()
+        k.set(c.k)
+        x.set(c.x)
+        y.set(c.y)
+      }
+    },
+    [k, x, y],
+  )
+
   const fit = useCallback(
     (anim: boolean) => {
       const el = stage.current
       if (!el) return
-      const sw = el.clientWidth
-      const sh = el.clientHeight
-      const pad = 32
       // Snap to whole pixels / 1/64 scale steps so repeated captures rasterize identically.
-      const s = Math.floor(Math.max(0.1, Math.min((sw - 2 * pad) / vb.w, (sh - 2 * pad) / vb.h, 1.25)) * 64) / 64
-      const tx = Math.round((sw - vb.w * s) / 2)
-      const ty = Math.round(Math.max(pad / 2, (sh - vb.h * s) / 2))
+      const c = fitCamera(vb, { w: el.clientWidth, h: el.clientHeight })
+      engaged.current = false
+      goal.current = c
       if (anim) {
-        animate(k, s, M.spring)
-        animate(x, tx, M.spring)
-        animate(y, ty, M.spring)
+        animate(k, c.k, M.spring)
+        animate(x, c.x, M.spring)
+        animate(y, c.y, M.spring)
       } else {
-        k.set(s)
-        x.set(tx)
-        y.set(ty)
+        k.set(c.k)
+        x.set(c.x)
+        y.set(c.y)
       }
     },
-    [vb.w, vb.h, k, x, y],
+    [vb, k, x, y],
   )
 
   const zoomAt = useCallback(
@@ -202,18 +257,20 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
       if (!el) return
       const px = cx ?? el.clientWidth / 2
       const py = cy ?? el.clientHeight / 2
-      const k0 = k.get()
-      const k1 = Math.max(0.1, Math.min(8, k0 * factor))
-      const nx = px - ((px - x.get()) * k1) / k0
-      const ny = py - ((py - y.get()) * k1) / k0
+      // From the goal, so quick repeated clicks compound instead of reading a mid-spring value.
+      const g = anim ? goal.current : { k: k.get(), x: x.get(), y: y.get() }
+      const k1 = Math.max(0.1, Math.min(8, g.k * factor))
+      const c = { k: k1, x: px - ((px - g.x) * k1) / g.k, y: py - ((py - g.y) * k1) / g.k }
+      userK.current = k1
+      goal.current = c
       if (anim) {
-        animate(k, k1, M.spring)
-        animate(x, nx, M.spring)
-        animate(y, ny, M.spring)
+        animate(k, c.k, M.spring)
+        animate(x, c.x, M.spring)
+        animate(y, c.y, M.spring)
       } else {
-        k.set(k1)
-        x.set(nx)
-        y.set(ny)
+        k.set(c.k)
+        x.set(c.x)
+        y.set(c.y)
       }
     },
     [k, x, y],
@@ -226,6 +283,7 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
     if (typeof matchMedia === "function") setSysReduced(matchMedia("(prefers-reduced-motion: reduce)").matches)
     try {
       setStoredMotion(localStorage.getItem(MOTION_KEY))
+      setStoredFollow(localStorage.getItem(FOLLOW_KEY))
     } catch {}
     setHydrated(true)
     let stored: ThemeName | undefined
@@ -243,8 +301,9 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
 
   useEffect(() => {
     if (!hydrated) return
-    if (!hash.sheet?.length && !hash.beats) fit(false)
+    if (!hash.sheet?.length && !hash.beats) place()
     hooks?.onReady(!!hash.sheet?.length || !!hash.beats)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hash, fit, hooks, hydrated])
 
   // Page contract: setTime / duration / steps / play / pause.
@@ -260,7 +319,66 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
     w.__storyink.pause = () => storyRef.current?.pause()
     w.__storyink.replay = () => storyRef.current?.replay()
     w.__storyink.state = () => ({ t: storyRef.current?.t ?? 0, mode: storyRef.current?.mode ?? "static" })
+    w.__storyink.camera = () => cameraRef.current()
   }, [tl])
+
+  /** Initial / resize placement: `#camera=follow` + `#t=` shows the followed view; engaged follow re-follows; else fit. */
+  const place = () => {
+    const vp = viewport()
+    if (!vp) return
+    if (tl && hash.camera === "follow" && hash.t !== undefined && !armed.current) {
+      const t0 = hash.t === "end" ? tl.duration : Number(hash.t) || 0
+      const t = reduced ? steppedTime(tl, t0) : t0
+      moveTo(cameraAt(scene, tl, t, vp), false)
+      engaged.current = !cameraAtEnd(tl, t)
+      return
+    }
+    const st = storyRef.current
+    if (tl && st && follow && engaged.current) {
+      moveTo(followStep(goal.current, vb, vp, stepFocus(scene, tl, stepAt(tl, st.t)), userK.current ?? readableScale(vb, vp)), false)
+      return
+    }
+    fit(false)
+  }
+  const placeRef = useRef(place)
+  placeRef.current = place
+
+  // The follow camera: one decision per step change (and on play / seek / end), never per frame.
+  const stepIdx = tl && story ? stepAt(tl, story.t) : 0
+  const atEnd = tl && story ? cameraAtEnd(tl, story.t) : false
+  const mode = story?.mode
+  if (mode === "playing") armed.current = true
+  useEffect(() => {
+    if (!tl || !story || !follow || !armed.current || hash.beats || hash.sheet?.length) return
+    if (mode === "gate" || mode === "rewinding") return
+    const vp = viewport()
+    if (!vp) return
+    const anim = !reduced
+    if (atEnd) {
+      // Ended or in the final hold: ease back out so the whole diagram is seen once.
+      if (engaged.current) {
+        moveTo(fitCamera(vb, vp), anim)
+        engaged.current = false
+      }
+      return
+    }
+    if (suspended.current === stepIdx) return
+    suspended.current = null
+    const next = followStep(goal.current, vb, vp, stepFocus(scene, tl, stepIdx), userK.current ?? readableScale(vb, vp))
+    if (next !== goal.current) {
+      moveTo(next, anim)
+      engaged.current = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stepIdx, atEnd, mode, follow, reduced])
+
+  // A manual pan suspends follow for the current step.
+  onPanStart.current = () => {
+    k.stop()
+    x.stop()
+    y.stop()
+    if (story && tl) suspended.current = stepAt(tl, story.t)
+  }
 
   const liveFrame = override ?? story?.frame
   useEffect(() => {
@@ -269,7 +387,7 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
   }, [story?.frame, story?.mode, hooks, reduced])
 
   useEffect(() => {
-    const onResize = () => fit(false)
+    const onResize = () => placeRef.current()
     addEventListener("resize", onResize)
     // The header height can change once webfonts load; refit so every capture uses the same scale.
     let ro: ResizeObserver | undefined
@@ -284,8 +402,6 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
     }
   }, [fit])
 
-  /** Called when a manual pan starts (the follow camera suspends on it). */
-  const onPanRef = useRef<() => void>(() => {})
   // Wheel zoom at cursor, drag to pan, keyboard.
   useEffect(() => {
     const el = stage.current
@@ -293,6 +409,9 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
     const onWheel = (ev: WheelEvent) => {
       ev.preventDefault()
       const r = el.getBoundingClientRect()
+      k.stop()
+      x.stop()
+      y.stop()
       zoomAt(Math.exp(-ev.deltaY * (ev.ctrlKey ? 0.01 : 0.0015)), ev.clientX - r.left, ev.clientY - r.top)
     }
     let drag: { id: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | undefined
@@ -313,10 +432,11 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
           el.setPointerCapture(ev.pointerId)
         } catch {}
         el.classList.add("si-dragging")
-        onPanRef.current()
+        onPanStart.current()
       }
       x.set(drag.ox + ev.clientX - drag.sx)
       y.set(drag.oy + ev.clientY - drag.sy)
+      goal.current = { k: k.get(), x: x.get(), y: y.get() }
     }
     const up = (ev: PointerEvent) => {
       if (!drag || drag.id !== ev.pointerId) return
@@ -331,11 +451,16 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
         ev.preventDefault()
         if (st.mode === "gate") st.ungate()
         else st.toggle()
-      } else if (st && ev.key === "ArrowRight") st.step(1, ev.shiftKey)
-      else if (st && ev.key === "ArrowLeft") st.step(-1, ev.shiftKey)
+      } else if (st && ev.key === "ArrowRight") {
+        armed.current = true
+        st.step(1, ev.shiftKey)
+      } else if (st && ev.key === "ArrowLeft") {
+        armed.current = true
+        st.step(-1, ev.shiftKey)
+      } else if (st && (ev.key === "f" || ev.key === "F")) toggleFollowRef.current()
       else if (st && (ev.key === "r" || ev.key === "R")) st.replay()
       else if (st && (ev.key === "m" || ev.key === "M")) toggleMotionRef.current()
-      else if (ev.key === "0") fit(true)
+      else if (ev.key === "0") fitClickRef.current()
       else if (ev.key === "+" || ev.key === "=") zoomAt(1.25, undefined, undefined, true)
       else if (ev.key === "-" || ev.key === "_") zoomAt(0.8, undefined, undefined, true)
     }
@@ -353,7 +478,7 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
       el.removeEventListener("pointercancel", up)
       removeEventListener("keydown", key)
     }
-  }, [fit, zoomAt, x, y])
+  }, [fit, zoomAt, x, y, k])
 
   const toggleMotion = () => {
     const next = reduced ? "full" : "reduced"
@@ -371,6 +496,45 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
   }
   const toggleMotionRef = useRef(toggleMotion)
   toggleMotionRef.current = toggleMotion
+
+  const toggleFollow = () => {
+    const next = follow ? "off" : "on"
+    setStoredFollow(next)
+    try {
+      localStorage.setItem(FOLLOW_KEY, next)
+    } catch {}
+    if (hash.camera) {
+      const p = new URLSearchParams(location.hash.replace(/^#/, ""))
+      p.set("camera", next === "on" ? "follow" : "fit")
+      history.replaceState(null, "", `#${p.toString()}`)
+      setHash((h) => ({ ...h, camera: next === "on" ? "follow" : "fit" }))
+    }
+  }
+  const toggleFollowRef = useRef(toggleFollow)
+  toggleFollowRef.current = toggleFollow
+  /** Fit is a manual zoom: follow then keeps the fit scale and only pans if needed. */
+  const fitClick = () => {
+    fit(true)
+    userK.current = goal.current.k
+  }
+  const fitClickRef = useRef(fitClick)
+  fitClickRef.current = fitClick
+  const cameraRef = useRef<() => Record<string, unknown>>(() => ({}))
+  cameraRef.current = () => ({
+    mode: follow ? "follow" : "fit",
+    follow,
+    k: k.get(),
+    x: x.get(),
+    y: y.get(),
+    goal: goal.current,
+    step: stepIdx,
+    engaged: engaged.current,
+    suspended: suspended.current,
+    userK: userK.current ?? null,
+    viewport: viewport() ?? null,
+  })
+  /** The transport's scrubber is a reader seek: follow reacts to it. */
+  const transport = story ? { ...story, seek: (t: number) => ((armed.current = true), story.seek(t)) } : undefined
 
   const toggleTheme = () => {
     const next: ThemeName = (theme ?? systemTheme()) === "dark" ? "light" : "dark"
@@ -429,11 +593,11 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
             </div>
           </m.div>
           {story?.mode === "gate" ? <Gate onPlay={story.ungate} still={reduced} /> : null}
-          {story && tl ? <Transport c={story} tl={tl} /> : null}
+          {transport && tl ? <Transport c={transport} tl={tl} /> : null}
           <div className="si-tools" onPointerDown={(e) => e.stopPropagation()}>
             <Btn label="−" title="Zoom out (-)" onClick={() => zoomAt(0.8, undefined, undefined, true)} />
             <Btn label="+" title="Zoom in (+)" onClick={() => zoomAt(1.25, undefined, undefined, true)} />
-            <Btn label="Fit" title="Fit to view (0)" onClick={() => fit(true)} />
+            <Btn label="Fit" title="Fit to view (0)" onClick={fitClick} />
             <span className="si-sep" />
             <Btn label="Toggle theme" title="Toggle light/dark" onClick={toggleTheme}>
               {resolved === "dark" ? <Sun /> : <Moon />}
@@ -447,6 +611,12 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
                   pressed={reduced}
                   still={reduced}
                   onClick={toggleMotion}
+                />
+                <Btn
+                  label="Follow"
+                  title={follow ? "Camera follows the story. Click to keep the view still (F)" : "Camera stays still. Click to follow the story (F)"}
+                  pressed={follow}
+                  onClick={toggleFollow}
                 />
                 <span className="si-sep" />
               </>

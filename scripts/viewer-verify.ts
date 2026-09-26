@@ -13,7 +13,9 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { fitCamera, readableScale, stepFocus, toScene, toScreen, validate } from "../src/core/index.ts"
 import { loadSpec, writeDiagram } from "../src/node/index.ts"
+import { largeSpec } from "../test/fixtures/large.ts"
 import { session } from "./cdp.ts"
 
 const root = path.resolve(import.meta.dir, "..")
@@ -148,7 +150,127 @@ async function controls(s: S, motion: "full" | "reduced") {
   check(m0 === String(motion === "reduced") && m1 === String(motion !== "reduced"), `${tag} Motion click (${m0} → ${m1})`)
   await s.ev(`localStorage.clear()`)
 }
-let s = await session(["--force-prefers-no-reduced-motion"])
+// ── Follow camera on a large architecture diagram (25 nodes in 5 groups) ──
+const largeHtml = path.join(D, "large.html")
+const largeScene = toScene(largeSpec())
+writeDiagram(validate(largeSpec()).spec!, { html: largeHtml })
+const lurl = `file://${largeHtml}`
+type Cam = { k: number; x: number; y: number; goal: { k: number; x: number; y: number }; step: number; engaged: boolean; suspended: number | null; userK: number | null; follow: boolean; viewport: { w: number; h: number; bottom: number } }
+const camera = async (s: S) => JSON.parse(await s.ev(`JSON.stringify(window.__storyink.camera())`)) as Cam
+const onScreen = (c: { k: number; x: number; y: number }, vp: Cam["viewport"], step: number) => {
+  const f = stepFocus(largeScene, largeScene.timeline!, step)
+  if (!f) return true
+  const b = toScreen(c, largeScene.viewBox, f)
+  return b.x >= -1 && b.y >= -1 && b.x + b.w <= vp.w + 1 && b.y + b.h <= vp.h - vp.bottom + 1
+}
+async function followChecks(s: S) {
+  const tag = "[follow]"
+  await s.go(lurl)
+  await s.ev(`localStorage.clear()`)
+  await s.ev("location.reload()")
+  await Bun.sleep(1400)
+  const c0 = await camera(s)
+  const fit = fitCamera(largeScene.viewBox, c0.viewport)
+  check(c0.follow && Math.abs(c0.k - fit.k) < 1e-3, `${tag} loads at fit (k=${c0.k.toFixed(3)}), Follow on by default`)
+  // Play from the transport button (not the gate).
+  await s.click(PP)
+  await Bun.sleep(1500)
+  const c1 = await camera(s)
+  const readable = readableScale(largeScene.viewBox, c1.viewport)
+  check((await state(s)).mode === "playing" && Math.abs(c1.k - readable) < 0.01, `${tag} transport Play zooms to the readable scale (k=${c1.k.toFixed(3)}, labels ${(c1.k * 11).toFixed(1)} px)`)
+  // Sample the whole play: goals distinct, the active step always on screen once settled.
+  const goals = new Set<string>()
+  let bad = 0
+  let settledSamples = 0
+  let lastStep = -1
+  let since = Date.now()
+  let dragged = false
+  let dragStep = -1
+  let dragGoal = ""
+  let heldDuringDrag = true
+  let resumed = false
+  while ((await state(s)).mode === "playing") {
+    const c = await camera(s)
+    if (c.step !== lastStep) {
+      lastStep = c.step
+      since = Date.now()
+    }
+    goals.add(`${c.goal.x},${c.goal.y},${c.goal.k}`)
+    if (!dragged && c.step >= 6) {
+      // Drag the diagram mid-play: follow suspends for this step.
+      dragged = true
+      dragStep = c.step
+      const st = await s.ev(`(()=>{const r=document.querySelector(".si-stage").getBoundingClientRect();return JSON.stringify({x:r.x+r.width*0.3,y:r.y+r.height*0.4})})()`).then(JSON.parse)
+      await s.drag(st, { x: st.x, y: st.y + 260 })
+      const cd = await camera(s)
+      dragGoal = `${cd.goal.x},${cd.goal.y}`
+      check(cd.suspended === dragStep, `${tag} drag during play suspends follow at step ${dragStep} (suspended=${cd.suspended})`)
+      since = Date.now()
+      continue
+    }
+    if (dragged && !resumed) {
+      if (c.step === dragStep && `${c.goal.x},${c.goal.y}` !== dragGoal) heldDuringDrag = false
+      if (c.step !== dragStep && `${c.goal.x},${c.goal.y}` !== dragGoal) resumed = true
+    } else if (Date.now() - since > 900 && c.step > 0 && c.engaged) {
+      settledSamples++
+      if (!onScreen(c, c.viewport, c.step)) { bad++; if (process.env.DEBUG) console.log("off", c.step, JSON.stringify(c), JSON.stringify(stepFocus(largeScene, largeScene.timeline!, c.step))) }
+    }
+    await Bun.sleep(150)
+  }
+  check(goals.size >= 4, `${tag} camera moved between ${goals.size} regions while playing`)
+  check(settledSamples >= 5 && bad === 0, `${tag} active step on screen once the camera settles (${settledSamples} samples, ${bad} off)`)
+  check(dragged && heldDuringDrag, `${tag} camera held where the reader dragged it for the rest of step ${dragStep}`)
+  check(resumed, `${tag} follow resumed on a later out-of-view step`)
+  await Bun.sleep(1200)
+  const ce = await camera(s)
+  check(Math.abs(ce.k - fit.k) < 0.005 && Math.abs(ce.x - fit.x) < 1 && Math.abs(ce.y - fit.y) < 1, `${tag} end eases back to fit (k=${ce.k.toFixed(3)})`)
+  // Seek by scrubber click (reader seek): the camera goes to that step's focus.
+  const bar = JSON.parse(await s.ev(`JSON.stringify(document.querySelector(".si-scrub").getBoundingClientRect())`))
+  await s.click({ x: bar.x + bar.width * 0.62, y: bar.y + bar.height / 2 })
+  await Bun.sleep(1300)
+  const cs = await camera(s)
+  check(cs.k > fit.k * 1.3 && onScreen(cs, cs.viewport, cs.step), `${tag} scrubber seek follows to step ${cs.step} (k=${cs.k.toFixed(3)})`)
+  // Follow toggle: click, persisted across reload, F key flips it back.
+  const fSel = `.si-tools button[aria-label="Follow"]`
+  await s.click(fSel)
+  await Bun.sleep(200)
+  const off = (await attr(s, fSel, "aria-pressed")) === "false" && (await s.ev(`localStorage.getItem("storyink-follow")`)) === "off"
+  await s.ev("location.reload()")
+  await Bun.sleep(1400)
+  const offAfter = (await attr(s, fSel, "aria-pressed")) === "false"
+  await s.click(".si-gate")
+  await Bun.sleep(2000)
+  const still = await camera(s)
+  const noFollow = Math.abs(still.k - fit.k) < 1e-3
+  await s.key("f", "KeyF")
+  await Bun.sleep(200)
+  const onAgain = (await attr(s, fSel, "aria-pressed")) === "true" && (await s.ev(`localStorage.getItem("storyink-follow")`)) === "on"
+  check(off && offAfter && noFollow && onAgain, `${tag} Follow toggle: click off (${off}), persists over reload (${offAfter}), stays at fit when off (${noFollow}), F turns it on (${onAgain})`)
+  // Reduced motion: the camera jumps (no easing between steps).
+  await s.ev(`localStorage.clear()`)
+  await s.go(lurl + "#motion=reduced")
+  await s.ev("location.reload()")
+  await Bun.sleep(1400)
+  await s.click(".si-gate")
+  let n = 0
+  let eased = 0
+  const seen = new Set<number>()
+  const t0 = Date.now()
+  while (Date.now() - t0 < 9000) {
+    const c = await camera(s)
+    n++
+    seen.add(c.goal.y)
+    if (Math.abs(c.x - c.goal.x) > 0.5 || Math.abs(c.y - c.goal.y) > 0.5 || Math.abs(c.k - c.goal.k) > 1e-3) eased++
+    await Bun.sleep(60)
+  }
+  check(eased === 0 && seen.size >= 2, `${tag} reduced: camera jumps between ${seen.size} positions (${eased}/${n} samples mid-move)`)
+  await s.ev(`localStorage.clear()`)
+}
+
+let s = await session(["--force-prefers-no-reduced-motion"], { width: 1280, height: 800 })
+await followChecks(s)
+s.close()
+s = await session(["--force-prefers-no-reduced-motion"])
 // Download clicks from export must not open dialogs in headless Chrome.
 await s.send("Browser.setDownloadBehavior", { behavior: "deny" })
 await controls(s, "full")
