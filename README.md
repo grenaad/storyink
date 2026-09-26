@@ -12,8 +12,8 @@ One package, four ways to use it: library, CLI, OpenCode plugin, and a skill for
 </picture>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grenaad/storyink/main/docs/gallery/oauth.sequence.animated.dark.svg">
-  <img alt="OAuth sequence, animated story" src="https://raw.githubusercontent.com/grenaad/storyink/main/docs/gallery/oauth.sequence.animated.light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://cdn.jsdelivr.net/gh/grenaad/storyink@main/docs/gallery/oauth.sequence.animated.dark.svg">
+  <img alt="OAuth sequence, animated story" src="https://cdn.jsdelivr.net/gh/grenaad/storyink@main/docs/gallery/oauth.sequence.animated.light.svg">
 </picture>
 
 *Animated SVGs (SMIL, no script): they play inside a plain `<img>`, so in a README or a PR
