@@ -4,7 +4,7 @@ import { fromMermaid } from "./core/mermaid/index.ts"
 import { formatDiagnostic, type Diagnostic } from "./core/validate.ts"
 import { VERSION } from "./generated/meta.ts"
 import { readSkill, skillPath } from "./node/assets.ts"
-import { loadSpec, parseSource, snapshot, writeDiagram } from "./node/index.ts"
+import { loadSpec, parseSource, snapshot, writeAnimatedSvg, writeDiagram } from "./node/index.ts"
 import type { ThemeName } from "./theme/tokens.ts"
 
 const COLOR = !!process.stdout.isTTY && !process.env.NO_COLOR
@@ -21,6 +21,8 @@ const HELP = `${bold("storyink")} ${dim(VERSION)} - diagrams from JSON or Mermai
 
 ${bold("Usage")}
   storyink render <in.json|in.mmd|-> [-o out.html] [--svg out.svg] [--theme light|dark] [--story auto]
+                 [--animated-svg out.svg [--theme light|dark|both] [--once] [--font system|embed]]
+                   animated SVG (SMIL) for READMEs / PRs: plays inside <img>, no script
   storyink mermaid <in.mmd> [-o out.json]
   storyink validate <in> [--json]
   storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats]|--no-sheet]
@@ -36,6 +38,7 @@ ${bold("Examples")}
   storyink render examples/checkout.architecture.json -o out/checkout.html --svg out/checkout.svg
   cat flow.mmd | storyink render - -o flow.html
   storyink snapshot out/checkout.html -o out/shots
+  storyink render examples/oauth.sequence.json --animated-svg docs/oauth.svg --theme both
 `
 
 interface Args {
@@ -46,7 +49,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const _: string[] = []
   const flags = new Map<string, string | true>()
-  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size"])
+  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size", "--animated-svg", "--font"])
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "-" || !a.startsWith("-")) _.push(a)
@@ -114,12 +117,29 @@ async function main(argv: string[]): Promise<number> {
       if (loaded.spec.story === undefined) loaded.spec.story = "auto"
     }
     const svg = str(a, "--svg")
+    const animated = str(a, "--animated-svg")
+    const both = str(a, "--theme") === "both"
+    if (both && !animated) throw new Error("--theme both needs --animated-svg")
     let html = str(a, "-o", "--out")
-    if (!html && !svg) html = input.name ? input.name.replace(/\.(json|mmd|mermaid)$/i, "") + ".html" : "diagram.html"
-    const res = writeDiagram(loaded.spec, { html, svg, theme: theme(a) })
-    if (res.html) console.log(`${green("wrote")} ${res.html.path} ${dim(kb(res.html.bytes))}`)
-    if (res.svg) console.log(`${green("wrote")} ${res.svg.path} ${dim(kb(res.svg.bytes))}`)
-    return res.ok ? 0 : 1
+    if (!html && !svg && !animated) html = input.name ? input.name.replace(/\.(json|mmd|mermaid)$/i, "") + ".html" : "diagram.html"
+    const pinned = both ? undefined : theme(a)
+    let ok = true
+    if (html || svg) {
+      const res = writeDiagram(loaded.spec, { html, svg, theme: pinned })
+      if (res.html) console.log(`${green("wrote")} ${res.html.path} ${dim(kb(res.html.bytes))}`)
+      if (res.svg) console.log(`${green("wrote")} ${res.svg.path} ${dim(kb(res.svg.bytes))}`)
+      ok = res.ok
+    }
+    if (animated) {
+      const font = str(a, "--font") ?? "system"
+      if (font !== "system" && font !== "embed") throw new Error(`--font must be system or embed, got "${font}"`)
+      if (loaded.spec.story === undefined) process.stderr.write(`${yellow("warn ")} spec has no story; the animated SVG uses the auto story (add --story auto to silence)\n`)
+      const r = writeAnimatedSvg(loaded.spec, animated, { theme: both ? "both" : pinned, once: a.flags.has("--once"), font, snippetBase: process.cwd() })
+      for (const f of r.files) console.log(`${green("wrote")} ${f.path} ${dim(`${kb(f.bytes)} animated, ${f.theme}`)}`)
+      if (r.snippet && both) console.log(`\n${dim("README snippet:")}\n${r.snippet}`)
+      ok = ok && r.ok
+    }
+    return ok ? 0 : 1
   }
 
   if (cmd === "mermaid") {

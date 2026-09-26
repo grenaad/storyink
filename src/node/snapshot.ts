@@ -450,3 +450,39 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   fs.writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`)
   return { code: receipt.ok ? 0 : 1, receipt, receiptPath }
 }
+
+/**
+ * Screenshot any local HTML page (e.g. a page holding an animated SVG) at w×h CSS px.
+ * `budgetMs` is Chrome's virtual time budget (wall-clock-free; SMIL advances with it).
+ */
+export async function screenshotPage(
+  htmlPath: string,
+  png: string,
+  size: { width: number; height: number },
+  opts: { browser?: Browser; budgetMs?: number; timeoutMs?: number; flags?: string[] } = {},
+): Promise<{ ok: boolean; ms: number }> {
+  const browser = opts.browser ?? findBrowser()
+  if (!browser) return { ok: false, ms: 0 }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "storyink-shot-"))
+  try {
+    fs.rmSync(png, { force: true })
+    const args = [
+      ...(browser.flavor === "chrome" ? ["--headless=new"] : []),
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--hide-scrollbars",
+      "--force-device-scale-factor=1",
+      "--force-prefers-no-reduced-motion",
+      ...(opts.budgetMs !== undefined ? [`--virtual-time-budget=${opts.budgetMs}`] : []),
+      ...(opts.flags ?? []),
+      `--user-data-dir=${dir}`,
+      `--window-size=${size.width},${size.height}`,
+      `--screenshot=${png}`,
+      /^[a-z]+:/.test(htmlPath) ? htmlPath : pathToFileURL(path.resolve(htmlPath)).href,
+    ]
+    const r = await run(browser.path, args, { timeoutMs: opts.timeoutMs ?? HARD_TIMEOUT })
+    return { ok: fs.existsSync(png) && fs.statSync(png).size > 0, ms: r.ms }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}

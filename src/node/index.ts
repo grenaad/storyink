@@ -5,12 +5,13 @@ import fs from "node:fs"
 import path from "node:path"
 import { detectMermaid, fromMermaid } from "../core/mermaid/index.ts"
 import { renderHtml, renderSvg, type HtmlOptions } from "../core/render/index.tsx"
+import { animatedSvg, type AnimatedSvgOptions } from "../core/render/smil.tsx"
 import type { Spec } from "../core/spec.ts"
 import { validate, type Diagnostic } from "../core/validate.ts"
 import type { ThemeName } from "../theme/tokens.ts"
 
 export { findBrowser, browserVersion, type Browser } from "./chrome.ts"
-export { snapshot, type SnapshotOptions, type SnapshotReceipt, type SnapshotResult, type Capture, type Gate } from "./snapshot.ts"
+export { snapshot, screenshotPage, type SnapshotOptions, type SnapshotReceipt, type SnapshotResult, type Capture, type Gate } from "./snapshot.ts"
 
 export interface LoadResult {
   ok: boolean
@@ -64,4 +65,49 @@ export function writeDiagram(
     res.svg = { path: path.resolve(out.svg), bytes: Buffer.byteLength(svg) }
   }
   return res
+}
+
+export interface AnimatedWriteResult {
+  ok: boolean
+  diagnostics: Diagnostic[]
+  files: { path: string; theme: ThemeName; bytes: number }[]
+  /** The spec had no story; the auto story was used. */
+  autoStory: boolean
+  /** README snippet (`<picture>` for both themes, `<img>` for one). */
+  snippet?: string
+}
+
+/** `<picture>` that serves the dark file under a dark `prefers-color-scheme`, light otherwise. */
+export function pictureSnippet(light: string, dark: string, alt: string): string {
+  const a = alt.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")
+  return `<picture>\n  <source media="(prefers-color-scheme: dark)" srcset="${dark}">\n  <img alt="${a}" src="${light}">\n</picture>`
+}
+
+/**
+ * Write SMIL-animated SVG(s). `theme: "both"` writes `<out>.light.svg` and `<out>.dark.svg`
+ * (from `out` minus its .svg extension) and returns the `<picture>` snippet.
+ */
+export function writeAnimatedSvg(
+  input: Spec | unknown,
+  out: string,
+  opts: Omit<AnimatedSvgOptions, "theme"> & { theme?: ThemeName | "both"; snippetBase?: string } = {},
+): AnimatedWriteResult {
+  const v = validate(input)
+  if (!v.ok || !v.spec) return { ok: false, diagnostics: v.diagnostics, files: [], autoStory: false }
+  const themes: ThemeName[] = opts.theme === "both" ? ["light", "dark"] : [opts.theme ?? "light"]
+  const stem = out.replace(/\.svg$/i, "")
+  const files: AnimatedWriteResult["files"] = []
+  let autoStory = false
+  for (const theme of themes) {
+    const file = opts.theme === "both" ? `${stem}.${theme}.svg` : out
+    const r = animatedSvg(v.spec, { ...opts, theme })
+    autoStory = r.autoStory
+    fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true })
+    fs.writeFileSync(file, r.svg)
+    files.push({ path: path.resolve(file), theme, bytes: r.bytes })
+  }
+  const rel = (f: string) => (opts.snippetBase ? path.relative(opts.snippetBase, f) : path.basename(f))
+  const snippet =
+    files.length === 2 ? pictureSnippet(rel(files[0].path), rel(files[1].path), v.spec.title) : `<img alt="${v.spec.title.replace(/"/g, "&quot;")}" src="${rel(files[0].path)}">`
+  return { ok: true, diagnostics: v.diagnostics, files, autoStory, snippet }
 }

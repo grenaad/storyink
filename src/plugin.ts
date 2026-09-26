@@ -4,7 +4,7 @@ import type { Plugin } from "@opencode/plugin"
 import { fromMermaid } from "./core/mermaid/index.ts"
 import { formatDiagnostic, type Diagnostic } from "./core/validate.ts"
 import { readSkill, skillPath } from "./node/assets.ts"
-import { parseSource, snapshot, writeDiagram, type SnapshotReceipt } from "./node/index.ts"
+import { parseSource, snapshot, writeAnimatedSvg, writeDiagram, type SnapshotReceipt } from "./node/index.ts"
 import type { ThemeName } from "./theme/tokens.ts"
 
 export const PLUGIN_ID = "storyink"
@@ -101,13 +101,33 @@ const plugin = {
             svg: { type: "string", description: "Optional output .svg path" },
             theme: { ...THEME, description: "Pin the theme; default follows the viewer's system preference" },
             story: { type: "string", enum: ["auto"], description: "Add an auto-generated storyboard (only when the user asked for an animated diagram)" },
+            animatedSvg: {
+              type: ["boolean", "string"],
+              enum: [true, false, "both"],
+              description:
+                'Also write a SMIL-animated SVG that plays inside a README / PR <img> (no script). true = one file in `theme` (default light); "both" = .light.svg + .dark.svg and a <picture> snippet. Uses the auto story when the spec has none.',
+            },
+            animatedSvgPath: { type: "string", description: "Animated SVG path (default: output with .animated.svg)" },
+            once: { type: "boolean", description: "Animated SVG plays once and holds the final frame (default: loops)" },
+            font: { type: "string", enum: ["system", "embed"], description: 'Animated SVG font: "system" mono stack (default, small) or "embed" Commit Mono (+~127 KB)' },
           },
           required: ["output"],
           additionalProperties: false,
         },
         options: { namespace: "storyink" },
         execute: async (input, context) => {
-          const i = input as { spec?: unknown; mermaid?: string; output: string; svg?: string; theme?: ThemeName; story?: "auto" }
+          const i = input as {
+            spec?: unknown
+            mermaid?: string
+            output: string
+            svg?: string
+            theme?: ThemeName
+            story?: "auto"
+            animatedSvg?: boolean | "both"
+            animatedSvgPath?: string
+            once?: boolean
+            font?: "system" | "embed"
+          }
           if (context.signal.aborted) throw new Error("aborted")
           const s = specFrom(i)
           if (s.ok && s.spec && i.story === "auto" && s.spec.story === undefined) s.spec.story = "auto"
@@ -117,11 +137,22 @@ const plugin = {
               metadata: { ok: false, diagnostics: s.diagnostics },
             }
           const res = writeDiagram(s.spec, { html: abs(i.output), ...(i.svg ? { svg: abs(i.svg) } : {}), ...(i.theme ? { theme: i.theme } : {}) })
-          const out: Json = { ok: res.ok, html: res.html, svg: res.svg, diagnostics: s.diagnostics }
+          const anim = i.animatedSvg
+            ? writeAnimatedSvg(s.spec, abs(i.animatedSvgPath ?? i.output.replace(/\.html?$/i, "") + ".animated.svg"), {
+                theme: i.animatedSvg === "both" ? "both" : (i.theme ?? "light"),
+                once: i.once === true,
+                font: i.font ?? "system",
+                snippetBase: base,
+              })
+            : undefined
+          const out: Json = { ok: res.ok && (anim?.ok ?? true), html: res.html, svg: res.svg, animatedSvg: anim?.files, snippet: anim?.snippet, diagnostics: s.diagnostics }
           const lines = [
             `storyink: rendered ${s.spec.type} "${s.spec.title}"`,
             res.html ? `- html: ${res.html.path} (${(res.html.bytes / 1024).toFixed(1)} KiB)` : "",
             res.svg ? `- svg: ${res.svg.path} (${(res.svg.bytes / 1024).toFixed(1)} KiB)` : "",
+            ...(anim?.files ?? []).map((f) => `- animated svg (${f.theme}): ${f.path} (${(f.bytes / 1024).toFixed(1)} KiB)`),
+            anim?.autoStory ? "- note: the spec has no story; the animated SVG uses the auto story" : "",
+            anim?.snippet && anim.files.length > 1 ? `README snippet:\n${anim.snippet}` : "",
             s.diagnostics.length ? `warnings:\n${summarize(s.diagnostics)}` : "",
             "Next: run storyink_snapshot on the html and look at the sheet image before describing it.",
           ].filter(Boolean)
