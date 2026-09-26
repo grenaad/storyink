@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.4
+
+- **Fix: → stopped before the next box was visible.** Step moves targeted the next step *start*,
+  and stories split a pulse and the reveal it causes into consecutive steps, so → stopped as the
+  dot arrived, before its target box appeared. → / ← now land on the next / previous **beat stop**:
+  a pulse and the reveal of its target are one beat, and the stop is where they (and the caption)
+  have settled. One definition, `beatGroups`, now drives step moves, stepped (reduced-motion)
+  playback, scrubber ticks and beat tiles. A reveal step that has its own caption now joins the
+  pulse whose target it reveals.
+  - Captions finish typing within their step (the last word no longer settles after the step ends).
+  - Step end times round up to the millisecond, so a stop is never a fraction of a millisecond
+    before its dot lands.
+- **Fix: sharp light-grey corners during animation.** The pulse trail and dot followed the route's
+  corner points (straight segments with sharp corners) instead of the rounded wire. Routes now use
+  `flattenPath(edge.d)`, the drawn curve sampled in core, in the HTML viewer and the SMIL animated
+  SVG. The draw-on dash length is the rounded wire's length, and multi-hop routes no longer cut the
+  corner of the next wire.
+- Core: `beatGroups`, `beatStops`, `beatChapters`, `beatTicks`, `flattenPath`.
+- `verify:viewer`: → from OpenWick beat stops ends with the dot's target box visible. Chrome is
+  always killed (exit, signals, uncaught errors, plus a watchdog if the runner is SIGKILLed; a
+  20 min cap), CDP calls time out after 30 s, and the run has a 15 min deadline.
+
 ## 0.3.3
 
 - **Fix: `snapshot --camera follow` wasn't deterministic on real diagrams** (`follow-deterministic`

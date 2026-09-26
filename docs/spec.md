@@ -156,15 +156,27 @@ asks for reduced motion** (`prefers-reduced-motion: reduce` is ignored).
 `"story": { "steps": "auto", "motion": "system" }` (or `storyink render --motion system`, tool
 `storyink_render` `motion`). Readers can always switch with the toolbar's **Motion** toggle (`M`).
 
+### Beats
+
+A **beat** is one or more consecutive steps that read as a single change: `beatGroups(timeline)`.
+A step joins the next when the next starts at the same time, or is chained straight on (`"+0"`,
+within 50 ms of this step's end) and, without starting a chapter (`stop`), either adds no caption of
+its own or reveals the box this step's pulse arrives at. So a pulse and the reveal of its target
+are always one beat. A beat's **stop** is its last step's settled time: its reveals at full
+opacity, its dots landed, counters at their value, its caption fully typed (`beatStops`). Beats
+drive step moves (→ / ←), stepped (reduced-motion) playback, the scrubber's ticks (`beatTicks`)
+and beat tiles (which may merge further to fit 12 tiles). Chapters (Shift+→ / ←) are the stops of
+beats holding a `stop` (`beatChapters`).
+
 ### Reduced motion: "Play steps"
 
 When motion is reduced, the viewer doesn't animate; it **steps**. The page loads on the final frame
-with a static play button (no idle rings; `autoplay` is ignored). Play shows each step's
+with a static play button (no idle rings; `autoplay` is ignored). Play shows each beat's
 **settled** state at once (reveals shown, its pulses landed and wires drawn, counters at their new
 value, the caption whole), holds it for its reading time (the caption's read time, otherwise
 1.5 s), then advances, and ends on the final frame. There are no pulses in flight, trails, rings,
-glows, flashes or tweens. Pause, ←/→ (Shift: chapters) and the scrubber move between settled steps
-(`#t=` is quantised to the step in effect); R restarts from step 1 without the tape rewind.
+glows, flashes or tweens. Pause, ←/→ (Shift: chapters) and the scrubber move between settled beats
+(`#t=` is quantised to the beat in effect); R restarts from step 1 without the tape rewind.
 Core: `steppedSchedule(timeline)`, `steppedTime(timeline, t)` and
 `storyState(scene, timeline, t, { stepped: true })`.
 
@@ -225,18 +237,25 @@ Keys: space play/pause, →/← step moves (Shift: by chapter), R replay, M moti
 0 fit, +/− zoom.
 
 **Step moves (→ / ←).** In full motion the arrows animate instead of jumping:
-- **→** plays forward at normal speed from the current time to the **next step boundary** (a step
-  start, or the end) and pauses there. While playing, → becomes "advance one step": it plays on to
-  the next boundary and pauses. **Shift+→** does the same to the next chapter (`stop`).
-- **←** rewinds: time runs **backwards at 2×** (pulses fly back) to the **previous boundary**, then
+- **→** plays forward at normal speed from the current time to the **next beat stop** (see Beats:
+  the dot lands *and* the box it reaches is revealed and settled, with the caption whole; or the
+  end) and pauses there. While playing, → becomes "advance one beat". **Shift+→** does the same
+  to the next chapter.
+- **←** rewinds: time runs **backwards at 2×** (pulses fly back) to the **previous beat stop**, then
   pauses, with a short bounce-free ease in and out (0.12 s, never below 0.3× so it always
   arrives). No blur (the blur stays with R's tape rewind). **Shift+←** goes to the previous chapter.
 - **Repeated presses** in the direction of a running move extend its target to the following
   boundary; the opposite key reverses toward the boundary adjacent to the current time.
 - **Space** pauses a move; the scrubber still seeks immediately; R is the tape-rewind replay.
 - The follow camera follows moves like playback, backwards too.
-- **Reduced motion** keeps instant jumps between settled steps.
-Core: `stepBoundary`, `stepMoveTarget`, `stepMoveSpeed`, `STEP_MOVE`.
+- **Reduced motion** keeps instant jumps between settled beats.
+Core: `beatStops`, `beatChapters`, `stepBoundary`, `stepMoveTarget`, `stepMoveSpeed`, `STEP_MOVE`.
+
+**Wire geometry.** Everything animated along a wire (the pulse dot, its trail, the flight draw-on
+spans, the SMIL trail route) uses `flattenPath(edge.d)`, a dense polyline of the drawn rounded
+wire (quadratic corners sampled to < 0.1 px), never the route's corner points. Multi-hop routes
+keep each hop's start, so the dot crosses the node straight between hops. `edge.length` is the
+rounded wire's length.
 
 ## Animated SVG
 
