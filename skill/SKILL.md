@@ -101,6 +101,8 @@ Loop: render, then `storyink_snapshot` with `sheet: "beats"` (CLI `--sheet beats
 - [ ] each beat changes one visible thing
 - [ ] no half-drawn tile once a step has settled
 - [ ] the last frame is the static diagram (gates `end=static`, `reduced=static`, `reduced=stepped` pass)
+- Stories animate by default even if the reader's OS reduces motion; set `"motion": "system"` in
+  `story` (or `motion` on `storyink_render`) to honour it, `"reduced"` to always step.
 - Reduced-motion viewers get stepped playback (settled steps, no motion); check with
   `motion: "reduced"` + `at` frames if the steps must read well on their own.
 

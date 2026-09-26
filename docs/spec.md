@@ -111,6 +111,7 @@ print all show the **final frame, which is exactly the static diagram**.
 "story": {
   "autoplay": false,   // default: click-to-play gate; true = play when scrolled into view
   "end": "hold",       // "hold" (default) or "loop"
+  "motion": "full",    // "full" (default), "reduced" or "system"; see Reduced motion below
   "steps": [
     { "at": 0, "reveal": ["web"], "caption": "A shopper presses Pay", "stop": "Request" },
     { "at": "+0.2", "pulse": "web->gateway" },
@@ -142,6 +143,19 @@ sources, then pulse breadth-first waves and reveal what they reach (edges into a
 entry states, notes appear with their target); sequences pulse every message in order, with
 activations, frames and notes following their messages.
 
+### Motion mode (`story.motion`)
+
+The author picks how the story plays; **the default `"full"` animates even when the reader's OS
+asks for reduced motion** (`prefers-reduced-motion: reduce` is ignored).
+- `"full"` (default): always the animated gate, autoplay if set, full playback.
+- `"reduced"`: always stepped playback (below).
+- `"system"`: follow the reader's `prefers-reduced-motion` (the 0.3.0 behaviour). Use this to
+  honour the OS setting.
+
+`"story": "auto"` uses the default; to set it on an auto story write
+`"story": { "steps": "auto", "motion": "system" }` (or `storyink render --motion system`, tool
+`storyink_render` `motion`). Readers can always switch with the toolbar's **Motion** toggle (`M`).
+
 ### Reduced motion: "Play steps"
 
 When motion is reduced, the viewer doesn't animate; it **steps**. The page loads on the final frame
@@ -154,8 +168,9 @@ glows, flashes or tweens. Pause, ←/→ (Shift: chapters) and the scrubber move
 Core: `steppedSchedule(timeline)`, `steppedTime(timeline, t)` and
 `storyState(scene, timeline, t, { stepped: true })`.
 
-Motion mode precedence: `#motion=full|reduced` > the viewer's **Motion** toolbar toggle (saved in
-`localStorage["storyink-motion"]`, shortcut `M`) > the OS `prefers-reduced-motion`. Switching
+Motion mode precedence: `#motion=full|reduced` > the reader's **Motion** toolbar toggle (saved in
+`localStorage["storyink-motion"]`, shortcut `M`) > the author's `story.motion` (default `"full"`) >
+the OS `prefers-reduced-motion`, consulted only when the author chose `"system"`. Switching
 mid-playback continues from the current step in the new mode. `storyink snapshot --motion reduced
 --at …` captures stepped frames; the `reduced=stepped` gate checks that reduced frames mid-story
 show no pulse in flight.

@@ -8,6 +8,11 @@
   1.5 s), then the next, ending on the final frame. No pulses, trails, glows or tweens. Pause, ←/→,
   Shift+←/→, R (restart from step 1, no rewind) and the scrubber work on settled steps. The page
   loads on the final frame with a static play button; `autoplay` is ignored.
+- **`story.motion`: `"full"` (default) | `"reduced"` | `"system"`.** Full motion is the default and
+  **ignores the reader's OS reduced-motion setting**; `"system"` restores the 0.3.0 behaviour
+  (follow `prefers-reduced-motion`), `"reduced"` always steps. Auto stories:
+  `{ "steps": "auto", "motion": … }`, `render --motion …`, tool `storyink_render` `motion`.
+  Precedence: `#motion=` > the reader's toolbar choice > `story.motion` > OS (only for `"system"`).
 - Viewer toolbar: **Motion: full / reduced** toggle (`aria-pressed`, shortcut `M`), saved in
   `localStorage`; `#motion=` still wins. Switching mid-playback continues from the current step.
 - Core: `steppedSchedule`, `steppedTime`, `steppedIndex`, `steppedStop`, `STEP_BEAT` and

@@ -122,10 +122,15 @@ Add a `story` to play a diagram as a sequence of beats in the HTML viewer:
 
 `"story": "auto"` (or `--story auto`) derives the beats from the graph or message order. Playback
 has a click-to-play gate, play/pause, a tape-rewind replay and a scrubber with step and chapter
-ticks. Space, ←/→ and R control it. With reduced motion (the OS setting, `#motion=reduced`, or the
-toolbar's **Motion** toggle, `M`), Play walks the story step by step: each step's settled state
-shown at once and held for its reading time, with no travelling pulses or tweens. The page opens
-on the final frame.
+ticks. Space, ←/→ and R control it.
+
+Motion is **full by default, even when the reader's system asks for reduced motion**. Authors can
+set `"story": { "motion": "reduced" }` (always step by step) or `"motion": "system"` (follow
+`prefers-reduced-motion`); `--motion full|reduced|system` on `render` does the same, including
+for auto stories. Readers switch with the toolbar's **Motion** toggle (`M`, remembered), and
+`#motion=full|reduced` overrides everything. In reduced mode Play walks the story step by step:
+each step's settled state shown at once and held for its reading time, with no travelling pulses
+or tweens, and the page opens on the final frame.
 
 The final frame is always the static diagram. Every frame is a pure function of time
 (`storyState(scene, timeline, t)`), so `#t=2.5` seeks exactly and
