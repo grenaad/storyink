@@ -77,6 +77,16 @@ export function setStoryMotion(spec: Spec, motion: "full" | "reduced" | "system"
   return true
 }
 
+/**
+ * Set the viewer camera (`story.camera`). `"story": "auto"` becomes
+ * `{ "steps": "auto", "camera": c }`. Returns false when the spec has no story.
+ */
+export function setStoryCamera(spec: Spec, camera: "follow" | "fit"): boolean {
+  if (spec.story === undefined) return false
+  spec.story = spec.story === "auto" ? { steps: "auto", camera } : { ...spec.story, camera }
+  return true
+}
+
 export interface AnimatedWriteResult {
   ok: boolean
   diagnostics: Diagnostic[]

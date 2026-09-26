@@ -4,7 +4,7 @@ import type { Plugin } from "@opencode/plugin"
 import { fromMermaid } from "./core/mermaid/index.ts"
 import { formatDiagnostic, type Diagnostic } from "./core/validate.ts"
 import { readSkill, skillPath } from "./node/assets.ts"
-import { parseSource, setStoryMotion, snapshot, writeAnimatedSvg, writeDiagram, type SnapshotReceipt } from "./node/index.ts"
+import { parseSource, setStoryCamera, setStoryMotion, snapshot, writeAnimatedSvg, writeDiagram, type SnapshotReceipt } from "./node/index.ts"
 import type { ThemeName } from "./theme/tokens.ts"
 
 export const PLUGIN_ID = "storyink"
@@ -106,6 +106,11 @@ const plugin = {
               enum: ["full", "reduced", "system"],
               description: 'Story playback motion: "full" (default, animates even when the reader\'s OS reduces motion), "reduced" (step by step), "system" (follow prefers-reduced-motion)',
             },
+            camera: {
+              type: "string",
+              enum: ["follow", "fit"],
+              description: 'Viewer camera while playing: "follow" (default: zoom to a readable scale when the diagram is large and pan to each step) or "fit" (whole diagram always in view)',
+            },
             animatedSvg: {
               type: ["boolean", "string"],
               enum: [true, false, "both"],
@@ -129,6 +134,7 @@ const plugin = {
             theme?: ThemeName
             story?: "auto"
             motion?: "full" | "reduced" | "system"
+            camera?: "follow" | "fit"
             animatedSvg?: boolean | "both"
             animatedSvgPath?: string
             once?: boolean
@@ -138,6 +144,7 @@ const plugin = {
           const s = specFrom(i)
           if (s.ok && s.spec && i.story === "auto" && s.spec.story === undefined) s.spec.story = "auto"
           if (s.ok && s.spec && i.motion) setStoryMotion(s.spec, i.motion)
+          if (s.ok && s.spec && i.camera) setStoryCamera(s.spec, i.camera)
           if (!s.ok || !s.spec)
             return {
               content: `storyink: spec is invalid, nothing written.\n${summarize(s.diagnostics)}`,
@@ -246,6 +253,7 @@ const plugin = {
               description: 'Inline image: "overview" (default: one compact image; beat sheets reflow into more columns), "full" (normal sheet layout, split into ≤ 3 downscaled parts when tall), "none" (paths only)',
             },
             motion: { type: "string", enum: ["full", "reduced"], description: 'Motion mode for `at` frames: "reduced" = stepped playback (settled step states)' },
+            camera: { type: "string", enum: ["fit", "follow"], description: '`at` frames: "fit" (default, whole diagram) or "follow" (the follow camera\'s view at a 1280×720 stage)' },
             maxImageSize: { type: "number", description: "Longest side of the returned image in px (default 1024, 256–2048)" },
           },
           required: ["html"],
@@ -263,6 +271,7 @@ const plugin = {
             image?: "overview" | "full" | "none"
             maxImageSize?: number
             motion?: "full" | "reduced"
+            camera?: "fit" | "follow"
           }
           const image = i.image ?? "overview"
           const r = await snapshot(abs(i.html), {
@@ -271,6 +280,7 @@ const plugin = {
             sheet: i.sheet === "none" ? false : i.sheet === "beats" ? "beats" : true,
             ...(i.themes ? { themes: i.themes } : {}),
             ...(i.motion ? { motion: i.motion } : {}),
+            ...(i.camera === "follow" ? { camera: "follow" as const } : {}),
             ...(i.width ? { width: i.width } : {}),
             ...(i.outDir ? { outDir: abs(i.outDir) } : {}),
             signal: context.signal,

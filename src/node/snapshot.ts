@@ -23,6 +23,12 @@ export interface SnapshotOptions {
   at?: (number | "end")[]
   /** Motion mode for the `at` captures: "reduced" captures stepped (settled-step) frames. Beat sheets are unaffected. */
   motion?: "full" | "reduced"
+  /**
+   * Camera for the `at` captures: "fit" (default) shows the whole diagram; "follow" shows the
+   * follow camera's view (`#camera=follow`) in a 16:9 stage (width, default 1280). Beat sheets and
+   * gates are unaffected.
+   */
+  camera?: "fit" | "follow"
   /** Output directory (default: next to the HTML file). */
   outDir?: string
   /** Device scale factor (default 1). */
@@ -221,10 +227,13 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   const ats: (number | "end")[] = opts.at?.length ? opts.at : opts.t ? [opts.t === "end" ? "end" : Number(opts.t)] : ["end"]
   const tq = (at: number | "end") => (tl ? `&t=${at === "end" ? "end" : +at.toFixed(3)}` : "")
   const mq = opts.motion ? `&motion=${opts.motion}` : ""
+  const follow = opts.camera === "follow" && !!tl
+  const cq = follow ? "&camera=follow" : ""
   const sheetMode = opts.sheet === false ? false : opts.sheet === "beats" ? "beats" : "themes"
   const W = Math.round(Math.max(500, opts.width ?? Math.min(1600, vb.w + 64)))
   const s = Math.min(1, (W - 64) / vb.w)
   const H = Math.round(headerH + vb.h * s + 64 + 8)
+  const FW = Math.round(Math.max(500, opts.width ?? 1280))
   const url = (hash: string) => `${pathToFileURL(abs).href}#${hash}`
 
   const baseFlags = [
@@ -350,10 +359,11 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   try {
     for (const theme of themes)
       for (const at of ats) {
-        const tag = `${at === "end" ? "" : `.t${+at.toFixed(2)}`}${opts.motion === "reduced" ? ".reduced" : ""}`
+        const tag = `${at === "end" ? "" : `.t${+at.toFixed(2)}`}${opts.motion === "reduced" ? ".reduced" : ""}${follow ? ".follow" : ""}`
         const png = path.join(outDir, `${base}.${theme}${tag}.png`)
-        const ms = await shoot(`theme=${theme}&chrome=0${tq(at)}${mq}`, png, W, H)
-        captures.push({ theme, at, png, sha256: sha256(png), bytes: fs.statSync(png).size, width: W * scale, height: H * scale, ms })
+        const [cw, ch] = follow ? [FW, Math.round(FW * 0.5625)] : [W, H]
+        const ms = await shoot(`theme=${theme}&chrome=0${tq(at)}${mq}${cq}`, png, cw, ch)
+        captures.push({ theme, at, png, sha256: sha256(png), bytes: fs.statSync(png).size, width: cw * scale, height: ch * scale, ms })
       }
     // Determinism gate: same t twice, same pixels (a mid-story frame when there is a story).
     const first = captures[0]
@@ -364,6 +374,13 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
     await shoot(`theme=${first.theme}&chrome=0${tq(midT)}`, a2, W, H)
     const same = sha256(a1) === sha256(a2)
     gates.push({ name: "deterministic", pass: same, detail: same ? `${first.theme} at t=${midT} captured twice: identical` : `${first.theme} at t=${midT} differs between runs` })
+    if (follow) {
+      // The follow camera is a pure function of t and the stage: a re-capture matches.
+      const f2 = path.join(tmpRoot, "follow-2.png")
+      await shoot(`theme=${first.theme}&chrome=0${tq(first.at ?? "end")}${mq}${cq}`, f2, FW, Math.round(FW * 0.5625))
+      const ok = sha256(f2) === first.sha256
+      gates.push({ name: "follow-deterministic", pass: ok, detail: ok ? `camera=follow at t=${first.at} captured twice: identical` : `camera=follow at t=${first.at} differs between runs` })
+    }
     if (tl) {
       // End frame = static, and reduced motion = static.
       const stat = path.join(tmpRoot, "static.png")

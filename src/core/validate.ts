@@ -196,9 +196,10 @@ function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefin
     c.error("story", `"story" must be an object or "auto"`, `{ "steps": [ { "reveal": ["api"] } ] } or "auto"`)
     return undefined
   }
-  unknownKeys(c, raw, new Set(["autoplay", "end", "motion", "steps"]), "story")
+  unknownKeys(c, raw, new Set(["autoplay", "camera", "end", "motion", "steps"]), "story")
   const motion = oneOf(c, raw.motion, ["full", "reduced", "system"] as const, "story.motion", "story motion")
-  const opts = { ...(raw.autoplay === true ? { autoplay: true } : {}), ...(motion ? { motion } : {}) }
+  const camera = oneOf(c, raw.camera, ["follow", "fit"] as const, "story.camera", "story camera")
+  const opts = { ...(raw.autoplay === true ? { autoplay: true } : {}), ...(motion ? { motion } : {}), ...(camera ? { camera } : {}) }
   if (raw.autoplay !== undefined && typeof raw.autoplay !== "boolean") c.error("story.autoplay", `"autoplay" must be true or false`)
   const end = oneOf(c, raw.end, ["hold", "loop"] as const, "story.end", "story end")
   if (raw.steps === "auto") {

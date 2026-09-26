@@ -293,6 +293,7 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
     lastEvent: r3(lastEvent),
     autoplay: story.autoplay === true,
     motion: story.motion ?? "full",
+    ...(story.camera ? { camera: story.camera } : {}),
     loop: story.end === "loop",
     steps: steps.map((s) => ({ ...s, t0: r3(s.t0), t1: r3(s.t1) })),
     appear,

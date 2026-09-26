@@ -54,6 +54,8 @@ export interface Timeline {
   autoplay: boolean
   /** Author's playback motion ("full" default; "system" follows prefers-reduced-motion). */
   motion: "full" | "reduced" | "system"
+  /** Author's viewer camera ("follow" default). */
+  camera?: "follow" | "fit"
   loop: boolean
   steps: TimelineStep[]
   /** Element id → time it is revealed. Absent = visible from t = 0. */

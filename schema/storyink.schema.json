@@ -62,6 +62,13 @@
               ],
               "description": "Playback motion (default full). full: always animate; reduced: always step through settled steps; system: follow prefers-reduced-motion. The reader's toolbar choice and #motion= win."
             },
+            "camera": {
+              "enum": [
+                "follow",
+                "fit"
+              ],
+              "description": "Viewer camera while playing (default follow). follow: zoom to a readable scale when fit is too small and pan to each step; fit: keep the whole diagram in view. The reader's Follow toggle and #camera= win."
+            },
             "end": {
               "enum": [
                 "hold",

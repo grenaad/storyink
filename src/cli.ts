@@ -4,7 +4,7 @@ import { fromMermaid } from "./core/mermaid/index.ts"
 import { formatDiagnostic, type Diagnostic } from "./core/validate.ts"
 import { VERSION } from "./generated/meta.ts"
 import { readSkill, skillPath } from "./node/assets.ts"
-import { loadSpec, parseSource, setStoryMotion, snapshot, writeAnimatedSvg, writeDiagram } from "./node/index.ts"
+import { loadSpec, parseSource, setStoryCamera, setStoryMotion, snapshot, writeAnimatedSvg, writeDiagram } from "./node/index.ts"
 import type { ThemeName } from "./theme/tokens.ts"
 
 const COLOR = !!process.stdout.isTTY && !process.env.NO_COLOR
@@ -22,12 +22,13 @@ const HELP = `${bold("storyink")} ${dim(VERSION)} - diagrams from JSON or Mermai
 ${bold("Usage")}
   storyink render <in.json|in.mmd|-> [-o out.html] [--svg out.svg] [--theme light|dark] [--story auto]
                  [--motion full|reduced|system]   story playback motion (default full; system = OS setting)
+                 [--camera follow|fit]   viewer camera while playing (default follow)
                  [--animated-svg out.svg [--theme light|dark|both] [--once] [--font system|embed]]
                    animated SVG (SMIL) for READMEs / PRs: plays inside <img>, no script
   storyink mermaid <in.mmd> [-o out.json]
   storyink validate <in> [--json]
   storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats]|--no-sheet]
-                   [--at 0.5,1.2,end] [--motion reduced] [--scale 2] [-o dir] [--json]
+                   [--at 0.5,1.2,end] [--motion reduced] [--camera follow] [--scale 2] [-o dir] [--json]
                    [--preview out.jpg [--preview-size 1024]]   compact one-image preview for agents
   storyink skill            print the SKILL.md path and content
   storyink --help | --version
@@ -50,7 +51,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const _: string[] = []
   const flags = new Map<string, string | true>()
-  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size", "--animated-svg", "--font", "--motion"])
+  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size", "--animated-svg", "--font", "--motion", "--camera"])
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "-" || !a.startsWith("-")) _.push(a)
@@ -121,6 +122,11 @@ async function main(argv: string[]): Promise<number> {
     if (motion !== undefined) {
       if (motion !== "full" && motion !== "reduced" && motion !== "system") throw new Error(`--motion must be full, reduced or system, got "${motion}"`)
       if (!setStoryMotion(loaded.spec, motion)) process.stderr.write(`${yellow("warn ")} --motion ignored: the spec has no story (add --story auto)\n`)
+    }
+    const camera = str(a, "--camera")
+    if (camera !== undefined) {
+      if (camera !== "follow" && camera !== "fit") throw new Error(`--camera must be follow or fit, got "${camera}"`)
+      if (!setStoryCamera(loaded.spec, camera)) process.stderr.write(`${yellow("warn ")} --camera ignored: the spec has no story (add --story auto)\n`)
     }
     const svg = str(a, "--svg")
     const animated = str(a, "--animated-svg")
@@ -194,6 +200,7 @@ async function main(argv: string[]): Promise<number> {
       ...(str(a, "--at") ? { at: str(a, "--at")!.split(",").map((x) => (x.trim() === "end" ? ("end" as const) : Number(x))) } : {}),
       scale,
       ...(str(a, "--motion") === "reduced" || str(a, "--motion") === "full" ? { motion: str(a, "--motion") as "full" | "reduced" } : {}),
+      ...(str(a, "--camera") === "follow" ? { camera: "follow" as const } : {}),
       ...(str(a, "-o", "--out") ? { outDir: str(a, "-o", "--out") } : {}),
       ...(str(a, "--t") ? { t: str(a, "--t") } : {}),
     })

@@ -98,11 +98,18 @@ export interface Story {
    * and `#motion=` still win.
    */
   motion?: StoryMotion
+  /**
+   * Viewer camera while playing (default "follow"): "follow" zooms to a readable scale when the
+   * fit view is too small and pans to each step; "fit" keeps the whole diagram in view. The
+   * reader's Follow toggle and `#camera=` still win.
+   */
+  camera?: StoryCamera
   /** Steps, or "auto" to derive them (like `"story": "auto"`, with the options above). */
   steps: StoryStep[] | "auto"
 }
 
 export type StoryMotion = "full" | "reduced" | "system"
+export type StoryCamera = "follow" | "fit"
 export const STORY_MOTIONS = ["full", "reduced", "system"] as const
 
 export interface GraphGroup {
