@@ -256,7 +256,8 @@ async function followChecks(s: S) {
   let eased = 0
   const seen = new Set<number>()
   const t0 = Date.now()
-  while (Date.now() - t0 < 9000) {
+  // Until the camera has jumped a few times (or 25 s), so a slow machine still sees steps advance.
+  while (Date.now() - t0 < 25000 && seen.size < 3) {
     const c = await camera(s)
     n++
     seen.add(c.goal.y)
@@ -267,8 +268,146 @@ async function followChecks(s: S) {
   await s.ev(`localStorage.clear()`)
 }
 
+// ── Animated step moves by real keyboard (→ / ←, Shift for chapters) ──
+type Step = { t0: number; t1: number; stop?: string }
+async function sampleUntilStill(s: S, ms = 6000) {
+  const out: { w: number; t: number; mode: string }[] = []
+  const t0 = Date.now()
+  while (Date.now() - t0 < ms) {
+    const st = await state(s)
+    out.push({ w: Date.now() - t0, ...st })
+    if (out.length > 3 && st.mode !== "playing") break
+    await Bun.sleep(25)
+  }
+  return out
+}
+/** |Δt| / Δwall over the middle half of a sampled move (skips the ease). */
+const midRate = (xs: { w: number; t: number }[]) => {
+  const inner = xs.slice(Math.floor(xs.length * 0.25), Math.ceil(xs.length * 0.75))
+  return inner.length > 1 ? Math.abs(inner[0].t - inner.at(-1)!.t) / ((inner.at(-1)!.w - inner[0].w) / 1000) : 0
+}
+async function stepChecks(s: S) {
+  const tag = "[keys]"
+  await s.go(url + "#motion=full")
+  await s.ev(`localStorage.clear()`)
+  await s.ev("location.reload()")
+  await Bun.sleep(1400)
+  const steps = JSON.parse(await s.ev(`JSON.stringify(window.__storyink.steps)`)) as Step[]
+  const dur = Number(await s.ev(`window.__storyink.duration`))
+  const marks = [...steps.map((x) => x.t0), dur]
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-3
+  const mid = (steps[2].t0 + steps[3].t0) / 2
+  await s.ev(`window.__storyink.setTime(${mid})`)
+  await Bun.sleep(200)
+  await s.key("ArrowRight")
+  const f = await sampleUntilStill(s)
+  const fEnd = f.at(-1)!
+  const fMid = f.filter((x) => x.t > mid + 0.02 && x.t < steps[3].t0 - 0.02)
+  const mono = f.every((x, i) => i === 0 || x.t >= f[i - 1].t - 1e-9)
+  check(fMid.length >= 5 && mono && fEnd.mode === "paused" && near(fEnd.t, steps[3].t0), `${tag} → animates ${mid.toFixed(2)} → ${fEnd.t.toFixed(3)} (next boundary ${steps[3].t0}) through ${fMid.length} intermediate times, then pauses`)
+  // ← from mid-step: backwards at ~2× to the previous boundary.
+  const mid2 = (steps[5].t0 + steps[6].t0) / 2
+  await s.ev(`window.__storyink.setTime(${mid2})`)
+  await Bun.sleep(200)
+  await s.key("ArrowLeft")
+  const b = await sampleUntilStill(s)
+  const bEnd = b.at(-1)!
+  const bMid = b.filter((x) => x.t < mid2 - 0.02 && x.t > steps[5].t0 + 0.02)
+  const dec = b.every((x, i) => i === 0 || x.t <= b[i - 1].t + 1e-9)
+  const rate = midRate(bMid)
+  // A short move is mostly ease; the 2× cruise is measured on the long Shift+← rewind below.
+  check(bMid.length >= 4 && dec && bEnd.mode === "paused" && near(bEnd.t, steps[5].t0) && rate > 1.2 && rate < 2.4, `${tag} ← rewinds ${mid2.toFixed(2)} → ${bEnd.t.toFixed(3)} (previous boundary ${steps[5].t0}) at ${rate.toFixed(2)}× through ${bMid.length} intermediate times`)
+  // Repeated → extends the target.
+  await s.ev(`window.__storyink.setTime(${steps[1].t0 + 0.05})`)
+  await Bun.sleep(200)
+  await s.key("ArrowRight")
+  await Bun.sleep(150)
+  await s.key("ArrowRight")
+  const tgt = JSON.parse(await s.ev(`JSON.stringify(window.__storyink.stepAnimated())`))
+  const r = (await sampleUntilStill(s, 9000)).at(-1)!
+  check(tgt?.target === steps[3].t0 && near(r.t, steps[3].t0) && r.mode === "paused", `${tag} →→ extends to the boundary after next (${r.t.toFixed(3)} = ${steps[3].t0})`)
+  // Opposite key mid-move reverses toward the adjacent boundary.
+  await s.ev(`window.__storyink.setTime(${steps[4].t0})`)
+  await Bun.sleep(200)
+  await s.key("ArrowRight")
+  await Bun.sleep(350)
+  await s.key("ArrowLeft")
+  const o = (await sampleUntilStill(s)).at(-1)!
+  check(near(o.t, steps[4].t0) && o.mode === "paused", `${tag} → then ← reverses back to ${o.t.toFixed(3)} (adjacent boundary ${steps[4].t0})`)
+  // Space pauses a move.
+  await s.ev(`window.__storyink.setTime(${steps[2].t0})`)
+  await Bun.sleep(200)
+  await s.key("ArrowRight")
+  await Bun.sleep(250)
+  await s.key(" ", "Space")
+  await Bun.sleep(150)
+  const sp = await state(s)
+  await Bun.sleep(300)
+  const sp2 = await state(s)
+  check(sp.mode === "paused" && sp.t > steps[2].t0 + 0.05 && sp.t < steps[3].t0 - 0.02 && sp2.t === sp.t, `${tag} space pauses a move mid-way (t=${sp.t.toFixed(2)})`)
+  // Shift+→ / Shift+← go by chapter.
+  const chapters = [0, ...steps.filter((x) => x.stop).map((x) => x.t0), dur]
+  await s.ev(`window.__storyink.setTime(${steps[0].t0 + 0.1})`)
+  await Bun.sleep(200)
+  const c0 = (await state(s)).t
+  const nextCh = chapters.find((x) => x > c0 + 0.02)!
+  await s.key("ArrowRight", "ArrowRight", true)
+  const sc = (await sampleUntilStill(s, 15000)).at(-1)!
+  await s.key("ArrowLeft", "ArrowLeft", true)
+  const prevCh = [...chapters].reverse().find((x) => x < sc.t - 0.02)!
+  const sbs = await sampleUntilStill(s, 15000)
+  const sb = sbs.at(-1)!
+  const cruise = midRate(sbs.filter((x) => x.mode === "playing"))
+  check(cruise > 1.8 && cruise < 2.2, `${tag} ← cruises at ${cruise.toFixed(2)}× story speed (${(sc.t - prevCh).toFixed(2)} s rewind)`)
+  check(near(sc.t, nextCh) && near(sb.t, prevCh), `${tag} Shift+→ plays to chapter ${nextCh} (${sc.t.toFixed(3)}), Shift+← rewinds to ${prevCh} (${sb.t.toFixed(3)})`)
+  // Page API: __storyink.step(dir) animates the same way and resolves when the move ends.
+  await s.ev(`window.__storyink.setTime(${steps[6].t0 + 0.05})`)
+  await Bun.sleep(200)
+  const api = JSON.parse(await s.ev(`window.__storyink.step(1).then(()=>JSON.stringify({...window.__storyink.state(), moving: window.__storyink.stepAnimated()}))`))
+  check(near(api.t, steps[7].t0) && api.mode === "paused" && api.moving === null, `${tag} __storyink.step(1) resolves paused at ${api.t.toFixed(3)} (boundary ${steps[7].t0})`)
+  // Reduced motion: → jumps between settled steps.
+  await s.go(url + "#motion=reduced")
+  await s.ev("location.reload()")
+  await Bun.sleep(1400)
+  await s.ev(`window.__storyink.setTime(0)`)
+  await Bun.sleep(200)
+  const r0 = (await state(s)).t
+  await s.key("ArrowRight")
+  const rs = await sampleUntilStill(s, 800)
+  const distinct = new Set(rs.map((x) => x.t.toFixed(4)))
+  check(distinct.size === 1 && rs[0].t > r0 && rs.every((x) => x.mode === "paused"), `${tag} reduced: → jumps ${r0.toFixed(2)} → ${rs[0].t.toFixed(3)} (no intermediate times)`)
+  void marks
+}
+async function stepFollowChecks(s: S) {
+  const tag = "[keys follow]"
+  await s.go(lurl)
+  await s.ev(`localStorage.clear()`)
+  await s.ev("location.reload()")
+  await Bun.sleep(1400)
+  await s.ev(`window.__storyink.setTime(${largeScene.timeline!.steps[3].t0 + 0.05})`)
+  await Bun.sleep(200)
+  let bad = 0
+  let n = 0
+  const ys = new Set<number>()
+  for (const [key, times] of [["ArrowRight", 9], ["ArrowLeft", 5]] as const)
+    for (let i = 0; i < times; i++) {
+      await s.key(key)
+      await sampleUntilStill(s, 5000)
+      await Bun.sleep(900)
+      const c = await camera(s)
+      n++
+      ys.add(c.goal.y)
+      if (!c.engaged || !onScreen(c, c.viewport, c.step)) bad++
+    }
+  check(bad === 0 && ys.size >= 3, `${tag} camera follows step moves forward and back: ${n} moves, ${ys.size} positions, ${bad} with the step off screen`)
+}
+
 let s = await session(["--force-prefers-no-reduced-motion"], { width: 1280, height: 800 })
 await followChecks(s)
+await stepFollowChecks(s)
+s.close()
+s = await session(["--force-prefers-no-reduced-motion"])
+await stepChecks(s)
 s.close()
 s = await session(["--force-prefers-no-reduced-motion"])
 // Download clicks from export must not open dialogs in headless Chrome.

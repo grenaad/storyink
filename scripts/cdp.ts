@@ -94,7 +94,11 @@ export async function session(flags: string[], size = { width: 1600, height: 900
       for (let i = 1; i <= steps; i++) await this.mouse("mouseMoved", a.x + ((b.x - a.x) * i) / steps, a.y + ((b.y - a.y) * i) / steps, 1)
       await this.mouse("mouseReleased", b.x, b.y)
     },
-    async key(k: string, code = k) { for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, key: k, code, ...(k.length === 1 ? { text: type === "keyDown" ? k : undefined } : {}) }) },
+    /** Real key press (Input.dispatchKeyEvent). `shift` sets the Shift modifier. */
+    async key(k: string, code = k, shift = false) {
+      const vk: Record<string, number> = { ArrowLeft: 37, ArrowRight: 39, " ": 32 }
+      for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, key: k, code, modifiers: shift ? 8 : 0, ...(vk[k] ? { windowsVirtualKeyCode: vk[k] } : {}), ...(k.length === 1 ? { text: type === "keyDown" ? k : undefined } : {}) })
+    },
     close() { ws.close(); try { process.kill(-child.pid!, "SIGKILL") } catch {}; fs.rmSync(dir, { recursive: true, force: true }) },
   }
 }
