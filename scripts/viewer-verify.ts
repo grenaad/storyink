@@ -13,10 +13,18 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { fitCamera, readableScale, stepFocus, toScene, toScreen, validate } from "../src/core/index.ts"
+import { beatChapters, beatGroups, beatStops, fitCamera, readableScale, stepFocus, toScene, toScreen, validate } from "../src/core/index.ts"
 import { loadSpec, writeDiagram } from "../src/node/index.ts"
 import { largeSpec } from "../test/fixtures/large.ts"
-import { session } from "./cdp.ts"
+import { killAll, session } from "./cdp.ts"
+
+// Chrome is always killed: cdp.ts hooks exit / signals / uncaught errors and runs a watchdog.
+// A hard deadline turns a hang into a failure (and a clean exit).
+setTimeout(() => {
+  console.error("FAIL viewer-verify: deadline (15 min) exceeded")
+  killAll()
+  process.exit(1)
+}, 15 * 60_000).unref()
 
 const root = path.resolve(import.meta.dir, "..")
 const D = fs.mkdtempSync(path.join(os.tmpdir(), "storyink-viewer-"))
@@ -292,50 +300,51 @@ async function stepChecks(s: S) {
   await s.ev(`localStorage.clear()`)
   await s.ev("location.reload()")
   await Bun.sleep(1400)
-  const steps = JSON.parse(await s.ev(`JSON.stringify(window.__storyink.steps)`)) as Step[]
+  // Moves land on settled beats (core `beatStops`); B[k] is beat k's stop, the last is the end.
+  const ckTl = toScene(loadSpec(path.join(root, "examples/checkout.architecture.json")).spec).timeline!
+  const B = beatStops(ckTl)
   const dur = Number(await s.ev(`window.__storyink.duration`))
-  const marks = [...steps.map((x) => x.t0), dur]
   const near = (a: number, b: number) => Math.abs(a - b) < 1e-3
-  const mid = (steps[2].t0 + steps[3].t0) / 2
+  const mid = (B[1] + B[2]) / 2
   await s.ev(`window.__storyink.setTime(${mid})`)
   await Bun.sleep(200)
   await s.key("ArrowRight")
   const f = await sampleUntilStill(s)
   const fEnd = f.at(-1)!
-  const fMid = f.filter((x) => x.t > mid + 0.02 && x.t < steps[3].t0 - 0.02)
+  const fMid = f.filter((x) => x.t > mid + 0.02 && x.t < B[2] - 0.02)
   const mono = f.every((x, i) => i === 0 || x.t >= f[i - 1].t - 1e-9)
-  check(fMid.length >= 5 && mono && fEnd.mode === "paused" && near(fEnd.t, steps[3].t0), `${tag} → animates ${mid.toFixed(2)} → ${fEnd.t.toFixed(3)} (next boundary ${steps[3].t0}) through ${fMid.length} intermediate times, then pauses`)
+  check(fMid.length >= 5 && mono && fEnd.mode === "paused" && near(fEnd.t, B[2]), `${tag} → animates ${mid.toFixed(2)} → ${fEnd.t.toFixed(3)} (next beat stop ${B[2]}) through ${fMid.length} intermediate times, then pauses`)
   // ← from mid-step: backwards at ~2× to the previous boundary.
-  const mid2 = (steps[5].t0 + steps[6].t0) / 2
+  const mid2 = (B[3] + B[4]) / 2
   await s.ev(`window.__storyink.setTime(${mid2})`)
   await Bun.sleep(200)
   await s.key("ArrowLeft")
   const b = await sampleUntilStill(s)
   const bEnd = b.at(-1)!
-  const bMid = b.filter((x) => x.t < mid2 - 0.02 && x.t > steps[5].t0 + 0.02)
+  const bMid = b.filter((x) => x.t < mid2 - 0.02 && x.t > B[3] + 0.02)
   const dec = b.every((x, i) => i === 0 || x.t <= b[i - 1].t + 1e-9)
   const rate = midRate(bMid)
   // A short move is mostly ease; the 2× cruise is measured on the long Shift+← rewind below.
-  check(bMid.length >= 4 && dec && bEnd.mode === "paused" && near(bEnd.t, steps[5].t0) && rate > 1.2 && rate < 2.4, `${tag} ← rewinds ${mid2.toFixed(2)} → ${bEnd.t.toFixed(3)} (previous boundary ${steps[5].t0}) at ${rate.toFixed(2)}× through ${bMid.length} intermediate times`)
+  check(bMid.length >= 4 && dec && bEnd.mode === "paused" && near(bEnd.t, B[3]) && rate > 1.2 && rate < 2.4, `${tag} ← rewinds ${mid2.toFixed(2)} → ${bEnd.t.toFixed(3)} (previous beat stop ${B[3]}) at ${rate.toFixed(2)}× through ${bMid.length} intermediate times`)
   // Repeated → extends the target.
-  await s.ev(`window.__storyink.setTime(${steps[1].t0 + 0.05})`)
+  await s.ev(`window.__storyink.setTime(${B[0] + 0.05})`)
   await Bun.sleep(200)
   await s.key("ArrowRight")
   await Bun.sleep(150)
   await s.key("ArrowRight")
   const tgt = JSON.parse(await s.ev(`JSON.stringify(window.__storyink.stepAnimated())`))
   const r = (await sampleUntilStill(s, 9000)).at(-1)!
-  check(tgt?.target === steps[3].t0 && near(r.t, steps[3].t0) && r.mode === "paused", `${tag} →→ extends to the boundary after next (${r.t.toFixed(3)} = ${steps[3].t0})`)
+  check(tgt?.target === B[2] && near(r.t, B[2]) && r.mode === "paused", `${tag} →→ extends to the boundary after next (${r.t.toFixed(3)} = ${B[2]})`)
   // Opposite key mid-move reverses toward the adjacent boundary.
-  await s.ev(`window.__storyink.setTime(${steps[4].t0})`)
+  await s.ev(`window.__storyink.setTime(${B[2]})`)
   await Bun.sleep(200)
   await s.key("ArrowRight")
   await Bun.sleep(350)
   await s.key("ArrowLeft")
   const o = (await sampleUntilStill(s)).at(-1)!
-  check(near(o.t, steps[4].t0) && o.mode === "paused", `${tag} → then ← reverses back to ${o.t.toFixed(3)} (adjacent boundary ${steps[4].t0})`)
+  check(near(o.t, B[2]) && o.mode === "paused", `${tag} → then ← reverses back to ${o.t.toFixed(3)} (adjacent beat stop ${B[2]})`)
   // Space pauses a move.
-  await s.ev(`window.__storyink.setTime(${steps[2].t0})`)
+  await s.ev(`window.__storyink.setTime(${B[1]})`)
   await Bun.sleep(200)
   await s.key("ArrowRight")
   await Bun.sleep(250)
@@ -344,10 +353,10 @@ async function stepChecks(s: S) {
   const sp = await state(s)
   await Bun.sleep(300)
   const sp2 = await state(s)
-  check(sp.mode === "paused" && sp.t > steps[2].t0 + 0.05 && sp.t < steps[3].t0 - 0.02 && sp2.t === sp.t, `${tag} space pauses a move mid-way (t=${sp.t.toFixed(2)})`)
+  check(sp.mode === "paused" && sp.t > B[1] + 0.05 && sp.t < B[2] - 0.02 && sp2.t === sp.t, `${tag} space pauses a move mid-way (t=${sp.t.toFixed(2)})`)
   // Shift+→ / Shift+← go by chapter.
-  const chapters = [0, ...steps.filter((x) => x.stop).map((x) => x.t0), dur]
-  await s.ev(`window.__storyink.setTime(${steps[0].t0 + 0.1})`)
+  const chapters = [0, ...beatChapters(ckTl)]
+  await s.ev(`window.__storyink.setTime(${B[0] + 0.1})`)
   await Bun.sleep(200)
   const c0 = (await state(s)).t
   const nextCh = chapters.find((x) => x > c0 + 0.02)!
@@ -361,10 +370,10 @@ async function stepChecks(s: S) {
   check(cruise > 1.8 && cruise < 2.2, `${tag} ← cruises at ${cruise.toFixed(2)}× story speed (${(sc.t - prevCh).toFixed(2)} s rewind)`)
   check(near(sc.t, nextCh) && near(sb.t, prevCh), `${tag} Shift+→ plays to chapter ${nextCh} (${sc.t.toFixed(3)}), Shift+← rewinds to ${prevCh} (${sb.t.toFixed(3)})`)
   // Page API: __storyink.step(dir) animates the same way and resolves when the move ends.
-  await s.ev(`window.__storyink.setTime(${steps[6].t0 + 0.05})`)
+  await s.ev(`window.__storyink.setTime(${B[3] + 0.05})`)
   await Bun.sleep(200)
   const api = JSON.parse(await s.ev(`window.__storyink.step(1).then(()=>JSON.stringify({...window.__storyink.state(), moving: window.__storyink.stepAnimated()}))`))
-  check(near(api.t, steps[7].t0) && api.mode === "paused" && api.moving === null, `${tag} __storyink.step(1) resolves paused at ${api.t.toFixed(3)} (boundary ${steps[7].t0})`)
+  check(near(api.t, B[4]) && api.mode === "paused" && api.moving === null, `${tag} __storyink.step(1) resolves paused at ${api.t.toFixed(3)} (beat stop ${B[4]})`)
   // Reduced motion: → jumps between settled steps.
   await s.go(url + "#motion=reduced")
   await s.ev("location.reload()")
@@ -376,7 +385,37 @@ async function stepChecks(s: S) {
   const rs = await sampleUntilStill(s, 800)
   const distinct = new Set(rs.map((x) => x.t.toFixed(4)))
   check(distinct.size === 1 && rs[0].t > r0 && rs.every((x) => x.mode === "paused"), `${tag} reduced: → jumps ${r0.toFixed(2)} → ${rs[0].t.toFixed(3)} (no intermediate times)`)
-  void marks
+}
+// ── → lands on a settled beat: the pulse's target box is visible (OpenWick architecture) ──
+const owSpec = JSON.parse(fs.readFileSync(path.join(root, "test/fixtures/openwick-architecture.json"), "utf8"))
+const owScene = toScene(owSpec)
+const owHtml = path.join(D, "openwick.html")
+writeDiagram(validate(owSpec).spec!, { html: owHtml })
+async function beatChecks(s: S) {
+  const tag = "[keys beats]"
+  await s.go(`file://${owHtml}#motion=full&camera=fit`)
+  await s.ev(`localStorage.clear()`)
+  await s.ev("location.reload()")
+  await Bun.sleep(1500)
+  const tl = owScene.timeline!
+  const B = beatStops(tl)
+  const G = beatGroups(tl)
+  // Beats whose pulse arrives at a box.
+  const cases = G.map((g, k) => ({ k, targets: tl.pulses.filter((p) => g.some((i) => p.id.startsWith(`pulse-${i}-`)) && p.target && owScene.nodes.some((n) => n.id === p.target)).map((p) => p.target!) })).filter((x) => x.targets.length && x.k > 0).slice(0, 8)
+  const vis = (id: string) => `(()=>{const n=document.querySelector('.si-stage [data-si="node:${id}"]');if(!n)return -1;let o=1;for(let e=n;e&&!e.classList?.contains('si-stage');e=e.parentElement)o*=Number(getComputedStyle(e).opacity);return o})()`
+  let bad: string[] = []
+  for (const c of cases) {
+    await s.ev(`window.__storyink.setTime(${B[c.k - 1]})`)
+    await Bun.sleep(150)
+    await s.key("ArrowRight")
+    const end = (await sampleUntilStill(s, 8000)).at(-1)!
+    await Bun.sleep(120)
+    // A dot in flight (the arrival ring and cooling trail may still fade out after it lands).
+    const pulses = Number(await s.ev(`document.querySelectorAll('.si-stage [data-si^="pulse:"] circle.si-pulse').length`))
+    const ops = await Promise.all(c.targets.map((id) => s.ev(vis(id)).then(Number)))
+    if (Math.abs(end.t - B[c.k]) > 1e-3 || end.mode !== "paused" || pulses || ops.some((o) => o < 0.999)) bad.push(`beat ${c.k}: t=${end.t.toFixed(3)} (stop ${B[c.k]}), ${pulses} pulses, ${c.targets.map((id, i) => `${id}=${ops[i].toFixed(2)}`).join(" ")}`)
+  }
+  check(cases.length >= 5 && !bad.length, `${tag} → from ${cases.length} beat stops lands on the next settled beat with the dot's target box visible, no pulse in flight${bad.length ? `: ${bad.join("; ")}` : ""}`)
 }
 async function stepFollowChecks(s: S) {
   const tag = "[keys follow]"
@@ -407,6 +446,7 @@ await followChecks(s)
 await stepFollowChecks(s)
 s.close()
 s = await session(["--force-prefers-no-reduced-motion"])
+await beatChecks(s)
 await stepChecks(s)
 s.close()
 s = await session(["--force-prefers-no-reduced-motion"])
