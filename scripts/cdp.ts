@@ -4,24 +4,104 @@ import fs from "fs"
 import os from "os"
 import path from "path"
 import { findBrowser } from "../src/node/index.ts"
-export async function wallShots(url: string, opts: { width: number; height: number; selector?: string; waits: number[]; out: string; reducedMotion?: boolean; scrollTo?: string }) {
-  const b = findBrowser()!
+
+/**
+ * Every Chrome this module starts. Each runs in its own process group (detached) and is killed:
+ * by `close()` / `finally`; on process exit, SIGINT, SIGTERM, SIGHUP and uncaught errors; and by a
+ * detached watchdog shell if this process dies uncatchably (SIGKILL, tool timeout) or after
+ * `MAX_LIFETIME_S`, so no headless Chrome outlives a verify run.
+ */
+const live = new Map<number, string>()
+const MAX_LIFETIME_S = 20 * 60
+function killGroup(pid: number) {
+  try {
+    process.kill(-pid, "SIGKILL")
+  } catch {}
+  const dir = live.get(pid)
+  live.delete(pid)
+  if (dir) fs.rmSync(dir, { recursive: true, force: true })
+}
+export function killAll() {
+  for (const pid of [...live.keys()]) killGroup(pid)
+}
+let hooked = false
+function hookExit() {
+  if (hooked) return
+  hooked = true
+  process.on("exit", killAll)
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
+    process.on(sig, () => {
+      killAll()
+      process.exit(130)
+    })
+  process.on("uncaughtException", (e) => {
+    killAll()
+    console.error(e)
+    process.exit(1)
+  })
+  process.on("unhandledRejection", (e) => {
+    killAll()
+    console.error(e)
+    process.exit(1)
+  })
+}
+/** Start headless Chrome in its own process group, registered for cleanup, with a watchdog. */
+export function launch(args: string[]) {
+  hookExit()
+  const b = findBrowser()
+  if (!b) throw new Error("no Chrome/Chromium found (set STORYINK_CHROME)")
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cdp-"))
   const port = 9300 + Math.floor(Math.random() * 500)
-  const child = spawn(b.path, [...(b.flavor === "chrome" ? ["--headless=new"] : []), `--remote-debugging-port=${port}`, `--user-data-dir=${dir}`, "--hide-scrollbars", "--force-device-scale-factor=1", ...(opts.reducedMotion ? [] : ["--force-prefers-no-reduced-motion"]), `--window-size=${opts.width},${opts.height}`, "about:blank"], { stdio: "ignore", detached: true })
+  const child = spawn(b.path, [...(b.flavor === "chrome" ? ["--headless=new"] : []), `--remote-debugging-port=${port}`, `--user-data-dir=${dir}`, "--hide-scrollbars", "--force-device-scale-factor=1", ...args, "about:blank"], { stdio: "ignore", detached: true })
+  const pid = child.pid!
+  live.set(pid, dir)
+  child.on("exit", () => live.delete(pid))
+  child.unref()
+  // Watchdog: outlives us only to kill Chrome's group once we are gone (or after the cap).
+  const wd = spawn("/bin/sh", ["-c", `i=0; while kill -0 ${process.pid} 2>/dev/null && kill -0 ${pid} 2>/dev/null && [ $i -lt ${MAX_LIFETIME_S} ]; do sleep 1; i=$((i+1)); done; kill -9 -${pid} 2>/dev/null; rm -rf "${dir}"`], { stdio: "ignore", detached: true })
+  wd.unref()
+  return { pid, port, dir, kill: () => killGroup(pid) }
+}
+/** One CDP call; rejects after 30 s so a dead Chrome fails the run instead of hanging it. */
+function rpc(ws: WebSocket, pending: Map<number, (v: any) => void>, i: number, method: string, params: any) {
+  return new Promise<any>((r, j) => {
+    const timer = setTimeout(() => {
+      pending.delete(i)
+      j(new Error(`CDP ${method} timed out`))
+    }, 30_000)
+    pending.set(i, (v) => {
+      clearTimeout(timer)
+      r(v)
+    })
+    ws.send(JSON.stringify({ id: i, method, params }))
+  })
+}
+async function connect(port: number) {
+  let list: any
+  for (let i = 0; i < 50; i++) {
+    try {
+      list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
+      if (list.length) break
+    } catch {}
+    await Bun.sleep(100)
+  }
+  const page = list?.find((x: any) => x.type === "page")
+  if (!page) throw new Error(`Chrome on port ${port} never exposed a page`)
+  const ws = new WebSocket(page.webSocketDebuggerUrl)
+  await new Promise((r, j) => {
+    ws.onopen = r
+    ws.onerror = j
+  })
+  return ws
+}
+export async function wallShots(url: string, opts: { width: number; height: number; selector?: string; waits: number[]; out: string; reducedMotion?: boolean; scrollTo?: string }) {
+  const c = launch([...(opts.reducedMotion ? [] : ["--force-prefers-no-reduced-motion"]), `--window-size=${opts.width},${opts.height}`])
   try {
-    let list: any
-    for (let i = 0; i < 50; i++) {
-      try { list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json(); if (list.length) break } catch {}
-      await Bun.sleep(100)
-    }
-    const page = list.find((x: any) => x.type === "page")
-    const ws = new WebSocket(page.webSocketDebuggerUrl)
-    await new Promise((r) => (ws.onopen = r))
+    const ws = await connect(c.port)
     let id = 0
     const pending = new Map<number, (v: any) => void>()
     ws.onmessage = (e) => { const m = JSON.parse(String(e.data)); if (m.id && pending.has(m.id)) { pending.get(m.id)!(m); pending.delete(m.id) } }
-    const send = (method: string, params: any = {}) => new Promise<any>((r) => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })) })
+    const send = (method: string, params: any = {}) => rpc(ws, pending, ++id, method, params)
     await send("Page.enable")
     await send("Emulation.setDeviceMetricsOverride", { width: opts.width, height: opts.height, deviceScaleFactor: 1, mobile: false })
     await send("Page.navigate", { url })
@@ -45,23 +125,22 @@ export async function wallShots(url: string, opts: { width: number; height: numb
     ws.close()
     return info
   } finally {
-    try { process.kill(-child.pid!, "SIGKILL") } catch {}
-    fs.rmSync(dir, { recursive: true, force: true })
+    c.kill()
   }
 }
 export async function session(flags: string[], size = { width: 1600, height: 900 }) {
-  const b = findBrowser()!
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cdp-"))
-  const port = 9300 + Math.floor(Math.random() * 500)
-  const child = spawn(b.path, [...(b.flavor === "chrome" ? ["--headless=new"] : []), `--remote-debugging-port=${port}`, `--user-data-dir=${dir}`, "--hide-scrollbars", "--force-device-scale-factor=1", ...flags, `--window-size=${size.width},${size.height}`, "about:blank"], { stdio: "ignore", detached: true })
-  let list: any
-  for (let i = 0; i < 50; i++) { try { list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json(); if (list.length) break } catch {} ; await Bun.sleep(100) }
-  const ws = new WebSocket(list.find((x: any) => x.type === "page").webSocketDebuggerUrl)
-  await new Promise((r) => (ws.onopen = r))
+  const c = launch([...flags, `--window-size=${size.width},${size.height}`])
+  let ws: WebSocket
+  try {
+    ws = await connect(c.port)
+  } catch (e) {
+    c.kill()
+    throw e
+  }
   let id = 0
   const pending = new Map<number, (v: any) => void>()
   ws.onmessage = (e) => { const m = JSON.parse(String(e.data)); if (m.id && pending.has(m.id)) { pending.get(m.id)!(m); pending.delete(m.id) } }
-  const send = (method: string, params: any = {}) => new Promise<any>((r) => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })) })
+  const send = (method: string, params: any = {}) => rpc(ws, pending, ++id, method, params)
   await send("Page.enable")
   await send("Emulation.setDeviceMetricsOverride", { width: size.width, height: size.height, deviceScaleFactor: 1, mobile: false })
   const ev = async (expr: string) => (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true })).result?.result?.value
@@ -99,6 +178,11 @@ export async function session(flags: string[], size = { width: 1600, height: 900
       const vk: Record<string, number> = { ArrowLeft: 37, ArrowRight: 39, " ": 32 }
       for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, key: k, code, modifiers: shift ? 8 : 0, ...(vk[k] ? { windowsVirtualKeyCode: vk[k] } : {}), ...(k.length === 1 ? { text: type === "keyDown" ? k : undefined } : {}) })
     },
-    close() { ws.close(); try { process.kill(-child.pid!, "SIGKILL") } catch {}; fs.rmSync(dir, { recursive: true, force: true }) },
+    close() {
+      try {
+        ws.close()
+      } catch {}
+      c.kill()
+    },
   }
 }
