@@ -61,7 +61,7 @@ export interface Timeline {
   pulses: TimelinePulse[]
   glows: TimelineGlow[]
   /** A caption belongs to its step: shown from t0, gone by t1 (step end + settle, or the next caption). */
-  captions: { text: string; t0: number; t1: number; step: number; handoff: boolean }[]
+  captions: { i?: number; text: string; t0: number; t1: number; step: number; handoff: boolean }[]
   counters: Record<string, { node: string; start: number; events: { t: number; to: number }[]; prefix?: string; suffix?: string; decimals: number }>
 }
 
@@ -73,7 +73,8 @@ export interface PulseFrame {
   o: number
   halo?: { r: number; o: number }
   ring?: { x: number; y: number; r: number; w: number; o: number }
-  trail: { d: string; o: number }[]
+  /** Trail segments; `k` = segment index (0 nearest the dot), `s0..s1` = arc-length span on the route. */
+  trail: { d: string; o: number; k?: number; s0?: number; s1?: number }[]
 }
 
 export interface GlowFrame {
@@ -100,7 +101,7 @@ export interface Frame {
   flash: Record<string, number>
   counters: Record<string, string>
   /** `current` = the caption of the step in progress; a superseded line is dimmed (0.52) and not current. */
-  captions: { text: string; o: number; words: number[]; current: boolean }[]
+  captions: { i?: number; text: string; o: number; words: number[]; current: boolean }[]
   /** Every event has settled (the frame equals the static diagram). */
   settled: boolean
 }

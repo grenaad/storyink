@@ -142,8 +142,10 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
         const tail = Math.min(72, s)
         const alphas = [0.55, 0.3, 0.12]
         alphas.forEach((a, k) => {
-          const d = subPath(p.points, s - (tail * (k + 1)) / 3, s - (tail * k) / 3)
-          if (d) pf.trail.push({ d, o: a })
+          const s0 = s - (tail * (k + 1)) / 3
+          const s1 = s - (tail * k) / 3
+          const d = subPath(p.points, s0, s1)
+          if (d) pf.trail.push({ d, o: a, k, s0: r2(s0), s1: r2(s1) })
         })
       } else {
         pf.x = arrive.x
@@ -158,8 +160,10 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
         if (cool > 0.01) {
           const tail = Math.min(72, p.length)
           ;[0.55, 0.3, 0.12].forEach((a, k) => {
-            const d = subPath(p.points, p.length - (tail * (k + 1)) / 3, p.length - (tail * k) / 3)
-            if (d) pf.trail.push({ d, o: r2(a * cool) })
+            const s0 = p.length - (tail * (k + 1)) / 3
+            const s1 = p.length - (tail * k) / 3
+            const d = subPath(p.points, s0, s1)
+            if (d) pf.trail.push({ d, o: r2(a * cool), k, s0: r2(s0), s1: r2(s1) })
           })
         }
       }
@@ -202,9 +206,10 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
       const dim = 1 - (1 - S.dimSuperseded) * (reduced ? 1 : react(t - c.t0))
       const gone = reduced ? 0 : 1 - smoothstep((t - c.t0 - 0.9) / 0.4)
       const o = r2(dim * gone)
-      if (o > 0.01) frame.captions.push({ text: prev.text, o, words: prev.text.split(/\s+/).map(() => 1), current: false })
+      if (o > 0.01) frame.captions.push({ i: cur - 1, text: prev.text, o, words: prev.text.split(/\s+/).map(() => 1), current: false })
     }
     frame.captions.push({
+      i: cur,
       text: c.text,
       o: r2(fadeOut),
       words: words.map((_, i) => r2(reduced ? 1 : spring(t - c.t0 - i * stagger, f))),
