@@ -14,3 +14,4 @@ export { storyState, restFrame, beatTimes, counterValue, type StateOptions } fro
 export { compileStory, resolveEdge, readTime, type CompileResult } from "./story/compile.ts"
 export { autoStory } from "./story/auto.ts"
 export type { Timeline, TimelineStep, TimelinePulse, TimelineGlow, TimelineDraw, PulseFrame, GlowFrame, Frame as StoryFrame } from "./story/types.ts"
+export { renderAnimatedSvg, animatedSvg, animatedHeaderHeight, pinnedCss, simplify, simplifyError, type AnimatedSvgOptions, type AnimatedSvgInfo } from "./render/smil.tsx"

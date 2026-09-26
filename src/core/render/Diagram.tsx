@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactElement } from "react"
+import type { CSSProperties, ReactElement, ReactNode } from "react"
 import type { Frame } from "../story/types.ts"
 import { geometry as G } from "../../theme/tokens.ts"
 import type { Arrowhead, Scene, SceneEdge, SceneFrame, SceneGroup, SceneNode } from "../scene.ts"
@@ -13,7 +13,12 @@ export interface DiagramProps {
   className?: string
   /** Storyboard frame; omitted = the resting (static) diagram. */
   frame?: Frame
+  /** Animated-SVG hook: SMIL children (or extra siblings) for a keyed element. */
+  smil?: Smil
 }
+
+/** Returns SMIL elements for a key such as `node:<id>` or `wire:<id>` (undefined = none). */
+export type Smil = (key: string) => ReactNode
 
 type Vis = { o: number; dy: number } | undefined
 const opStyle = (v: Vis, extra?: number): CSSProperties | undefined => {
@@ -118,7 +123,7 @@ function NodeShape({ n }: { n: SceneNode }) {
   }
 }
 
-function NodeView({ n, copy, fr }: { n: SceneNode; copy: string; fr?: Frame }) {
+function NodeView({ n, copy, fr, smil }: { n: SceneNode; copy: string; fr?: Frame; smil?: Smil }) {
   const cx = n.text.cx
   const actorIcon = n.shape === "actor" && n.tag
   const tagW = n.tag.length * 9.5 * 0.68
@@ -135,7 +140,9 @@ function NodeView({ n, copy, fr }: { n: SceneNode; copy: string; fr?: Frame }) {
       transform={`translate(${n.x} ${f(n.y + (v?.dy ?? 0))})`}
       style={opStyle(v)}
     >
+      {smil?.(`node:${n.id}`)}
       <NodeShape n={n} />
+      {smil?.(`glow:${n.id}`)}
       {glows.map((g, k) => {
         const gid = `si-glow-${copy}-${n.id}-${k}`.replace(/[^\w-]/g, "_")
         return (
@@ -166,6 +173,7 @@ function NodeView({ n, copy, fr }: { n: SceneNode; copy: string; fr?: Frame }) {
       {n.label.map((line, k) => (
         <text key={`l${k}`} className={n.shape === "pill" ? "si-label si-pill-label" : "si-label"} x={f(cx)} y={f(n.text.labelY[k])} textAnchor="middle" style={flashFill(flash, "ink")}>
           {line}
+          {smil?.(`flash:${n.id}`)}
         </text>
       ))}
       {n.detail.map((line, k) => (
@@ -179,17 +187,20 @@ function NodeView({ n, copy, fr }: { n: SceneNode; copy: string; fr?: Frame }) {
           <tspan className="si-counter-value" data-counter={n.counter.id} style={flashFill(flash, "ink")}>
             {counterText}
           </tspan>
+          {smil?.(`ctext:${n.counter.id}`)}
         </text>
       ) : null}
+      {n.counter ? smil?.(`cdup:${n.counter.id}`) : null}
     </g>
   )
 }
 
-function GroupView({ g, fr }: { g: SceneGroup; fr?: Frame }) {
+function GroupView({ g, fr, smil }: { g: SceneGroup; fr?: Frame; smil?: Smil }) {
   const labelText = g.composite ? g.label : g.label.toUpperCase()
   const v = fr?.el[g.id]
   return (
     <g className="si-grp" data-si={`group:${g.id}`} style={opStyle(v)} transform={v?.dy ? `translate(0 ${f(v.dy)})` : undefined}>
+      {smil?.(`group:${g.id}`)}
       <rect className={g.composite ? "si-group-composite" : "si-group"} x={g.x} y={g.y} width={g.w} height={g.h} rx={G.groupRadius} />
       {g.composite ? (
         <line className="si-group-rule" x1={g.x} x2={g.x + g.w} y1={g.y + 24} y2={g.y + 24} />
@@ -202,7 +213,7 @@ function GroupView({ g, fr }: { g: SceneGroup; fr?: Frame }) {
   )
 }
 
-function EdgeView({ e, fr }: { e: SceneEdge; fr?: Frame }) {
+function EdgeView({ e, fr, smil }: { e: SceneEdge; fr?: Frame; smil?: Smil }) {
   const cls = `si-wire${e.style === "dashed" ? " si-dashed" : e.style === "thick" ? " si-thick" : ""}`
   const d = fr?.draw[e.id]
   const drawing = d !== undefined
@@ -217,14 +228,18 @@ function EdgeView({ e, fr }: { e: SceneEdge; fr?: Frame }) {
     : undefined
   return (
     <g className="si-edge" data-si={`edge:${e.id}`}>
-      <path className={cls} d={e.d} style={wireStyle} />
+      <path className={cls} d={e.d} style={wireStyle}>
+        {smil?.(`wire:${e.id}`)}
+      </path>
       {e.heads.map((h, k) => (
         <g key={k} style={drawing ? { opacity: d >= 0.98 ? 1 : 0 } : undefined}>
+          {smil?.(`head:${e.id}`)}
           <Head h={h} />
         </g>
       ))}
       {e.seq !== undefined ? (
         <g style={drawing ? { opacity: d > 0 ? 1 : 0 } : undefined}>
+          {smil?.(`seq:${e.id}`)}
           <circle className="si-seq" cx={e.points[0].x} cy={e.points[0].y} r={7} />
           <text className="si-seq-text" x={e.points[0].x} y={e.points[0].y + 3} textAnchor="middle">
             {e.seq}
@@ -235,13 +250,14 @@ function EdgeView({ e, fr }: { e: SceneEdge; fr?: Frame }) {
   )
 }
 
-function LabelView({ e, fr }: { e: SceneEdge; fr?: Frame }) {
+function LabelView({ e, fr, smil }: { e: SceneEdge; fr?: Frame; smil?: Smil }) {
   const l = e.label!
   const text = e.seq !== undefined ? l.text.replace(/^\d+\.\s*/, "") : l.text
   const d = fr?.draw[e.id]
   const o = d === undefined ? 1 : Math.max(0, Math.min(1, (d - 0.35) / 0.4))
   return (
     <g className="si-lbl" data-si={`label:${l.id}`} data-box={`${l.x},${l.y},${l.w},${l.h}`} style={o < 1 ? { opacity: +o.toFixed(3) } : undefined}>
+      {smil?.(`elabel:${e.id}`)}
       <rect className={`si-pill si-on-${l.surface ?? "bg"}`} x={l.x} y={l.y} width={l.w} height={l.h} />
       <text className="si-edge-label" x={f(l.x + l.w / 2)} y={f(l.y + l.h / 2 + 3.8)} textAnchor="middle">
         {text}
@@ -250,9 +266,10 @@ function LabelView({ e, fr }: { e: SceneEdge; fr?: Frame }) {
   )
 }
 
-function FrameBox({ fr, frame }: { fr: SceneFrame; frame?: Frame }) {
+function FrameBox({ fr, frame, smil }: { fr: SceneFrame; frame?: Frame; smil?: Smil }) {
   return (
     <g className="si-frm" data-si={`frame:${fr.id}`} style={opStyle(frame?.el[fr.id])}>
+      {smil?.(`frame:${fr.id}`)}
       <rect className="si-frame" x={fr.x} y={fr.y} width={fr.w} height={fr.h} rx={2} />
       {fr.sections.map((s, k) => (
         <line key={k} className="si-frame-rule" x1={fr.x} x2={fr.x + fr.w} y1={s.y} y2={s.y} />
@@ -262,7 +279,7 @@ function FrameBox({ fr, frame }: { fr: SceneFrame; frame?: Frame }) {
 }
 
 /** Frame tag and guard labels sit above lifelines and activations. */
-function FrameLabels({ fr, frame }: { fr: SceneFrame; frame?: Frame }) {
+function FrameLabels({ fr, frame, smil }: { fr: SceneFrame; frame?: Frame; smil?: Smil }) {
   const tagH = 18
   const tag = fr.kind.toUpperCase()
   const guard = (text: string, x: number, y: number, key?: number) => {
@@ -278,6 +295,7 @@ function FrameLabels({ fr, frame }: { fr: SceneFrame; frame?: Frame }) {
   }
   return (
     <g className="si-frm-labels" data-si={`frame-label:${fr.id}`} style={opStyle(frame?.el[fr.id])}>
+      {smil?.(`frame:${fr.id}`)}
       <path className="si-frame-tag" d={`M${fr.x} ${fr.y}H${f(fr.x + fr.tagW)}V${fr.y + tagH - 5}L${f(fr.x + fr.tagW - 5)} ${fr.y + tagH}H${fr.x}Z`} />
       <text className="si-frame-kind" x={f(fr.x + 8)} y={fr.y + 12.5}>
         {tag}
@@ -307,7 +325,7 @@ function PulseLayer({ fr }: { fr: Frame }) {
   )
 }
 
-export function Diagram({ scene, style, copy = "", className, frame }: DiagramProps): ReactElement {
+export function Diagram({ scene, style, copy = "", className, frame, smil }: DiagramProps): ReactElement {
   const vb = scene.viewBox
   const fr = frame && (Object.keys(frame.el).length || Object.keys(frame.draw).length || Object.keys(frame.grow).length || frame.pulses.length || frame.glows.length || Object.keys(frame.flash).length || Object.keys(frame.counters).length) ? frame : undefined
   // Ports follow their wire: the out port appears as the wire starts, the in port when it lands.
@@ -357,52 +375,59 @@ export function Diagram({ scene, style, copy = "", className, frame }: DiagramPr
       </g>
       <g className="si-groups">
         {scene.groups.map((g) => (
-          <GroupView key={g.id} g={g} fr={fr} />
+          <GroupView key={g.id} g={g} fr={fr} smil={smil} />
         ))}
       </g>
       <g className="si-frames">
         {scene.frames.map((fr) => (
-          <FrameBox key={fr.id} fr={fr} frame={frame} />
+          <FrameBox key={fr.id} fr={fr} frame={frame} smil={smil} />
         ))}
       </g>
       <g className="si-lifelines">
         {scene.lifelines.map((l) => (
-          <line key={l.id} className="si-life" data-si={`lifeline:${l.id}`} x1={l.x} x2={l.x} y1={l.y1} y2={l.y2} style={opStyle(partOf(l.participant))} />
+          <line key={l.id} className="si-life" data-si={`lifeline:${l.id}`} x1={l.x} x2={l.x} y1={l.y1} y2={l.y2} style={opStyle(partOf(l.participant))}>
+            {smil?.(`life:${l.participant}`)}
+          </line>
         ))}
       </g>
       <g className="si-activations">
         {scene.activations.map((a) => (
-          <rect key={a.id} className="si-act" data-si={`activation:${a.id}`} x={a.x} y={a.y} width={a.w} height={frame?.grow[a.id] ?? a.h} rx={1} style={opStyle(partOf(a.id))} />
+          <rect key={a.id} className="si-act" data-si={`activation:${a.id}`} x={a.x} y={a.y} width={a.w} height={frame?.grow[a.id] ?? a.h} rx={1} style={opStyle(partOf(a.id))}>
+            {smil?.(`act:${a.id}`)}
+          </rect>
         ))}
       </g>
       <g className="si-frame-labels">
         {scene.frames.map((fr) => (
-          <FrameLabels key={fr.id} fr={fr} frame={frame} />
+          <FrameLabels key={fr.id} fr={fr} frame={frame} smil={smil} />
         ))}
       </g>
       <g className="si-edges">
         {scene.edges.map((e) => (
-          <EdgeView key={e.id} e={e} fr={fr} />
+          <EdgeView key={e.id} e={e} fr={fr} smil={smil} />
         ))}
       </g>
       <g className="si-nodes">
         {scene.nodes.map((n) => (
-          <NodeView key={n.id} n={n} copy={copy} fr={fr} />
+          <NodeView key={n.id} n={n} copy={copy} fr={fr} smil={smil} />
         ))}
       </g>
       <g className="si-ports">
         {scene.ports.filter((p) => !p.covered).map((p) => (
-          <circle key={p.id} className="si-port" data-si={`port:${p.id}`} cx={p.x} cy={p.y} r={G.portRadius} style={portOpacity(p)} />
+          <circle key={p.id} className="si-port" data-si={`port:${p.id}`} cx={p.x} cy={p.y} r={G.portRadius} style={portOpacity(p)}>
+            {smil?.(`port:${p.id}`)}
+          </circle>
         ))}
       </g>
       <g className="si-labels">
         {scene.edges
           .filter((e) => e.label)
           .map((e) => (
-            <LabelView key={e.id} e={e} fr={fr} />
+            <LabelView key={e.id} e={e} fr={fr} smil={smil} />
           ))}
       </g>
       {fr ? <PulseLayer fr={fr} /> : null}
+      {smil?.("overlay")}
     </svg>
   )
 }
