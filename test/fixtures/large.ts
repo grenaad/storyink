@@ -1,5 +1,5 @@
 /** ~25 nodes in 5 stacked tiers, ~20 story steps: the tall, many-beat shape that hung real sessions. */
-export function largeSpec() {
+export function largeSpec(direction: "TB" | "LR" = "TB") {
   const tiers = ["edge", "api", "svc", "data", "ops"]
   const groups = tiers.map((id) => ({ id, label: `${id.toUpperCase()} tier` }))
   const nodes = Array.from({ length: 25 }, (_, i) => ({
@@ -21,6 +21,6 @@ export function largeSpec() {
     const j = k % 5
     steps.push({ at: "+0.3", pulse: `n${t * 5 + j}->n${(t + 1) * 5 + j}`, ...(k % 3 === 0 ? { caption: `Tier ${t + 1} hands work to tier ${t + 2}` } : {}) })
   }
-  return { type: "architecture", title: "Large system", subtitle: "Regression fixture", direction: "TB", groups, nodes, edges, story: { steps } }
+  return { type: "architecture", title: "Large system", subtitle: "Regression fixture", direction, groups, nodes, edges, story: { steps } }
 }
 
