@@ -13,7 +13,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { beatChapters, beatGroups, beatStops, fitCamera, readableScale, stepFocus, toScene, toScreen, validate } from "../src/core/index.ts"
+import { beatGroups, beatMotionChapters, beatMotionEnds, beatMotionStarts, beatStops, captionForBeat, fitCamera, readableScale, stepFocus, toScene, toScreen, validate } from "../src/core/index.ts"
 import { loadSpec, writeDiagram } from "../src/node/index.ts"
 import { largeSpec } from "../test/fixtures/large.ts"
 import { killAll, session } from "./cdp.ts"
@@ -291,8 +291,14 @@ async function sampleUntilStill(s: S, ms = 6000) {
 }
 /** |Δt| / Δwall over the middle half of a sampled move (skips the ease). */
 const midRate = (xs: { w: number; t: number }[]) => {
-  const inner = xs.slice(Math.floor(xs.length * 0.25), Math.ceil(xs.length * 0.75))
-  return inner.length > 1 ? Math.abs(inner[0].t - inner.at(-1)!.t) / ((inner.at(-1)!.w - inner[0].w) / 1000) : 0
+  // Median of per-sample |Δt|/Δwall: robust to the ease and to gap skips (jumps).
+  const r: number[] = []
+  for (let i = 1; i < xs.length; i++) {
+    const dw = (xs[i].w - xs[i - 1].w) / 1000
+    if (dw > 0.005) r.push(Math.abs(xs[i].t - xs[i - 1].t) / dw)
+  }
+  r.sort((a, b) => a - b)
+  return r.length ? r[Math.floor(r.length / 2)] : 0
 }
 async function stepChecks(s: S) {
   const tag = "[keys]"
@@ -300,12 +306,14 @@ async function stepChecks(s: S) {
   await s.ev(`localStorage.clear()`)
   await s.ev("location.reload()")
   await Bun.sleep(1400)
-  // Moves land on settled beats (core `beatStops`); B[k] is beat k's stop, the last is the end.
+  // Full-motion moves stop at each beat's graph-motion end (core `beatMotionEnds`), then the end;
+  // St[k] is beat k's motion start. Gaps between (reading holds) are skipped.
   const ckTl = toScene(loadSpec(path.join(root, "examples/checkout.architecture.json")).spec).timeline!
-  const B = beatStops(ckTl)
+  const B = [...beatMotionEnds(ckTl), ckTl.duration]
+  const St = beatMotionStarts(ckTl)
   const dur = Number(await s.ev(`window.__storyink.duration`))
   const near = (a: number, b: number) => Math.abs(a - b) < 1e-3
-  const mid = (B[1] + B[2]) / 2
+  const mid = (St[2] + B[2]) / 2
   await s.ev(`window.__storyink.setTime(${mid})`)
   await Bun.sleep(200)
   await s.key("ArrowRight")
@@ -315,13 +323,13 @@ async function stepChecks(s: S) {
   const mono = f.every((x, i) => i === 0 || x.t >= f[i - 1].t - 1e-9)
   check(fMid.length >= 5 && mono && fEnd.mode === "paused" && near(fEnd.t, B[2]), `${tag} → animates ${mid.toFixed(2)} → ${fEnd.t.toFixed(3)} (next beat stop ${B[2]}) through ${fMid.length} intermediate times, then pauses`)
   // ← from mid-step: backwards at ~2× to the previous boundary.
-  const mid2 = (B[3] + B[4]) / 2
+  const mid2 = (St[4] + B[4]) / 2
   await s.ev(`window.__storyink.setTime(${mid2})`)
   await Bun.sleep(200)
   await s.key("ArrowLeft")
   const b = await sampleUntilStill(s)
   const bEnd = b.at(-1)!
-  const bMid = b.filter((x) => x.t < mid2 - 0.02 && x.t > B[3] + 0.02)
+  const bMid = b.filter((x) => x.t < mid2 - 0.02 && x.t > St[4] + 0.02)
   const dec = b.every((x, i) => i === 0 || x.t <= b[i - 1].t + 1e-9)
   const rate = midRate(bMid)
   // A short move is mostly ease; the 2× cruise is measured on the long Shift+← rewind below.
@@ -353,9 +361,9 @@ async function stepChecks(s: S) {
   const sp = await state(s)
   await Bun.sleep(300)
   const sp2 = await state(s)
-  check(sp.mode === "paused" && sp.t > B[1] + 0.05 && sp.t < B[2] - 0.02 && sp2.t === sp.t, `${tag} space pauses a move mid-way (t=${sp.t.toFixed(2)})`)
+  check(sp.mode === "paused" && sp.t > St[2] + 0.05 && sp.t < B[2] - 0.02 && sp2.t === sp.t, `${tag} space pauses a move mid-way (t=${sp.t.toFixed(2)})`)
   // Shift+→ / Shift+← go by chapter.
-  const chapters = [0, ...beatChapters(ckTl)]
+  const chapters = [0, ...beatMotionChapters(ckTl)]
   await s.ev(`window.__storyink.setTime(${B[0] + 0.1})`)
   await Bun.sleep(200)
   const c0 = (await state(s)).t
@@ -398,7 +406,7 @@ async function beatChecks(s: S) {
   await s.ev("location.reload()")
   await Bun.sleep(1500)
   const tl = owScene.timeline!
-  const B = beatStops(tl)
+  const B = beatMotionEnds(tl)
   const G = beatGroups(tl)
   // Beats whose pulse arrives at a box.
   const cases = G.map((g, k) => ({ k, targets: tl.pulses.filter((p) => g.some((i) => p.id.startsWith(`pulse-${i}-`)) && p.target && owScene.nodes.some((n) => n.id === p.target)).map((p) => p.target!) })).filter((x) => x.targets.length && x.k > 0).slice(0, 8)
@@ -417,6 +425,84 @@ async function beatChecks(s: S) {
   }
   check(cases.length >= 5 && !bad.length, `${tag} → from ${cases.length} beat stops lands on the next settled beat with the dot's target box visible, no pulse in flight${bad.length ? `: ${bad.join("; ")}` : ""}`)
 }
+// ── Step moves don't wait for the text: instant captions, graph-motion stops, holds skipped ──
+async function instantChecks(s: S) {
+  const tag = "[keys instant]"
+  const ckTl = toScene(loadSpec(path.join(root, "examples/checkout.architecture.json")).spec!).timeline!
+  const E = beatMotionEnds(ckTl)
+  const St = beatMotionStarts(ckTl)
+  const settled = beatStops(ckTl)
+  const G = beatGroups(ckTl)
+  const cap = (k: number) => (captionForBeat(ckTl, k) >= 0 ? ckTl.captions[captionForBeat(ckTl, k)].text : "")
+  const capQ = `JSON.stringify({text:[...document.querySelectorAll(".si-caption")].map(p=>p.textContent.trim()).join(" | "), partial:[...document.querySelectorAll(".si-caption .si-word")].filter(w=>w.style.opacity&&Number(w.style.opacity)<1).length, lines:document.querySelectorAll(".si-caption").length})`
+  await s.go(url + "#motion=full")
+  await s.ev(`localStorage.clear()`)
+  await s.ev("location.reload()")
+  await Bun.sleep(1400)
+  // A captioned beat k (with a previous beat): → from beat k-1's motion end.
+  const k = G.findIndex((g, i) => i > 0 && g.some((j) => ckTl.steps[j].caption))
+  await s.ev(`window.__storyink.setTime(${E[k - 1]})`)
+  await Bun.sleep(200)
+  const w0 = Date.now()
+  await s.key("ArrowRight")
+  await Bun.sleep(35)
+  const c1 = JSON.parse(await s.ev(capQ))
+  const st1 = await state(s)
+  check(c1.text === cap(k) && c1.partial === 0 && c1.lines === 1 && st1.t >= St[k] - 1e-3, `${tag} → shows beat ${k + 1}'s caption whole within 2 frames ("${c1.text.slice(0, 40)}…", ${c1.partial} words typing) and starts its graph at once (t ${st1.t.toFixed(2)} ≥ ${St[k].toFixed(2)})`)
+  const end = (await sampleUntilStill(s, 8000)).at(-1)!
+  const took = (Date.now() - w0) / 1000
+  await Bun.sleep(350)
+  const still = await state(s)
+  const c2 = JSON.parse(await s.ev(capQ))
+  check(Math.abs(end.t - E[k]) < 1e-3 && end.mode === "paused" && still.t === end.t && E[k] < settled[k] - 0.05 && c2.text === cap(k) && c2.partial === 0, `${tag} the move ends at the graph-motion end ${E[k]} (old settled stop ${settled[k]}; ${took.toFixed(2)} s), clock stopped, caption still whole`)
+  // A second → right away starts the next beat's animation (no hold).
+  await s.key("ArrowRight")
+  await Bun.sleep(35)
+  const n1 = await state(s)
+  const c3 = JSON.parse(await s.ev(capQ))
+  const n2 = (await sampleUntilStill(s, 8000)).at(-1)!
+  check(n1.mode === "playing" && n1.t >= St[k + 1] - 1e-3 && c3.text === cap(k + 1) && Math.abs(n2.t - E[k + 1]) < 1e-3, `${tag} a second → right away starts beat ${k + 2} (t ${n1.t.toFixed(2)} ≥ ${St[k + 1].toFixed(2)}, skipping the ${(St[k + 1] - E[k]).toFixed(2)} s hold) and stops at ${n2.t.toFixed(3)}`)
+  // ← shows the previous beat's caption at once and rewinds its graph.
+  await s.key("ArrowLeft")
+  await Bun.sleep(35)
+  const c4 = JSON.parse(await s.ev(capQ))
+  const bs = await sampleUntilStill(s, 8000)
+  const dec = bs.every((x, i) => i === 0 || x.t <= bs[i - 1].t + 1e-9)
+  const mids = bs.filter((x) => x.t < E[k + 1] - 0.02 && x.t > St[k + 1] + 0.02).length
+  check(c4.text === cap(k) && c4.partial === 0 && dec && mids >= 3 && Math.abs(bs.at(-1)!.t - E[k]) < 1e-3, `${tag} ← shows beat ${k + 1}'s caption whole at once and rewinds the graph (${mids} intermediate times) to ${bs.at(-1)!.t.toFixed(3)}`)
+  // Continuous play still types captions and holds; → mid-hold skips the rest of it.
+  await s.ev(`window.__storyink.setTime(0)`)
+  await Bun.sleep(150)
+  await s.key(" ", "Space")
+  let typed = 0
+  let inHold: { t: number; h: number } | undefined
+  const t0 = Date.now()
+  while (Date.now() - t0 < 20000 && !inHold) {
+    const v = JSON.parse(await s.ev(capQ))
+    if (v.partial > 0) typed++
+    const st = await state(s)
+    for (let j = 1; j + 1 < E.length; j++) if (st.t > E[j] + 0.3 && st.t < St[j + 1] - 0.4) inHold = { t: st.t, h: j }
+    await Bun.sleep(30)
+  }
+  const h = inHold!
+  const before = await state(s)
+  await s.key("ArrowRight")
+  await Bun.sleep(35)
+  const after = await state(s)
+  const c5 = JSON.parse(await s.ev(capQ))
+  const fin = (await sampleUntilStill(s, 8000)).at(-1)!
+  check(typed > 0 && !!inHold && before.mode === "playing" && after.t >= St[h.h + 1] - 1e-3 && c5.partial === 0 && Math.abs(fin.t - E[h.h + 1]) < 1e-3, `${tag} continuous play types captions (${typed} samples mid-typing); → during beat ${h.h + 1}'s hold (t ${before.t.toFixed(2)}) jumps to beat ${h.h + 2} (t ${after.t.toFixed(2)}) and stops at its motion end`)
+  // Play again: typed captions and holds are back.
+  await s.key(" ", "Space")
+  let typed2 = 0
+  for (let i = 0; i < 80 && !typed2; i++) {
+    if (JSON.parse(await s.ev(capQ)).partial > 0) typed2++
+    await Bun.sleep(40)
+  }
+  await s.key(" ", "Space")
+  check(typed2 > 0, `${tag} after a step move, Play types captions again`)
+}
+
 // ── Reading holds in continuous play; no hover tooltip on the diagram ──
 async function holdChecks(s: S) {
   const tag = "[holds]"
@@ -553,6 +639,7 @@ s.close()
 s = await session(["--force-prefers-no-reduced-motion"])
 await beatChecks(s)
 await paceChecks(s)
+await instantChecks(s)
 await holdChecks(s)
 await stepChecks(s)
 s.close()
