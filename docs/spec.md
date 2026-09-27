@@ -112,6 +112,7 @@ print all show the **final frame, which is exactly the static diagram**.
   "autoplay": false,   // default: click-to-play gate; true = play when scrolled into view
   "end": "hold",       // "hold" (default) or "loop"
   "motion": "full",    // "full" (default), "reduced" or "system"; see Reduced motion below
+  "pace": 1,           // reading holds after each beat × pace (default 1; 0 = none, 1.5 = slower)
   "steps": [
     { "at": 0, "reveal": ["web"], "caption": "A shopper presses Pay", "stop": "Request" },
     { "at": "+0.2", "pulse": "web->gateway" },
@@ -125,18 +126,37 @@ print all show the **final frame, which is exactly the static diagram**.
 
 | step field  | meaning |
 | ----------- | ------- |
-| `at`        | seconds (absolute, must not go backwards) or `"+x"` = x s after the previous step **ends**; default `"+0"` |
+| `at`        | seconds (absolute, must not go backwards) or `"+x"` = x s after the previous step **ends**; default `"+0"`. With reading holds an absolute `at` is a **minimum**: a step that starts a beat never starts before the previous beat's hold ends |
 | `reveal`    | ids that appear here (fade + 6 px rise). Nodes, groups, edges, notes (`note-<i>`), frames (`frame-<i>`). Ids never revealed are visible from the start (context). Wires into hidden nodes draw on once both ends are shown. |
 | `pulse`     | an edge / message id, a unique `"from->to"` (ambiguous pairs are an error), a list (parallel) or `{ "route": [...] }` (multi-hop, one ease over the whole route) or `{ "edge", "duration" }`. The wire draws on under the dot; the target glows on arrival. |
 | `highlight` | ids or `{ "ids": [...], "for": 1.5 }`: flood glow + text flash |
 | `caption`   | a line under the title; words fade in; the previous line dims to 0.52 |
 | `counter`   | `{ "id", "to" }` (or a list): rolls a node counter (`nodes[].counter = { id, value, label, prefix, suffix }`) |
 | `stop`      | chapter label: a tall scrubber tick, a beat-sheet title and a `Shift+←/→` stop |
+| `hold`      | seconds: the reading hold after the beat this step ends, overriding the computed one (not scaled by `pace`; `0` = go straight on) |
 
 A step **ends** when its reveals settle (react spring, 0.53 s), its pulses arrive (gather 0.34 s
 + flight 0.45–1.6 s by path length), or its caption's reading time (0.25 s + 0.075 s/word, 1–3 s)
 elapses, whichever is last. After the last event the story holds 1.5 s. Glows are spaced ≥ 1/3 s
-(≤ 3 flashes/s). Stories over 60 s warn.
+(≤ 3 flashes/s). Stories whose authored timing (without reading holds) runs over 60 s warn.
+
+**Reading holds.** In continuous play the story pauses after each **beat** (see Beats) so the
+reader can take in what it did, without slowing the animation itself:
+- the hold is `1 s + 0.3 s per word` of the beat's caption (its last), clamped to 1.5–6 s, or
+  0.8 s for a beat without a caption; × `story.pace` (default 1); a step's `hold` overrides it
+  for the beat it ends. Core: `readingHold(caption)`.
+- It starts once the beat is visually still (its step ends, arrival rings, cooling trails, glows
+  and label flashes, implicit reveals, counter rolls) and nothing on the diagram changes during
+  it; the beat's caption stays up through it.
+- The compiler inserts it (so `storyState(t)`, the viewer, the scrubber and ticks, beat sheets,
+  snapshots and the animated SVG all agree): a beat's first step starts no earlier than the
+  previous beat's still point + hold. Relative `"+x"` steps shift; an absolute `at` is a
+  minimum; a step whose own timing already leaves that room adds nothing. `pace: 0` is the
+  authored (pre-0.3.5) timing.
+- No hold after the last beat (the 1.5 s end hold stays). Stepped (reduced-motion) playback holds
+  each stop for the same number. → / ← step moves stop at the settled beat and don't wait: the
+  reader sets the pace there. The compiled hold is on the beat's last step (`timeline.steps[i].hold`).
+  `storyink render --pace N`, tool `storyink_render` `pace`.
 
 `"story": "auto"` (or `--story auto` / tool `story: "auto"`) derives the steps: graphs reveal the
 sources, then pulse breadth-first waves and reveal what they reach (edges into a group enter its

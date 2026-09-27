@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.5
+
+- **Fix: the diagram showed a hover tooltip** (the diagram title) wherever the cursor rested. The
+  SVG carried a `<title>`, which browsers show as a tooltip. It's gone from the viewer, static
+  `.svg` exports and the animated SVG; the accessible name stays as `role="img"` +
+  `aria-label` on the root. Toolbar and transport hints are unchanged.
+- **Reading holds.** Continuous playback now pauses after each beat so the reader can read it:
+  1 s + 0.3 s per word of the beat's caption, clamped to 1.5–6 s, or 0.8 s without a caption,
+  counted from when the beat is visually still (nothing changes during it; the caption stays up).
+  The animation speed is unchanged. Compiled into the timeline, so the viewer, scrubber, beat
+  sheets, snapshots and the animated SVG agree. Stepped (reduced-motion) playback holds each stop
+  for the same number; → / ← still stop at the settled beat without waiting.
+  - `story.pace` (multiplier, default 1; `0` = the 0.3.4 timing) and a per-step `hold` (seconds,
+    for the beat it ends); `render --pace`, tool `storyink_render` `pace`; core `readingHold`,
+    `compileStoryAuthored`.
+  - An absolute `at` is now a *minimum* start; relative `"+x"` steps shift.
+  - Stories run longer: OpenWick architecture 55 s → 176 s, data flow 29 s → 95 s, checkout
+    13 s → 30 s, OAuth 17 s → 57 s. The 60 s length warning counts the authored timing only.
+
 ## 0.3.4
 
 - **Fix: → stopped before the next box was visible.** Step moves targeted the next step *start*,

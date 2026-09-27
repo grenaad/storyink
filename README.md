@@ -126,6 +126,11 @@ has a click-to-play gate, play/pause, a tape-rewind replay and a scrubber with s
 ticks. Space, ←/→ and R control it: → plays to the next step and pauses, ← rewinds at 2× to the
 previous one (Shift: by chapter; repeated presses extend the move).
 
+Playback **pauses to read after each beat**: about 1 s + 0.3 s per word of its caption (1.5–6 s;
+0.8 s without one) once the beat is still, before the next beat starts. The animation speed is
+unchanged. Set `"story": { "pace": 1.5 }` (or `--pace`) to slow it further, `0` for none, or
+`"hold": 3` on a step for its beat.
+
 Motion is **full by default, even when the reader's system asks for reduced motion**. Authors can
 set `"story": { "motion": "reduced" }` (always step by step) or `"motion": "system"` (follow
 `prefers-reduced-motion`); `--motion full|reduced|system` on `render` does the same, including
