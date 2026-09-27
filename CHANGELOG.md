@@ -16,6 +16,13 @@
   `setPace(n)`. Viewer bundle +16.5 KiB (388.5 → 405.0 KiB).
 - `storyink snapshot --pace N` (tool `storyink_snapshot` `pace`) pins the pace for every capture;
   by default snapshots use the author pace.
+- **→ / ← no longer wait for the text.** Step moves animate the graph only: → plays to the end
+  of the next beat's graph motion (pulses arrived, reveals and draw-ons done; not caption typing,
+  glows, trail cooling, rings or the reading hold; `beatMotionEnds`) and pauses; pressed during a
+  reading hold (or right after a stop) it starts the next beat at once. ← rewinds the graph at 2×
+  to the previous beat's motion end. The beat's caption shows whole and instantly as the move
+  starts (← shows the target beat's) and stays at the stop (`storyState(…, { captionBeat })`).
+  Continuous play, stepped playback, the scrubber and the default `storyState` are unchanged.
 - Stepped (reduced-motion) stops last at least 0.8 s (the bare-beat hold).
 - Fix: clicking a toolbar button while the play gate showed also started the story.
 

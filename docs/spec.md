@@ -272,20 +272,34 @@ the move ends (or is interrupted); `stepAnimated()` is the running move `{ dir, 
 Keys: space play/pause, →/← step moves (Shift: by chapter), R replay, M motion, F follow,
 [ / ] pauses shorter / longer, 0 fit, +/− zoom. `#pace=<n>` sets the reading-hold pace.
 
-**Step moves (→ / ←).** In full motion the arrows animate instead of jumping:
-- **→** plays forward at normal speed from the current time to the **next beat stop** (see Beats:
-  the dot lands *and* the box it reaches is revealed and settled, with the caption whole; or the
-  end) and pauses there. While playing, → becomes "advance one beat". **Shift+→** does the same
-  to the next chapter.
-- **←** rewinds: time runs **backwards at 2×** (pulses fly back) to the **previous beat stop**, then
-  pauses, with a short bounce-free ease in and out (0.12 s, never below 0.3× so it always
-  arrives). No blur (the blur stays with R's tape rewind). **Shift+←** goes to the previous chapter.
+**Step moves (→ / ←).** In full motion the arrows animate **the graph only**; the text never
+makes the reader wait:
+- **→** plays forward at normal speed to the **end of the next beat's graph motion**
+  (`beatMotionEnds`): its pulses have arrived and its reveals, wire draw-ons (implicit ones too)
+  and counter rolls have reached their end state. Not its caption typing or reading time, glows,
+  label flashes, cooling trails or arrival rings: the stop frame may still show those fading.
+  Then it pauses. While playing (or paused mid-hold), → skips straight to the next beat: the rest
+  of a reading hold, or any authored gap after a beat's motion, is skipped (`skipGap`,
+  `beatMotionStarts`). **Shift+→** does the same to the next chapter (`beatMotionChapters`).
+- **←** rewinds the graph: time runs **backwards at 2×** (pulses fly back) to the previous beat's
+  motion end, skipping the gaps between beats, with a short bounce-free ease (0.12 s, never
+  below 0.3×). No blur (the blur stays with R's tape rewind). **Shift+←** goes to the previous
+  chapter.
+- **Captions show at once.** From the moment a move starts, the beat's caption is shown whole
+  (no word typing, no fade): the beat being animated on →, the target beat on ←; it stays while
+  paused at the stop. This is a render option, `storyState(…, { captionBeat: k })`
+  (`captionForBeat`: the beat's last caption, else the line still on screen when it starts);
+  the default `storyState` (continuous play, snapshots, the animated SVG) is unchanged and types
+  captions. Play, a seek or R types captions again.
 - **Repeated presses** in the direction of a running move extend its target to the following
-  boundary; the opposite key reverses toward the boundary adjacent to the current time.
-- **Space** pauses a move; the scrubber still seeks immediately; R is the tape-rewind replay.
+  beat; the opposite key reverses toward the boundary adjacent to the current time.
+- **Space** pauses a move; the scrubber still seeks directly; R is the tape-rewind replay.
 - The follow camera follows moves like playback, backwards too.
-- **Reduced motion** keeps instant jumps between settled beats.
-Core: `beatStops`, `beatChapters`, `stepBoundary`, `stepMoveTarget`, `stepMoveSpeed`, `STEP_MOVE`.
+- **Reduced motion** keeps instant jumps between settled beats (`beatStops`, `beatChapters`) and
+  its stepped holds.
+- The scrubber ticks and `__storyink.steps` keep beat / step starts.
+Core: `beatMotionEnds`, `beatMotionStarts`, `beatMotionChapters`, `beatIndexAt`, `captionForBeat`,
+`skipGap`, `stepBoundary`, `stepMoveTarget`, `stepMoveSpeed`, `STEP_MOVE`.
 
 **Wire geometry.** Everything animated along a wire (the pulse dot, its trail, the flight draw-on
 spans, the SMIL trail route) uses `flattenPath(edge.d)`, a dense polyline of the drawn rounded
