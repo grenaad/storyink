@@ -85,6 +85,11 @@ export interface StoryStep {
   counter?: { id: string; to: number } | { id: string; to: number }[]
   /** Chapter marker label (scrubber tick, ←/→). */
   stop?: string
+  /**
+   * Reading hold (seconds) after the beat this step ends, overriding the computed one (not scaled
+   * by `pace`). 0 = go straight on.
+   */
+  hold?: number
 }
 
 export interface Story {
@@ -104,6 +109,11 @@ export interface Story {
    * reader's Follow toggle and `#camera=` still win.
    */
   camera?: StoryCamera
+  /**
+   * Multiplier on the reading holds inserted after each beat (default 1; 0 = the pre-0.3.5
+   * timing, 1.5 = slower). Holds only fill the gap between a beat settling and the next starting.
+   */
+  pace?: number
   /** Steps, or "auto" to derive them (like `"story": "auto"`, with the options above). */
   steps: StoryStep[] | "auto"
 }

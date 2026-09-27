@@ -7,6 +7,8 @@ export interface TimelineStep {
   t1: number
   stop?: string
   caption?: string
+  /** On the last step of a beat: its reading hold (s), inserted before the next beat in continuous play. */
+  hold?: number
   /** Title parts for beat tiles: pulse paths, revealed node names, counter changes. */
   parts?: { paths: string[]; reveals: string[]; counters: string[] }
 }

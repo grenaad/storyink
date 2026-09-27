@@ -188,7 +188,7 @@ export function validate(input: unknown): ValidationResult {
   return ok ? { ok, diagnostics: c.diagnostics, spec } : { ok, diagnostics: c.diagnostics }
 }
 
-const STEP_KEYS = new Set(["id", "at", "reveal", "pulse", "highlight", "caption", "counter", "stop"])
+const STEP_KEYS = new Set(["id", "at", "reveal", "pulse", "highlight", "caption", "counter", "stop", "hold"])
 
 function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefined {
   if (raw === "auto") return "auto"
@@ -196,10 +196,12 @@ function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefin
     c.error("story", `"story" must be an object or "auto"`, `{ "steps": [ { "reveal": ["api"] } ] } or "auto"`)
     return undefined
   }
-  unknownKeys(c, raw, new Set(["autoplay", "camera", "end", "motion", "steps"]), "story")
+  unknownKeys(c, raw, new Set(["autoplay", "camera", "end", "motion", "pace", "steps"]), "story")
   const motion = oneOf(c, raw.motion, ["full", "reduced", "system"] as const, "story.motion", "story motion")
   const camera = oneOf(c, raw.camera, ["follow", "fit"] as const, "story.camera", "story camera")
-  const opts = { ...(raw.autoplay === true ? { autoplay: true } : {}), ...(motion ? { motion } : {}), ...(camera ? { camera } : {}) }
+  const paceOk = raw.pace === undefined || (typeof raw.pace === "number" && Number.isFinite(raw.pace) && raw.pace >= 0 && raw.pace <= 10)
+  if (!paceOk) c.error("story.pace", `"pace" must be a number from 0 to 10`, `1 = default reading holds, 0 = none, 1.5 = slower`)
+  const opts = { ...(raw.autoplay === true ? { autoplay: true } : {}), ...(motion ? { motion } : {}), ...(camera ? { camera } : {}), ...(paceOk && typeof raw.pace === "number" ? { pace: raw.pace } : {}) }
   if (raw.autoplay !== undefined && typeof raw.autoplay !== "boolean") c.error("story.autoplay", `"autoplay" must be true or false`)
   const end = oneOf(c, raw.end, ["hold", "loop"] as const, "story.end", "story end")
   if (raw.steps === "auto") {
@@ -226,6 +228,7 @@ function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefin
     if (s0.highlight !== undefined && !(isObj(s0.highlight) && Array.isArray(s0.highlight.ids))) strList(s0.highlight, "highlight")
     if (s0.caption !== undefined && typeof s0.caption !== "string") c.error(`${p}.caption`, `"caption" must be a string`)
     if (s0.stop !== undefined && typeof s0.stop !== "string") c.error(`${p}.stop`, `"stop" must be a string (chapter label)`)
+    if (s0.hold !== undefined && !(typeof s0.hold === "number" && Number.isFinite(s0.hold) && s0.hold >= 0 && s0.hold <= 60)) c.error(`${p}.hold`, `"hold" must be seconds from 0 to 60`)
     if (s0.counter !== undefined) {
       const list = Array.isArray(s0.counter) ? s0.counter : [s0.counter]
       if (!list.every((x) => isObj(x) && typeof x.id === "string" && typeof x.to === "number")) c.error(`${p}.counter`, `"counter" must be { "id": "...", "to": number }`)

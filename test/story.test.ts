@@ -32,7 +32,7 @@ describe("story validation", () => {
     expect(e[0].path).toBe("story.steps[1].at")
     expect(e[0].message).toContain("backwards")
   })
-  test("long stories warn over 60 s", () => {
+  test("long stories warn over 60 s (authored timing; reading holds don't count)", () => {
     const d = validate({ ...base, story: { steps: [{ at: 70, reveal: ["a"] }] } }).diagnostics
     expect(d.some((x) => x.severity === "warning" && x.message.includes("over 60"))).toBe(true)
   })
@@ -56,7 +56,8 @@ describe("storyState", () => {
 
   test("timeline resolution", () => {
     expect(tl.steps.length).toBe(5)
-    expect(tl.steps[1].t0).toBeCloseTo(tl.steps[0].t1 + 0.2, 3)
+    // "+0.2", but a new beat waits for the previous beat's reading hold.
+    expect(tl.steps[1].t0).toBeCloseTo(tl.steps[0].t1 + Math.max(0.2, tl.steps[0].hold!), 3)
     // A pulse step ends when it arrives; the reveal chained with "+0" starts there.
     expect(tl.steps[2].t0).toBeCloseTo(tl.steps[1].t1, 3)
     expect(tl.steps[0].t1).toBeCloseTo(readTime("One two three"), 3)

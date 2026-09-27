@@ -234,6 +234,13 @@ export const story = {
   gateDim: 0.55,
   rewind: { hold: 0.15, duration: 1.25, empty: 0.4, blur: 1.1 },
   read: { base: 0.25, perWord: 0.075, min: 1, max: 3 },
+  /**
+   * Reading hold after each beat in continuous play (and each stepped stop): time to read what the
+   * beat did before the next one starts. ~200 wpm plus a second to look; bare beats get `bare`.
+   * Scaled by `story.pace`.
+   */
+  hold: { base: 1, perWord: 0.3, min: 1.5, max: 6, bare: 0.8 },
+  /** Warn when the authored story (without reading holds) runs longer than this. */
   warnTotal: 60,
 }
 

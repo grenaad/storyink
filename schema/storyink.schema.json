@@ -54,6 +54,12 @@
             "autoplay": {
               "type": "boolean"
             },
+            "pace": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 10,
+              "description": "Multiplier on the reading holds after each beat (default 1; 0 = no holds, 1.5 = slower)."
+            },
             "motion": {
               "enum": [
                 "full",
@@ -250,6 +256,12 @@
                       },
                       "stop": {
                         "type": "string"
+                      },
+                      "hold": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 60,
+                        "description": "Reading hold (s) after the beat this step ends; overrides the computed hold (not scaled by pace)."
                       }
                     }
                   }

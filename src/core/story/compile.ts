@@ -5,6 +5,7 @@ import type { Diagnostic } from "../validate.ts"
 import { autoStory } from "./auto.ts"
 import { springSettle } from "./ease.ts"
 import { flattenPath } from "../layout/paths.ts"
+import { beatGroups } from "./state.ts"
 import type { Timeline, TimelineDraw, TimelineGlow, TimelinePulse } from "./types.ts"
 
 const REACT_SETTLE = springSettle(S.springs.react)
@@ -12,6 +13,13 @@ const REACT_SETTLE = springSettle(S.springs.react)
 export const readTime = (text: string): number => {
   const words = text.trim().split(/\s+/).filter(Boolean).length
   return Math.min(S.read.max, Math.max(S.read.min, S.read.base + S.read.perWord * words))
+}
+
+/** Reading hold for a beat whose on-screen caption is `caption` (seconds, before `pace`). */
+export const readingHold = (caption?: string): number => {
+  if (!caption?.trim()) return S.hold.bare
+  const words = caption.trim().split(/\s+/).filter(Boolean).length
+  return Math.min(S.hold.max, Math.max(S.hold.min, S.hold.base + S.hold.perWord * words))
 }
 
 const asList = <T>(x: T | T[] | undefined): T[] => (x === undefined ? [] : Array.isArray(x) ? x : [x])
@@ -42,8 +50,94 @@ export interface CompileResult {
   diagnostics: Diagnostic[]
 }
 
-/** Compile `spec.story` against a laid-out scene into absolute times. Never throws. */
+/**
+ * The pause plan for pass 2: for the first step of each beat after the first, the previous beat's
+ * steps and the reading hold that must pass after they settle before this step may start.
+ */
+type HoldPlan = Map<number, { prev: number[]; hold: number; still: number }>
+
+/**
+ * How long after its last step ends a beat is visually still (pass-1 timing): every event that
+ * starts in the beat's window has finished — arrival rings, cooling trails, glows and label
+ * flashes, implicit reveals (sequence notes, activations), fade-in wires, counter rolls.
+ */
+function stillAfter(tl: Timeline, groups: number[][]): number[] {
+  const P = Math.max(S.pulse.ring, S.pulse.cooling, S.flash.decay)
+  return groups.map((g, k) => {
+    const a = tl.steps[g[0]].t0 - 1e-6
+    const next = groups[k + 1]
+    const b = next ? tl.steps[next[0]].t0 - 1e-6 : Infinity
+    const inBeat = (t: number) => t >= a && t < b
+    const end = Math.max(...g.map((i) => tl.steps[i].t1))
+    const events = [
+      end,
+      ...tl.pulses.filter((q) => g.some((i) => q.id.startsWith(`pulse-${i}-`))).map((q) => q.tf1 + P),
+      // + minGap: the ≤ 3 flashes/s rule may space glows differently once holds shift them.
+      ...tl.glows.filter((q) => inBeat(q.t)).map((q) => q.t + Math.max(q.dur, S.flash.decay) + S.glow.minGap),
+      ...Object.values(tl.appear).filter(inBeat).map((t) => t + REACT_SETTLE),
+      ...Object.values(tl.draw).filter((d) => inBeat(d.t0)).map((d) => d.t1 + REACT_SETTLE),
+      ...Object.values(tl.counters).flatMap((c) => c.events.filter((e) => inBeat(e.t)).map((e) => e.t + REACT_SETTLE)),
+    ]
+    return Math.max(0, Math.max(...events) - end)
+  })
+}
+
+/**
+ * How far before its first step a beat's implicit events start (pass-1 timing): a sequence frame
+ * rises `gather + 0.1` s before its first message draws (the only pre-roll the compiler makes).
+ * The hold must also clear this lead.
+ */
+function leadBefore(scene: Scene, tl: Timeline, groups: number[][]): number[] {
+  return groups.map((g, k) => {
+    if (k === 0) return 0
+    const t0 = tl.steps[g[0]].t0
+    const early = scene.frames.map((f) => tl.appear[f.id]).filter((t): t is number => t !== undefined && t < t0 - 1e-6 && t > t0 - 1)
+    return early.length ? t0 - Math.min(...early) : 0
+  })
+}
+
+/**
+ * Compile `spec.story` against a laid-out scene into absolute times. Never throws.
+ *
+ * Two passes: the first compiles the authored timing and finds the beats (`beatGroups`); the
+ * second inserts a **reading hold** after each beat (`readingHold` of the beat's caption × `pace`,
+ * or the ending step's `hold`): a beat's first step never starts before the previous beat has
+ * settled plus its hold. Relative `"+x"` steps shift; an absolute `at` becomes a minimum start; a
+ * step whose own timing already leaves enough room adds nothing.
+ */
 export function compileStory(scene: Scene, spec: Spec): CompileResult {
+  const first = compileOnce(scene, spec)
+  if (!first.timeline || spec.story === undefined) return first
+  const story = spec.story === "auto" ? undefined : spec.story
+  const pace = typeof story?.pace === "number" ? story.pace : 1
+  const authored = story && Array.isArray(story.steps) ? story.steps : undefined
+  const tl1 = first.timeline
+  const groups = beatGroups(tl1)
+  const holdOf = (g: number[]): number => {
+    const last = g[g.length - 1]
+    const own = authored?.[last]?.hold
+    if (typeof own === "number") return own
+    const cap = g.map((i) => tl1.steps[i].caption).filter((c) => c).pop()
+    return readingHold(cap) * pace
+  }
+  const holds = groups.map(holdOf)
+  const still = stillAfter(tl1, groups)
+  const lead = leadBefore(scene, tl1, groups)
+  const plan: HoldPlan = new Map()
+  groups.forEach((g, k) => {
+    // A zero hold adds nothing (not even a "wait until still"): pace 0 is the authored timing.
+    if (k > 0 && holds[k - 1] > 0) plan.set(g[0], { prev: groups[k - 1], hold: holds[k - 1], still: still[k - 1] + lead[k] })
+  })
+  const second = compileOnce(scene, spec, plan, new Map(groups.map((g, k) => [g[g.length - 1], { group: g, hold: holds[k], still: still[k] }])))
+  // Diagnostics are about the authored story (pass 1), including the length warning: reading
+  // holds are the viewer's pacing, not story the author has to shorten.
+  return { timeline: second.timeline, diagnostics: first.diagnostics }
+}
+
+/** The authored timing without reading holds (pass 1 of `compileStory`; for tests and tooling). */
+export const compileStoryAuthored = (scene: Scene, spec: Spec): CompileResult => compileOnce(scene, spec)
+
+function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<number, { group: number[]; hold: number; still: number }>): CompileResult {
   const diagnostics: Diagnostic[] = []
   const err = (path: string, message: string, hint?: string) => diagnostics.push({ severity: "error", path, message, hint })
   const warn = (path: string, message: string, hint?: string) => diagnostics.push({ severity: "warning", path, message, hint })
@@ -77,6 +171,7 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
 
   let prevEnd = 0
   let prevT0 = 0
+
   story.steps.forEach((step: StoryStep, i) => {
     const p = `story.steps[${i}]`
     let t0: number
@@ -91,6 +186,9 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
         t0 = prevEnd
       } else t0 = prevEnd + Number(m[1])
     }
+    // Reading hold: a beat's first step waits for the previous beat to settle plus its hold.
+    const h = plan?.get(i)
+    if (h) t0 = Math.max(t0, Math.max(...h.prev.map((j) => steps[j].t1)) + h.still + h.hold)
     const ends = [t0]
 
     // Reveal.
@@ -189,9 +287,11 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
     const t1 = Math.max(...ends)
     const parts = titleParts(step, scene)
     const label = step.stop ?? (step.caption ? truncate(step.caption, 40) : composeTitle([parts]))
-    steps.push({ id: step.id ?? `step-${i + 1}`, label, t0, t1, parts, ...(step.stop ? { stop: step.stop } : {}), ...(step.caption ? { caption: step.caption } : {}) })
+    const be = beatEnds?.get(i)
+    steps.push({ id: step.id ?? `step-${i + 1}`, label, t0, t1, parts, ...(step.stop ? { stop: step.stop } : {}), ...(step.caption ? { caption: step.caption } : {}), ...(be ? { hold: Math.round(be.hold * 1000) / 1000 } : {}) })
     prevEnd = t1
     prevT0 = t0
+
   })
   for (const c of Object.values(counters)) {
     const all = [c.start, ...c.events.map((e) => e.to)]
@@ -283,14 +383,17 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
     // The caption covers its step and any caption-less steps chained straight after it ("+0").
     let last = c.step
     while (steps[last + 1] && steps[last + 1].t0 - steps[last].t1 <= 0.05 && !steps[last + 1].caption) last++
-    const own = Math.min(steps[last].t1 + S.beats.settle, duration - 0.5)
+    // …and through its beat's reading hold, when it is the beat's caption.
+    const be = [...(beatEnds?.values() ?? [])].find((b) => b.group.includes(c.step))
+    const beatEnd = be ? Math.max(...be.group.map((j) => steps[j].t1)) + be.still : 0
+    const own = Math.min(Math.max(steps[last].t1 + S.beats.settle, be ? beatEnd + be.hold : 0), duration - 0.5)
     const next = captions[k + 1]
     if (next && next.t0 <= own) {
       c.t1 = next.t0
       c.handoff = true
     } else c.t1 = own
   })
-  if (duration > S.warnTotal) warn("story", `story runs ${duration.toFixed(1)}s (over ${S.warnTotal}s)`, "shorten gaps or split the story")
+  if (duration > S.warnTotal) warn("story", `story runs ${duration.toFixed(1)}s (over ${S.warnTotal}s, reading holds not counted)`, "shorten gaps or split the story")
   if (!story.steps.length) warn("story.steps", "story has no steps")
 
   const r3 = (x: number) => Math.round(x * 1000) / 1000

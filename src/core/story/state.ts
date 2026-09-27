@@ -144,7 +144,8 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
         pf.r = r2(S.pulse.dot * e)
         pf.o = r2(Math.pow(e, 1.5))
         pf.halo = { r: r2(S.pulse.halo - (S.pulse.halo - S.pulse.dot) * e), o: r2(0.5 * Math.sin(Math.PI * e)) }
-      } else if (t < p.tf1) {
+      } else if (t < p.tf1 - 1e-6) {
+        // (Within 1 µs of arrival counts as landed: step times are rounded to the ms.)
         const s = inOutCubic((t - p.tf0) / (p.tf1 - p.tf0)) * p.length
         const at = pointAt(p.points, s)
         pf.x = r2(at.x)
@@ -355,7 +356,10 @@ export function steppedSchedule(tl: Timeline): SteppedStop[] {
     const last = g[g.length - 1]
     // Hold for the caption on screen at the stop (the beat's last).
     const cap = g.map((i) => tl.steps[i].caption).filter((c) => c).pop()
-    out.push({ step: last, t: stopTime(tl, last), hold: cap ? readTime(cap) : STEP_BEAT })
+    // The same reading hold continuous play inserts after the beat (compiled onto its last step);
+    // when that is 0 (pace 0 / hold 0) a stepped stop still shows for the caption's read time.
+    const h = tl.steps[last].hold
+    out.push({ step: last, t: stopTime(tl, last), hold: h && h > 0 ? h : cap ? readTime(cap) : STEP_BEAT })
   }
   out.push({ step: tl.steps.length, t: tl.duration, hold: 0 })
   return out
