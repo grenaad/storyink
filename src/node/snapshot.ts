@@ -8,6 +8,8 @@ import type { ThemeName } from "../theme/tokens.ts"
 import type { Box } from "../core/scene.ts"
 import { browserVersion, findBrowser, type Browser } from "./chrome.ts"
 import { beatTimes } from "../core/story/state.ts"
+import { recompilePace } from "../core/story/compile.ts"
+import type { Scene } from "../core/scene.ts"
 
 export interface SnapshotOptions {
   /** Themes to capture (default light, dark). */
@@ -29,6 +31,8 @@ export interface SnapshotOptions {
    * gates are unaffected.
    */
   camera?: "fit" | "follow"
+  /** Reading-hold pace for every capture (`#pace=`; default: the HTML's author pace). */
+  pace?: number
   /** Output directory (default: next to the HTML file). */
   outDir?: string
   /** Device scale factor (default 1). */
@@ -222,7 +226,9 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   const timeoutMs = opts.timeoutMs ?? HARD_TIMEOUT
   const budget = opts.budgetMs ?? 3000
   // Viewer header (kind line, serif title, optional subtitle, caption slot for stories).
-  const tl = scene.timeline
+  // `pace`: pinned on every page (#pace=) and recompiled here for this module's own times.
+  const pinPace = opts.pace !== undefined && Number.isFinite(opts.pace) && opts.pace >= 0 && opts.pace <= 10 ? opts.pace : undefined
+  const tl = pinPace !== undefined ? recompilePace(scene as unknown as Scene, pinPace) : scene.timeline
   const headerH = (scene.subtitle ? 128 : 100) + (tl ? 54 : 0)
   const ats: (number | "end")[] = opts.at?.length ? opts.at : opts.t ? [opts.t === "end" ? "end" : Number(opts.t)] : ["end"]
   const tq = (at: number | "end") => (tl ? `&t=${at === "end" ? "end" : +at.toFixed(3)}` : "")
@@ -234,7 +240,7 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   const s = Math.min(1, (W - 64) / vb.w)
   const H = Math.round(headerH + vb.h * s + 64 + 8)
   const FW = Math.round(Math.max(500, opts.width ?? 1280))
-  const url = (hash: string) => `${pathToFileURL(abs).href}#${hash}`
+  const url = (hash: string) => `${pathToFileURL(abs).href}#${hash}${pinPace !== undefined && tl ? `&pace=${pinPace}` : ""}`
 
   const baseFlags = [
     ...(browser.flavor === "chrome" ? ["--headless=new"] : []),

@@ -115,7 +115,7 @@ const plugin = {
               type: "number",
               minimum: 0,
               maximum: 10,
-              description: "Story reading holds after each beat × pace (default 1 ≈ 200 wpm for the caption; 0 = none, 1.5 = slower)",
+              description: "Story reading holds after each beat × pace (default 0.6; 1 ≈ 200 wpm for the caption; 0 = none, 1.5 = slower). Readers can still change it in the viewer.",
             },
             animatedSvg: {
               type: ["boolean", "string"],
@@ -262,6 +262,7 @@ const plugin = {
             },
             motion: { type: "string", enum: ["full", "reduced"], description: 'Motion mode for `at` frames: "reduced" = stepped playback (settled step states)' },
             camera: { type: "string", enum: ["fit", "follow"], description: '`at` frames: "fit" (default, whole diagram) or "follow" (the follow camera\'s view at a 1280×720 stage)' },
+            pace: { type: "number", minimum: 0, maximum: 10, description: "Reading-hold pace for the captures (default: the HTML's author pace, 0.6 unless set)" },
             maxImageSize: { type: "number", description: "Longest side of the returned image in px (default 1024, 256–2048)" },
           },
           required: ["html"],
@@ -280,6 +281,7 @@ const plugin = {
             maxImageSize?: number
             motion?: "full" | "reduced"
             camera?: "fit" | "follow"
+            pace?: number
           }
           const image = i.image ?? "overview"
           const r = await snapshot(abs(i.html), {
@@ -289,6 +291,7 @@ const plugin = {
             ...(i.themes ? { themes: i.themes } : {}),
             ...(i.motion ? { motion: i.motion } : {}),
             ...(i.camera === "follow" ? { camera: "follow" as const } : {}),
+            ...(typeof i.pace === "number" ? { pace: i.pace } : {}),
             ...(i.width ? { width: i.width } : {}),
             ...(i.outDir ? { outDir: abs(i.outDir) } : {}),
             signal: context.signal,

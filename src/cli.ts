@@ -23,13 +23,13 @@ ${bold("Usage")}
   storyink render <in.json|in.mmd|-> [-o out.html] [--svg out.svg] [--theme light|dark] [--story auto]
                  [--motion full|reduced|system]   story playback motion (default full; system = OS setting)
                  [--camera follow|fit]   viewer camera while playing (default follow)
-                 [--pace N]   reading holds after each beat × N (default 1; 0 = none)
+                 [--pace N]   reading holds after each beat × N (default 0.6; 0 = none)
                  [--animated-svg out.svg [--theme light|dark|both] [--once] [--font system|embed]]
                    animated SVG (SMIL) for READMEs / PRs: plays inside <img>, no script
   storyink mermaid <in.mmd> [-o out.json]
   storyink validate <in> [--json]
   storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats]|--no-sheet]
-                   [--at 0.5,1.2,end] [--motion reduced] [--camera follow] [--scale 2] [-o dir] [--json]
+                   [--at 0.5,1.2,end] [--motion reduced] [--camera follow] [--pace N] [--scale 2] [-o dir] [--json]
                    [--preview out.jpg [--preview-size 1024]]   compact one-image preview for agents
   storyink skill            print the SKILL.md path and content
   storyink --help | --version
@@ -208,6 +208,7 @@ async function main(argv: string[]): Promise<number> {
       scale,
       ...(str(a, "--motion") === "reduced" || str(a, "--motion") === "full" ? { motion: str(a, "--motion") as "full" | "reduced" } : {}),
       ...(str(a, "--camera") === "follow" ? { camera: "follow" as const } : {}),
+      ...(str(a, "--pace") !== undefined ? { pace: Number(str(a, "--pace")) } : {}),
       ...(str(a, "-o", "--out") ? { outDir: str(a, "-o", "--out") } : {}),
       ...(str(a, "--t") ? { t: str(a, "--t") } : {}),
     })
