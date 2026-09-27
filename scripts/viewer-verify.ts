@@ -461,6 +461,67 @@ async function holdChecks(s: S) {
   const minHold = Math.min(...windows.map((w) => w.hold))
   check(covered >= windows.length - 1 && !bad.length, `${tag} continuous play holds still for each beat's reading hold (${covered}/${windows.length} holds sampled, ≥ ${minHold.toFixed(2)} s each${bad.length ? `; changed during hold ${bad.join(",")}` : ""})`)
 }
+// ── Pauses (reading-hold pace) in the viewer ──
+async function paceChecks(s: S) {
+  const tag = "[pauses]"
+  const ckSpec = loadSpec(path.join(root, "examples/checkout.architecture.json")).spec!
+  const tlAt = (p: number) => toScene({ ...ckSpec, story: { ...(ckSpec.story as object), pace: p } } as never).timeline!
+  await s.go(url + "#motion=full")
+  await s.ev(`localStorage.clear()`)
+  await s.ev("location.reload()")
+  await Bun.sleep(1400)
+  const sel = `.si-tools button[aria-label^="Pauses"]`
+  const info = async () => JSON.parse(await s.ev(`JSON.stringify({pace: window.__storyink.pace(), dur: window.__storyink.duration, steps: window.__storyink.steps.map(x=>x.t0), label: document.querySelector('${sel}')?.getAttribute("aria-label"), ticks: [...document.querySelectorAll(".si-tick")].map(e=>e.style.left)})`)) as { pace: number; dur: number; steps: number[]; label: string; ticks: string[] }
+  const a = await info()
+  check(a.pace === 0.6 && a.label === "Pauses: Normal" && Math.abs(a.dur - tlAt(0.6).duration) < 1e-6, `${tag} default: ${a.label}, pace ${a.pace}, duration ${a.dur.toFixed(1)} s`)
+  await s.click(sel)
+  await Bun.sleep(300)
+  const b = await info()
+  check(b.pace === 1 && b.label === "Pauses: Long" && Math.abs(b.dur - tlAt(1).duration) < 1e-6 && b.dur > a.dur && b.ticks.join() !== a.ticks.join() && b.steps.join() !== a.steps.join(), `${tag} click → ${b.label}: duration ${a.dur.toFixed(1)} → ${b.dur.toFixed(1)} s (= render --pace 1), ticks and steps moved`)
+  await s.key("[", "BracketLeft")
+  await s.key("[", "BracketLeft")
+  await Bun.sleep(300)
+  const c = await info()
+  check(c.pace === 0.3 && c.label === "Pauses: Short" && c.dur < a.dur, `${tag} [ [ → ${c.label}: duration ${c.dur.toFixed(1)} s`)
+  // Holds: the gap before beat 2 grows with the pace.
+  const g1 = (tl: ReturnType<typeof tlAt>) => tl.steps[beatGroups(tl)[1][0]].t0
+  check(c.steps[beatGroups(tlAt(0.3))[1][0]] < b.steps[beatGroups(tlAt(1))[1][0]] && Math.abs(c.steps[beatGroups(tlAt(0.3))[1][0]] - g1(tlAt(0.3))) < 1e-6, `${tag} beat 2 starts at ${g1(tlAt(0.3)).toFixed(2)} s (Short) vs ${g1(tlAt(1)).toFixed(2)} s (Long): holds shorter / longer`)
+  // Change pace while playing: same beat, still playing.
+  await s.key("]", "BracketRight")
+  await Bun.sleep(300)
+  await s.click(".si-gate")
+  await Bun.sleep(4200)
+  const beatAt = (tl: ReturnType<typeof tlAt>, t: number) => {
+    const g = beatGroups(tl)
+    let k = -1
+    for (let i = 0; i < g.length; i++) if (tl.steps[g[i][0]].t0 <= t + 1e-9) k = i
+    return k
+  }
+  const before = await state(s)
+  await s.key("]", "BracketRight")
+  await s.key("]", "BracketRight")
+  const after = await state(s)
+  await Bun.sleep(400)
+  const later = await state(s)
+  const kb = beatAt(tlAt(0.6), before.t)
+  const ka = beatAt(tlAt(1.5), after.t)
+  check(before.mode === "playing" && kb === ka && later.mode === "playing" && later.t > after.t && (await s.ev(`window.__storyink.pace()`)) === 1.5, `${tag} Normal → Longer mid-play keeps beat ${kb + 1} (t ${before.t.toFixed(2)} → ${after.t.toFixed(2)}) and keeps playing`)
+  // Persisted; #pace= wins.
+  await s.ev("location.reload()")
+  await Bun.sleep(1400)
+  const d = await info()
+  await s.go(url + "#motion=full&pace=0")
+  await s.ev("location.reload()")
+  await Bun.sleep(1400)
+  const e = await info()
+  check(d.pace === 1.5 && d.label === "Pauses: Longer" && e.pace === 0 && e.label === "Pauses: None" && Math.abs(e.dur - tlAt(0).duration) < 1e-6, `${tag} stored Longer survives reload; #pace=0 overrides (None, ${e.dur.toFixed(1)} s = authored timing)`)
+  // Page API.
+  await s.ev(`window.__storyink.setPace(0.6)`)
+  await Bun.sleep(300)
+  const f = await info()
+  check(f.pace === 0.6 && Math.abs(f.dur - tlAt(0.6).duration) < 1e-6, `${tag} __storyink.setPace(0.6) → pace ${f.pace}, duration ${f.dur.toFixed(1)} s`)
+  await s.ev(`localStorage.clear()`)
+}
 async function stepFollowChecks(s: S) {
   const tag = "[keys follow]"
   await s.go(lurl)
@@ -491,6 +552,7 @@ await stepFollowChecks(s)
 s.close()
 s = await session(["--force-prefers-no-reduced-motion"])
 await beatChecks(s)
+await paceChecks(s)
 await holdChecks(s)
 await stepChecks(s)
 s.close()
