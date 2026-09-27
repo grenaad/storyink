@@ -110,8 +110,8 @@ export interface Story {
    */
   camera?: StoryCamera
   /**
-   * Multiplier on the reading holds inserted after each beat (default 1; 0 = the pre-0.3.5
-   * timing, 1.5 = slower). Holds only fill the gap between a beat settling and the next starting.
+   * Multiplier on the reading holds inserted after each beat (default 0.6; 0 = the pre-0.3.5
+   * timing, 1 = the 0.3.5 holds, 1.5 = slower). Readers can change it in the viewer (Pauses). Holds only fill the gap between a beat settling and the next starting.
    */
   pace?: number
   /** Steps, or "auto" to derive them (like `"story": "auto"`, with the options above). */

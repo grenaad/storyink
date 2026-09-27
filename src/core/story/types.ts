@@ -46,6 +46,14 @@ export interface TimelineDraw {
   s1?: number
 }
 
+/** Minimal compile input: node / group parents and the story with auto steps expanded. */
+export interface StorySource {
+  type: string
+  nodes: { id: string; parent?: string }[]
+  groups: { id: string; parent?: string }[]
+  story: Record<string, unknown> & { steps: unknown[] }
+}
+
 /**
  * A compiled story: absolute times for everything. Pure data (JSON-safe), so
  * it ships inside the HTML and the browser evaluates the same function.
@@ -58,6 +66,10 @@ export interface Timeline {
   motion: "full" | "reduced" | "system"
   /** Author's viewer camera ("follow" default). */
   camera?: "follow" | "fit"
+  /** The reading-hold pace this timeline was compiled with. */
+  pace?: number
+  /** What the viewer needs to recompile for another pace (`recompilePace`). */
+  source?: StorySource
   loop: boolean
   steps: TimelineStep[]
   /** Element id → time it is revealed. Absent = visible from t = 0. */

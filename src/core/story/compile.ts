@@ -6,7 +6,7 @@ import { autoStory } from "./auto.ts"
 import { springSettle } from "./ease.ts"
 import { flattenPath } from "../layout/paths.ts"
 import { beatGroups } from "./state.ts"
-import type { Timeline, TimelineDraw, TimelineGlow, TimelinePulse } from "./types.ts"
+import type { StorySource, Timeline, TimelineDraw, TimelineGlow, TimelinePulse } from "./types.ts"
 
 const REACT_SETTLE = springSettle(S.springs.react)
 
@@ -109,7 +109,7 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
   const first = compileOnce(scene, spec)
   if (!first.timeline || spec.story === undefined) return first
   const story = spec.story === "auto" ? undefined : spec.story
-  const pace = typeof story?.pace === "number" ? story.pace : 1
+  const pace = typeof story?.pace === "number" ? story.pace : S.hold.pace
   const authored = story && Array.isArray(story.steps) ? story.steps : undefined
   const tl1 = first.timeline
   const groups = beatGroups(tl1)
@@ -131,7 +131,35 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
   const second = compileOnce(scene, spec, plan, new Map(groups.map((g, k) => [g[g.length - 1], { group: g, hold: holds[k], still: still[k] }])))
   // Diagnostics are about the authored story (pass 1), including the length warning: reading
   // holds are the viewer's pacing, not story the author has to shorten.
-  return { timeline: second.timeline, diagnostics: first.diagnostics }
+  const timeline = second.timeline && { ...second.timeline, pace, source: storySource(scene, spec) }
+  return { timeline, diagnostics: first.diagnostics }
+}
+
+/**
+ * The minimal input `compileStory` needs to compile this story again (the viewer's pace control):
+ * the node / group parents and the story with `"auto"` steps expanded. Small, JSON-safe.
+ */
+function storySource(scene: Scene, spec: Spec): StorySource {
+  const st = spec.story!
+  const steps = st === "auto" || st.steps === "auto" ? (autoStory(scene, spec).steps as StoryStep[]) : st.steps
+  // Everything but the steps and the pace (a compile parameter, stored as `timeline.pace`).
+  const opts = st === "auto" ? {} : (({ steps: _s, pace: _p, ...rest }) => rest)(st)
+  const par = (xs: { id: string; parent?: string }[] | undefined) => (xs ?? []).map((x) => (x.parent ? { id: x.id, parent: x.parent } : { id: x.id }))
+  return spec.type === "sequence"
+    ? { type: spec.type, nodes: [], groups: [], story: { ...opts, steps } }
+    : { type: spec.type, nodes: par(spec.nodes), groups: par(spec.groups), story: { ...opts, steps } }
+}
+
+/**
+ * Recompile a scene's story for another reading-hold `pace` (browser-safe; the HTML viewer calls
+ * it when the reader changes Pauses). Identical to compiling the original spec with that pace.
+ */
+export function recompilePace(scene: Scene, pace: number): Timeline | undefined {
+  const src = scene.timeline?.source
+  if (!src) return scene.timeline
+  if (scene.timeline!.pace === pace) return scene.timeline
+  const spec = { type: src.type, title: "", nodes: src.nodes, groups: src.groups, edges: [], story: { ...src.story, pace } } as unknown as Spec
+  return compileStory({ ...scene, timeline: undefined }, spec).timeline
 }
 
 /** The authored timing without reading holds (pass 1 of `compileStory`; for tests and tooling). */

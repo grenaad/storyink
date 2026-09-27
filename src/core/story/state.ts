@@ -334,6 +334,9 @@ export const beatTileMin = (w: number): number => (w > 1000 ? 660 : w > 640 ? 44
 /** Reduced-motion hold for a step without a caption (STYLE.md: a beat of ~1.2–1.8 s). */
 export const STEP_BEAT = 1.5
 
+/** Shortest stepped (reduced-motion) stop when reading holds are on (the bare-beat hold). */
+export const STEPPED_MIN = 0.8
+
 /** One stop of stepped (reduced-motion) playback: the settled time of a step and how long it holds. */
 export interface SteppedStop {
   /** Step index (-1 = before the story, `steps.length` = the final frame). */
@@ -358,8 +361,9 @@ export function steppedSchedule(tl: Timeline): SteppedStop[] {
     const cap = g.map((i) => tl.steps[i].caption).filter((c) => c).pop()
     // The same reading hold continuous play inserts after the beat (compiled onto its last step);
     // when that is 0 (pace 0 / hold 0) a stepped stop still shows for the caption's read time.
+    // Floored at the bare-beat hold: a stepped stop has no animation time to read in.
     const h = tl.steps[last].hold
-    out.push({ step: last, t: stopTime(tl, last), hold: h && h > 0 ? h : cap ? readTime(cap) : STEP_BEAT })
+    out.push({ step: last, t: stopTime(tl, last), hold: h && h > 0 ? Math.max(h, STEPPED_MIN) : cap ? readTime(cap) : STEP_BEAT })
   }
   out.push({ step: tl.steps.length, t: tl.duration, hold: 0 })
   return out
@@ -455,4 +459,32 @@ export function beatTicks(tl: Timeline): { id: string; t: number; label: string;
     const stop = g.map((i) => tl.steps[i].stop).find((x) => x)
     return { id: first.id, t: first.t0, label: first.label, ...(stop ? { stop } : {}) }
   })
+}
+
+/**
+ * Map story time `t` on timeline `from` to the same moment on `to`, the same story compiled with
+ * another reading-hold pace: the same beat, the same progress through it. Beats shift as a unit
+ * between paces, so the part of a beat before its hold keeps its offset exactly; the rest (the
+ * reading hold and any authored slack) maps proportionally. Before the first beat and after the
+ * last one, the offset is kept.
+ */
+export function mapStoryTime(from: Timeline, to: Timeline, t: number): number {
+  const gf = beatGroups(from)
+  const gt = beatGroups(to)
+  if (gf.length !== gt.length || !gf.length) return Math.min(t, to.duration)
+  const start = (tl: Timeline, g: number[][], k: number) => (k < g.length ? tl.steps[g[k][0]].t0 : tl.duration)
+  if (t >= from.duration - 1e-9) return to.duration
+  if (t < start(from, gf, 0)) return Math.min(t, start(to, gt, 0))
+  let k = 0
+  while (k + 1 < gf.length && start(from, gf, k + 1) <= t + 1e-9) k++
+  const a0 = start(from, gf, k)
+  const b0 = start(to, gt, k)
+  const G0 = start(from, gf, k + 1) - a0
+  const G1 = start(to, gt, k + 1) - b0
+  const hold = (tl: Timeline, g: number[][]) => (k + 1 < g.length ? (tl.steps[g[k][g[k].length - 1]].hold ?? 0) : 0)
+  // The shared, un-held part of the beat keeps its offset.
+  const A = Math.max(0, Math.min(G0 - hold(from, gf), G1 - hold(to, gt)))
+  const off = t - a0
+  if (off <= A || G0 - A <= 1e-9) return Math.min(b0 + off, b0 + G1)
+  return b0 + A + ((off - A) / (G0 - A)) * (G1 - A)
 }

@@ -37,12 +37,12 @@ describe("reading hold", () => {
         const end = Math.max(...prev.map((i) => tl.steps[i].t1))
         const hold = tl.steps[prev.at(-1)!].hold!
         const cap = prev.map((i) => tl.steps[i].caption).filter((c) => c).pop()
-        expect(hold).toBeCloseTo(readingHold(cap), 3)
+        expect(hold).toBeCloseTo(readingHold(cap) * S.hold.pace, 3)
         expect(tl.steps[g[k][0]].t0).toBeGreaterThanOrEqual(end + hold - 2e-3)
       }
       // Stepped playback uses the same numbers.
       const sched = steppedSchedule(tl)
-      g.forEach((grp, k) => expect(sched[k].hold).toBe(tl.steps[grp.at(-1)!].hold!))
+      g.forEach((grp, k) => expect(sched[k].hold).toBe(Math.max(0.8, tl.steps[grp.at(-1)!].hold!)))
     })
 })
 
@@ -64,8 +64,9 @@ describe("timing semantics", () => {
       { at: "+0.1", pulse: "b->c", hold: 0.25 },
       { at: "+0", reveal: ["c"], hold: 0.25 },
     ]
-    const t1 = tlOf(withStory({ steps }))
+    const t1 = tlOf(withStory({ steps, pace: 1 }))
     const t2 = tlOf(withStory({ steps, pace: 2 }))
+    expect(tlOf(withStory({ steps })).steps[0].hold).toBeCloseTo(0.6 * readingHold("Alpha starts"), 3) // default pace 0.6
     expect(t1.steps[0].hold).toBeCloseTo(readingHold("Alpha starts"), 3)
     expect(t2.steps[0].hold).toBeCloseTo(2 * readingHold("Alpha starts"), 3)
     expect(t2.duration).toBeGreaterThan(t1.duration)

@@ -25,7 +25,7 @@ describe("stepped playback (reduced motion)", () => {
         expect(x.t).toBeGreaterThanOrEqual(st.t0)
         expect(x.t).toBeLessThanOrEqual(st.t1 + 1e-9)
         // The same reading hold continuous play inserts after the beat.
-        expect(x.hold).toBe(st.hold && st.hold > 0 ? st.hold : cap ? readTime(cap) : STEP_BEAT)
+        expect(x.hold).toBe(st.hold && st.hold > 0 ? Math.max(st.hold, 0.8) : cap ? readTime(cap) : STEP_BEAT)
         expect(x.hold).toBeGreaterThanOrEqual(0.8)
         expect(x.hold).toBeLessThanOrEqual(6)
       })

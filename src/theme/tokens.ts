@@ -239,7 +239,7 @@ export const story = {
    * beat did before the next one starts. ~200 wpm plus a second to look; bare beats get `bare`.
    * Scaled by `story.pace`.
    */
-  hold: { base: 1, perWord: 0.3, min: 1.5, max: 6, bare: 0.8 },
+  hold: { base: 1, perWord: 0.3, min: 1.5, max: 6, bare: 0.8, pace: 0.6 },
   /** Warn when the authored story (without reading holds) runs longer than this. */
   warnTotal: 60,
 }

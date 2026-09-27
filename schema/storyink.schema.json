@@ -58,7 +58,8 @@
               "type": "number",
               "minimum": 0,
               "maximum": 10,
-              "description": "Multiplier on the reading holds after each beat (default 1; 0 = no holds, 1.5 = slower)."
+              "default": 0.6,
+              "description": "Multiplier on the reading holds after each beat (default 0.6; 0 = no holds, 1 = the 0.3.5 holds, 1.5 = slower). Readers can change it in the viewer."
             },
             "motion": {
               "enum": [
