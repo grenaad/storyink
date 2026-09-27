@@ -4,7 +4,7 @@ import { fromMermaid } from "./core/mermaid/index.ts"
 import { formatDiagnostic, type Diagnostic } from "./core/validate.ts"
 import { VERSION } from "./generated/meta.ts"
 import { readSkill, skillPath } from "./node/assets.ts"
-import { loadSpec, parseSource, setStoryCamera, setStoryMotion, snapshot, writeAnimatedSvg, writeDiagram } from "./node/index.ts"
+import { loadSpec, parseSource, setStoryCamera, setStoryMotion, setStoryPace, snapshot, writeAnimatedSvg, writeDiagram } from "./node/index.ts"
 import type { ThemeName } from "./theme/tokens.ts"
 
 const COLOR = !!process.stdout.isTTY && !process.env.NO_COLOR
@@ -23,6 +23,7 @@ ${bold("Usage")}
   storyink render <in.json|in.mmd|-> [-o out.html] [--svg out.svg] [--theme light|dark] [--story auto]
                  [--motion full|reduced|system]   story playback motion (default full; system = OS setting)
                  [--camera follow|fit]   viewer camera while playing (default follow)
+                 [--pace N]   reading holds after each beat × N (default 1; 0 = none)
                  [--animated-svg out.svg [--theme light|dark|both] [--once] [--font system|embed]]
                    animated SVG (SMIL) for READMEs / PRs: plays inside <img>, no script
   storyink mermaid <in.mmd> [-o out.json]
@@ -51,7 +52,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const _: string[] = []
   const flags = new Map<string, string | true>()
-  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size", "--animated-svg", "--font", "--motion", "--camera"])
+  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size", "--animated-svg", "--font", "--motion", "--camera", "--pace"])
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "-" || !a.startsWith("-")) _.push(a)
@@ -127,6 +128,12 @@ async function main(argv: string[]): Promise<number> {
     if (camera !== undefined) {
       if (camera !== "follow" && camera !== "fit") throw new Error(`--camera must be follow or fit, got "${camera}"`)
       if (!setStoryCamera(loaded.spec, camera)) process.stderr.write(`${yellow("warn ")} --camera ignored: the spec has no story (add --story auto)\n`)
+    }
+    const pace = str(a, "--pace")
+    if (pace !== undefined) {
+      const n = Number(pace)
+      if (!Number.isFinite(n) || n < 0 || n > 10) throw new Error(`--pace must be a number from 0 to 10, got "${pace}"`)
+      if (!setStoryPace(loaded.spec, n)) process.stderr.write(`${yellow("warn ")} --pace ignored: the spec has no story (add --story auto)\n`)
     }
     const svg = str(a, "--svg")
     const animated = str(a, "--animated-svg")

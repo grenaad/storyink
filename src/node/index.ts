@@ -87,6 +87,16 @@ export function setStoryCamera(spec: Spec, camera: "follow" | "fit"): boolean {
   return true
 }
 
+/**
+ * Set the story's reading-hold multiplier (`story.pace`). `"story": "auto"` becomes
+ * `{ "steps": "auto", "pace": n }`. Returns false when the spec has no story.
+ */
+export function setStoryPace(spec: Spec, pace: number): boolean {
+  if (spec.story === undefined) return false
+  spec.story = spec.story === "auto" ? { steps: "auto", pace } : { ...spec.story, pace }
+  return true
+}
+
 export interface AnimatedWriteResult {
   ok: boolean
   diagnostics: Diagnostic[]
