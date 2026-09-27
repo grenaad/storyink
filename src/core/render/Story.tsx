@@ -2,7 +2,7 @@ import { animate, useMotionValue, useMotionValueEvent, type AnimationPlaybackCon
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react"
 import { story as S } from "../../theme/tokens.ts"
 import type { Scene } from "../scene.ts"
-import { beatCaption, beatChapters, mapStoryTime, beatStops, beatTicks, beatTileMin, beatTimes, stepBoundary, stepMoveSpeed, stepMoveTarget, steppedSchedule, steppedStop, steppedTime, storyState } from "../story/state.ts"
+import { beatCaption, beatChapters, beatIndexAt, beatMotionChapters, beatMotionEnds, beatMotionStarts, mapStoryTime, skipGap, beatStops, beatTicks, beatTileMin, beatTimes, stepBoundary, stepMoveSpeed, stepMoveTarget, steppedSchedule, steppedStop, steppedTime, storyState } from "../story/state.ts"
 import type { Frame, Timeline } from "../story/types.ts"
 import { Diagram } from "./Diagram.tsx"
 
@@ -92,6 +92,7 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
   const seek = useCallback(
     (x: number) => {
       stop()
+      setPin(undefined)
       setBlur(0)
       const v = Math.max(0, Math.min(duration, x))
       // Reduced motion: quantised to the settled state of the step in effect.
@@ -103,6 +104,8 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
   )
   const play = useCallback(() => {
     if (!tl) return
+    // Continuous play types captions again.
+    setPin(undefined)
     if (opts.reduced) {
       // Reduced motion ("Play steps"): jump to each step's settled state, hold for its
       // reading time, advance. No pulses, tweens or draw-on in between.
@@ -180,6 +183,7 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
   }, [tl, clock, duration, opts.reduced, seek])
   const replay = useCallback(() => {
     if (!tl) return
+    setPin(undefined)
     stop()
     setSettled(false)
     const t0 = clock.get()
@@ -221,8 +225,21 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
   }, [pause, play, replay])
 
   // Both motion modes move between settled beats (a pulse and the reveal it causes are one beat).
-  const marks = useMemo(() => (tl ? beatStops(tl) : []), [tl])
-  const chapters = useMemo(() => (tl ? beatChapters(tl) : []), [tl])
+  // Full motion moves stop where a beat's graph motion ends (no waiting for its caption, glows or
+  // hold); stepped playback keeps the settled beat stops.
+  const motionEnds = useMemo(() => (tl ? beatMotionEnds(tl) : []), [tl])
+  const motionStarts = useMemo(() => (tl ? beatMotionStarts(tl) : []), [tl])
+  const marks = useMemo(() => (tl ? (opts.reduced ? beatStops(tl) : [...motionEnds, duration]) : []), [tl, opts.reduced, motionEnds, duration])
+  const chapters = useMemo(() => (tl ? (opts.reduced ? beatChapters(tl) : beatMotionChapters(tl)) : []), [tl, opts.reduced])
+  /**
+   * Step-move caption pin: the beat whose caption shows whole and instantly. Set by → / ← (the
+   * target beat), kept while paused at the stop, cleared by play / seek / replay.
+   */
+  const [pin, setPin] = useState<{ dir: 1 | -1; beat: number } | undefined>(undefined)
+  const beatOf = (target: number) => {
+    const k = motionEnds.findIndex((x) => Math.abs(x - target) < 1e-6)
+    return k >= 0 ? k : motionEnds.length - 1
+  }
   const step = useCallback(
     (dir: 1 | -1, useChapters = false): Promise<void> => {
       const list = useChapters && chapters.length > 1 ? chapters : marks
@@ -234,6 +251,7 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
       }
       const cur = move.current
       const target = stepMoveTarget(list, now, dir, duration, cur ?? undefined)
+      setPin({ dir, beat: beatOf(target) })
       if (cur && cur.dir === dir) {
         // Same direction while moving: extend; the running driver picks the new target up.
         cur.target = target
@@ -242,7 +260,11 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
       stop()
       setBlur(0)
       setSettled(false)
-      if (Math.abs(target - now) < 1e-4) {
+      // No waiting: from a reading hold (or any gap after a beat's motion), start the next beat now.
+      const from = skipGap(motionEnds, motionStarts, now, dir, target)
+      if (from !== now) clock.set(from)
+      if (Math.abs(target - from) < 1e-4) {
+        clock.set(target)
         setModeSync(now >= duration - 1e-3 ? "ended" : "paused")
         return Promise.resolve()
       }
@@ -263,7 +285,8 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
         last = nowMs
         const c = clock.get()
         const v = stepMoveSpeed(dir, (nowMs - t0) / 1000, Math.abs(m.target - c))
-        const next = c + dir * v * dt
+        // Skip the dead time between beats (reading holds, authored gaps) on the way.
+        const next = skipGap(motionEnds, motionStarts, c + dir * v * dt, dir, m.target)
         if (dir > 0 ? next >= m.target - 1e-6 : next <= m.target + 1e-6) {
           clock.set(m.target)
           ctl.current = undefined
@@ -287,7 +310,7 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
       } as AnimationPlaybackControls
       return p
     },
-    [marks, chapters, clock, duration, seek, opts.reduced, tl],
+    [marks, chapters, clock, duration, seek, opts.reduced, tl, motionEnds, motionStarts],
   )
   const moving = useCallback(() => (move.current ? { dir: move.current.dir, target: move.current.target } : null), [])
   const ungate = useCallback(() => {
@@ -405,7 +428,13 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
     return () => clearTimeout(id)
   }, [mode])
 
-  const frame = useMemo(() => storyState(scene, tl, t, { reduced: opts.reduced, stepped: opts.reduced }), [scene, tl, t, opts.reduced])
+  // During a forward move the caption follows the beat being animated (up to the target); a
+  // rewind shows the target beat's caption from the start; paused at the stop, the target's.
+  const captionBeat = pin && tl && !opts.reduced ? (pin.dir > 0 && move.current ? Math.min(pin.beat, Math.max(0, beatIndexAt(tl, t))) : pin.beat) : undefined
+  const frame = useMemo(
+    () => storyState(scene, tl, t, { reduced: opts.reduced, stepped: opts.reduced, ...(captionBeat !== undefined ? { captionBeat } : {}) }),
+    [scene, tl, t, opts.reduced, captionBeat],
+  )
   const frameAt = useCallback((x: number) => storyState(scene, tl, x, { reduced: opts.reduced, stepped: opts.reduced }), [scene, tl, opts.reduced])
   if (!tl) return undefined
   const dim = mode === "gate" ? (opts.reduced ? 1 : S.gateDim) : mode === "ended" && settled ? S.endedDim : 1
