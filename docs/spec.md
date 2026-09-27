@@ -112,7 +112,7 @@ print all show the **final frame, which is exactly the static diagram**.
   "autoplay": false,   // default: click-to-play gate; true = play when scrolled into view
   "end": "hold",       // "hold" (default) or "loop"
   "motion": "full",    // "full" (default), "reduced" or "system"; see Reduced motion below
-  "pace": 1,           // reading holds after each beat × pace (default 1; 0 = none, 1.5 = slower)
+  "pace": 0.6,         // reading holds after each beat × pace (default 0.6; 0 = none, 1.5 = slower)
   "steps": [
     { "at": 0, "reveal": ["web"], "caption": "A shopper presses Pay", "stop": "Request" },
     { "at": "+0.2", "pulse": "web->gateway" },
@@ -143,7 +143,7 @@ elapses, whichever is last. After the last event the story holds 1.5 s. Glows ar
 **Reading holds.** In continuous play the story pauses after each **beat** (see Beats) so the
 reader can take in what it did, without slowing the animation itself:
 - the hold is `1 s + 0.3 s per word` of the beat's caption (its last), clamped to 1.5–6 s, or
-  0.8 s for a beat without a caption; × `story.pace` (default 1); a step's `hold` overrides it
+  0.8 s for a beat without a caption; × `story.pace` (default **0.6**); a step's `hold` overrides it
   for the beat it ends. Core: `readingHold(caption)`.
 - It starts once the beat is visually still (its step ends, arrival rings, cooling trails, glows
   and label flashes, implicit reveals, counter rolls) and nothing on the diagram changes during
@@ -152,11 +152,25 @@ reader can take in what it did, without slowing the animation itself:
   snapshots and the animated SVG all agree): a beat's first step starts no earlier than the
   previous beat's still point + hold. Relative `"+x"` steps shift; an absolute `at` is a
   minimum; a step whose own timing already leaves that room adds nothing. `pace: 0` is the
-  authored (pre-0.3.5) timing.
+  authored (pre-0.3.5) timing, `pace: 1` the 0.3.5 holds.
 - No hold after the last beat (the 1.5 s end hold stays). Stepped (reduced-motion) playback holds
   each stop for the same number. → / ← step moves stop at the settled beat and don't wait: the
   reader sets the pace there. The compiled hold is on the beat's last step (`timeline.steps[i].hold`).
   `storyink render --pace N`, tool `storyink_render` `pace`.
+- **Readers change it in the viewer.** The toolbar's **Pauses** button shows the pace in effect
+  (`Pauses: Normal`; the tooltip marks the author's value as the default) and cycles through the
+  presets **None (0) · Short (0.3) · Normal (0.6) · Long (1.0) · Longer (1.5)** on click; `[` / `]`
+  step down / up. The HTML embeds `timeline.source` (node / group parents and the story with auto
+  steps expanded, a few KB) and `timeline.pace`; the viewer recompiles the timeline in the browser
+  with the same `compileStory` (`recompilePace(scene, pace)`, identical to `render --pace`). The
+  playback position moves to the same beat with the same progress through it
+  (`mapStoryTime(from, to, t)`: the part of a beat before its hold keeps its offset, the rest maps
+  proportionally) and playback carries on; the duration, scrubber ticks, → / ← stops, stepped
+  holds and the follow camera use the new timeline.
+- **Precedence:** `#pace=<n>` > the reader's choice (`localStorage["storyink-pace"]`) > the
+  author's `story.pace` > 0.6. `storyink snapshot --pace N` (tool `storyink_snapshot` `pace`) pins
+  it for every capture; by default snapshots use the HTML's author pace, so gates stay deterministic.
+- The **animated SVG** has no script, so no Pauses control: it plays with the pace it was built with.
 
 `"story": "auto"` (or `--story auto` / tool `story: "auto"`) derives the steps: graphs reveal the
 sources, then pulse breadth-first waves and reveal what they reach (edges into a group enter its
@@ -247,14 +261,16 @@ animated SVG (SMIL) has no follow camera.
 **Page contract:** `#t=<seconds|end>` seeks (paused), `#autoplay=0|1`, `#motion=full|reduced`,
 `#camera=follow|fit` (with `#t=`, `follow` shows the followed view),
 `#static=1` (runtime off, final frame), `#sheet=beats` (one tile per step + final frame).
-`window.__storyink = { ready, duration, steps: [{ id, label, t0, t1, stop? }], setTime(t), play(), pause(), replay(), step(dir, chapter?), stepAnimated(), state(), camera() }`;
+`window.__storyink = { ready, duration, steps: [{ id, label, t0, t1, stop? }], setTime(t), play(), pause(), replay(), step(dir, chapter?), stepAnimated(), state(), camera(), pace(), setPace(n) }`;
+`duration` and `steps` follow the timeline in effect (the reader's pace); `pace()` / `setPace(n)`
+read and set it (`setPace` is the reader's choice, stored like the toolbar's);
 `step(1 | -1, chapter?)` is the animated step move below and returns a Promise that resolves when
 the move ends (or is interrupted); `stepAnimated()` is the running move `{ dir, target }` or null.
 `state()` reads the clock and mode directly (no render lag).
 `camera()` returns `{ mode, follow, k, x, y, goal, step, engaged, suspended, userK, viewport }`
 (a diagram point p is drawn at `x + (p.x − viewBox.x)·k`).
 Keys: space play/pause, →/← step moves (Shift: by chapter), R replay, M motion, F follow,
-0 fit, +/− zoom.
+[ / ] pauses shorter / longer, 0 fit, +/− zoom. `#pace=<n>` sets the reading-hold pace.
 
 **Step moves (→ / ←).** In full motion the arrows animate instead of jumping:
 - **→** plays forward at normal speed from the current time to the **next beat stop** (see Beats:

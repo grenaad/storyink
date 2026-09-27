@@ -105,9 +105,10 @@ Loop: render, then `storyink_snapshot` with `sheet: "beats"` (CLI `--sheet beats
   `story` (or `motion` on `storyink_render`) to honour it, `"reduced"` to always step.
 - Reduced-motion viewers get stepped playback (settled steps, no motion); check with
   `motion: "reduced"` + `at` frames if the steps must read well on their own.
-- Playback pauses after each beat for reading (≈ 1 s + 0.3 s/word of its caption). Tune with
-  `"pace"` in `story` (or `pace` on `storyink_render`; 0 = none, 1.5 = slower) or `"hold": s` on a
-  step; an absolute `at` is only a minimum start. `at` frames shift accordingly: use
+- Playback pauses after each beat for reading (≈ 0.6 × (1 s + 0.3 s/word) of its caption by
+  default). Tune with `"pace"` in `story` (or `pace` on `storyink_render`; default 0.6, 0 = none,
+  1 = longer) or `"hold": s` on a step; an absolute `at` is only a minimum start. Readers can change
+  it in the viewer (Pauses, `[` / `]`); snapshots use the author pace unless `pace` is given. `at` frames shift accordingly: use
   `__storyink.steps` or beat sheets rather than hard-coded times.
 - On large diagrams the viewer's camera follows the story (readable zoom, pans step to step, fit
   at the end). To see what a reader sees mid-story, snapshot with `camera: "follow"` + `at`;

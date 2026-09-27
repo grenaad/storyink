@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.6
+
+- **Default `story.pace` is 0.6** (was 1): shorter reading holds after each beat. `pace: 1` gives
+  the 0.3.5 holds, `pace: 0` the pre-0.3.5 timing. Applies to the viewer, `render` (and
+  `--pace`), the plugin and animated SVGs (built with their pace). Durations: OpenWick
+  architecture 176 s → 135 s, data flow 95 s → 78 s, checkout 30 s → 26 s, OAuth 57 s → 47 s.
+- **Pauses in the viewer**, changeable after the build: a toolbar button (`Pauses: Normal`)
+  cycles None (0) · Short (0.3) · Normal (0.6) · Long (1.0) · Longer (1.5); `[` / `]` step down /
+  up; the choice is remembered (`localStorage["storyink-pace"]`); `#pace=<n>` wins. The HTML
+  embeds a small `timeline.source` and the viewer recompiles the timeline in the browser with the
+  same compiler (`recompilePace`, byte-identical to `render --pace`). The reader keeps their place
+  (same beat, same progress; `mapStoryTime`) and playback continues; duration, ticks, → / ← stops,
+  stepped holds and the follow camera follow the new timeline. Page contract: `pace()`,
+  `setPace(n)`. Viewer bundle +16.5 KiB (388.5 → 405.0 KiB).
+- `storyink snapshot --pace N` (tool `storyink_snapshot` `pace`) pins the pace for every capture;
+  by default snapshots use the author pace.
+- Stepped (reduced-motion) stops last at least 0.8 s (the bare-beat hold).
+- Fix: clicking a toolbar button while the play gate showed also started the story.
+
 ## 0.3.5
 
 - **Fix: the diagram showed a hover tooltip** (the diagram title) wherever the cursor rested. The

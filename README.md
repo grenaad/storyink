@@ -128,8 +128,10 @@ previous one (Shift: by chapter; repeated presses extend the move).
 
 Playback **pauses to read after each beat**: about 1 s + 0.3 s per word of its caption (1.5–6 s;
 0.8 s without one) once the beat is still, before the next beat starts. The animation speed is
-unchanged. Set `"story": { "pace": 1.5 }` (or `--pace`) to slow it further, `0` for none, or
-`"hold": 3` on a step for its beat.
+unchanged. The default `pace` is 0.6; set `"story": { "pace": 1.5 }` (or `--pace`) to slow it,
+`0` for none, or `"hold": 3` on a step for its beat. Readers change it on the page with
+**Pauses** in the toolbar (None · Short · Normal · Long · Longer, `[` / `]`, remembered;
+`#pace=` in the URL); the viewer recompiles the timeline in the browser and keeps their place.
 
 Motion is **full by default, even when the reader's system asks for reduced motion**. Authors can
 set `"story": { "motion": "reduced" }` (always step by step) or `"motion": "system"` (follow
