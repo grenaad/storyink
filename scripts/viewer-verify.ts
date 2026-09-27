@@ -417,6 +417,50 @@ async function beatChecks(s: S) {
   }
   check(cases.length >= 5 && !bad.length, `${tag} → from ${cases.length} beat stops lands on the next settled beat with the dot's target box visible, no pulse in flight${bad.length ? `: ${bad.join("; ")}` : ""}`)
 }
+// ── Reading holds in continuous play; no hover tooltip on the diagram ──
+async function holdChecks(s: S) {
+  const tag = "[holds]"
+  await s.go(url + "#motion=full")
+  await s.ev(`localStorage.clear()`)
+  await s.ev("location.reload()")
+  await Bun.sleep(1400)
+  // Hover with the real mouse at several points of the diagram: nothing under the cursor has a
+  // title attribute, and the stage holds no SVG <title> (the browser's tooltip sources).
+  const r = JSON.parse(await s.ev(`JSON.stringify(document.querySelector(".si-stage svg.storyink").getBoundingClientRect())`))
+  let titled = 0
+  for (const [fx, fy] of [[0.2, 0.3], [0.5, 0.5], [0.8, 0.6], [0.35, 0.8]]) {
+    const x = r.x + r.width * fx
+    const y = r.y + r.height * fy
+    await s.mouse("mouseMoved", x, y)
+    await Bun.sleep(150)
+    titled += Number(await s.ev(`(()=>{let n=0;for(let e=document.elementFromPoint(${x},${y});e;e=e.parentElement)if(e.hasAttribute&&e.hasAttribute("title"))n++;return n})()`))
+  }
+  const titles = Number(await s.ev(`document.querySelectorAll(".si-stage svg title, .si-canvas [title], .si-canvas title").length`))
+  check(titled === 0 && titles === 0, `${tag} hovering the diagram (real mouse, 4 points): ${titled} title attributes under the cursor, ${titles} SVG <title>s in the stage`)
+  // Continuous play: during each beat's reading hold the diagram doesn't change.
+  const ckTl = toScene(loadSpec(path.join(root, "examples/checkout.architecture.json")).spec).timeline!
+  const G = beatGroups(ckTl)
+  const windows = G.slice(1).map((g, k) => {
+    const next = ckTl.steps[g[0]].t0
+    const hold = ckTl.steps[G[k].at(-1)!].hold!
+    return { k, a: next - hold, b: next, hold }
+  })
+  await s.mouse("mouseMoved", 5, 5)
+  await s.click(".si-gate")
+  const fp = `(()=>{const h=document.querySelector(".si-stage svg.storyink").outerHTML;let x=0;for(let i=0;i<h.length;i++)x=(x*31+h.charCodeAt(i))|0;return JSON.stringify({t:window.__storyink.state().t,m:window.__storyink.state().mode,x})})()`
+  const seen = new Map<number, { t: number; x: number }[]>()
+  const t0 = Date.now()
+  while (Date.now() - t0 < 40000) {
+    const v = JSON.parse(await s.ev(fp)) as { t: number; m: string; x: number }
+    if (v.m === "ended") break
+    for (const w of windows) if (v.t > w.a + 0.05 && v.t < w.b - 0.05) (seen.get(w.k) ?? seen.set(w.k, []).get(w.k)!).push({ t: v.t, x: v.x })
+    await Bun.sleep(40)
+  }
+  const bad = [...seen.entries()].filter(([, xs]) => new Set(xs.map((q) => q.x)).size > 1).map(([k]) => k)
+  const covered = [...seen.values()].filter((xs) => xs.length >= 5).length
+  const minHold = Math.min(...windows.map((w) => w.hold))
+  check(covered >= windows.length - 1 && !bad.length, `${tag} continuous play holds still for each beat's reading hold (${covered}/${windows.length} holds sampled, ≥ ${minHold.toFixed(2)} s each${bad.length ? `; changed during hold ${bad.join(",")}` : ""})`)
+}
 async function stepFollowChecks(s: S) {
   const tag = "[keys follow]"
   await s.go(lurl)
@@ -447,6 +491,7 @@ await stepFollowChecks(s)
 s.close()
 s = await session(["--force-prefers-no-reduced-motion"])
 await beatChecks(s)
+await holdChecks(s)
 await stepChecks(s)
 s.close()
 s = await session(["--force-prefers-no-reduced-motion"])
@@ -469,7 +514,8 @@ await s.go(url)
 const gate = JSON.parse(await s.ev(`JSON.stringify({t: window.__storyink.state().t, rings: document.querySelectorAll(".si-gate-ring").length, label: document.querySelector("button[aria-pressed]")?.getAttribute("aria-label")})`))
 await s.ev(`document.querySelector(".si-gate").click()`)
 let flight = 0
-for (let i = 0; i < 80; i++) {
+// Until the first pulse flies (after beat 0 and its reading hold), at most 10 s.
+for (let i = 0; i < 250 && !flight; i++) {
   flight = Math.max(flight, Number(await s.ev(`document.querySelectorAll('.si-stage [data-si^="pulse:"]').length`)))
   await Bun.sleep(40)
 }
