@@ -348,7 +348,7 @@ export function Diagram({ scene, style, copy = "", className, frame, smil }: Dia
       data-storyink={scene.type}
       data-copy={copy || undefined}
     >
-      <title>{scene.title}</title>
+      {/* Accessible name via role="img" + aria-label only: an SVG <title> shows as a hover tooltip. */}
       {style ? <style>{style}</style> : null}
       <rect className="si-bg" x={vb.x} y={vb.y} width={vb.w} height={vb.h} />
       <g className="si-bands">
