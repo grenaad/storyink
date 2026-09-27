@@ -1,6 +1,6 @@
 import { story as S } from "../../theme/tokens.ts"
 import type { Pt, Scene } from "../scene.ts"
-import { clamp01, easeOutCubic, inOutCubic, react, smooth, smoothstep, spring } from "./ease.ts"
+import { clamp01, easeOutCubic, inOutCubic, react, smooth, smoothstep, spring, springSettle } from "./ease.ts"
 import type { Frame, GlowFrame, PulseFrame, Timeline } from "./types.ts"
 import { composeTitle, readTime, truncate } from "./compile.ts"
 
@@ -13,6 +13,12 @@ export interface StateOptions {
    * reveals, counters and captions of later steps have not begun.
    */
   stepped?: boolean
+  /**
+   * Step-move rendering (→ / ←): show beat `captionBeat`'s caption whole and instantly (no word
+   * typing, no fade), whatever `t` is; `null` = no caption. Undefined (the default) = the normal
+   * typed captions of continuous play.
+   */
+  captionBeat?: number | null
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100
@@ -230,6 +236,12 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
       words: words.map((_, i) => r2(reduced ? 1 : spring(t - c.t0 - i * stagger, f))),
       current: true,
     })
+  }
+  if (opts.captionBeat !== undefined) {
+    // Step moves: the target beat's caption, whole, at once.
+    const k = opts.captionBeat === null ? -1 : captionForBeat(tl, opts.captionBeat)
+    const c = k >= 0 ? tl.captions[k] : undefined
+    frame.captions = c ? [{ i: k, text: c.text, o: 1, words: c.text.split(/\s+/).map(() => 1), current: true }] : []
   }
   return frame
 }
@@ -487,4 +499,93 @@ export function mapStoryTime(from: Timeline, to: Timeline, t: number): number {
   const off = t - a0
   if (off <= A || G0 - A <= 1e-9) return Math.min(b0 + off, b0 + G1)
   return b0 + A + ((off - A) / (G0 - A)) * (G1 - A)
+}
+
+const REACT_END = springSettle(S.springs.react)
+
+/**
+ * Where each beat's graph motion starts: its first step, or earlier when a sequence frame rises
+ * ahead of its first message (the compiler's only pre-roll). Last entry: the story's end.
+ */
+export function beatMotionStarts(tl: Timeline): number[] {
+  const g = beatGroups(tl)
+  const out = g.map((grp) => {
+    const t0 = tl.steps[grp[0]].t0
+    const pre = Object.entries(tl.appear)
+      .filter(([id, at]) => id.startsWith("frame-") && at < t0 - 1e-6 && at > t0 - 1)
+      .map(([, at]) => at)
+    return pre.length ? Math.min(t0, ...pre) : t0
+  })
+  out.push(tl.duration)
+  return out
+}
+
+/**
+ * **Move stops** (→ / ← in full motion): the end of each beat's *graph* motion. Its pulses have
+ * arrived, its reveals and wire draw-ons (implicit ones too) and counter rolls have reached
+ * their end state. Not its caption typing or reading time, glows, flashes, cooling trails or
+ * arrival rings: a stop may show those still fading. Always at or after the beat's start.
+ */
+export function beatMotionEnds(tl: Timeline): number[] {
+  const g = beatGroups(tl)
+  const starts = beatMotionStarts(tl)
+  return g.map((grp, k) => {
+    // Step times are rounded to the ms, event times aren't: 2 ms of slack at the window edges.
+    const a = tl.steps[grp[0]].t0 - 2e-3
+    // Up to the next beat's motion start (a sequence frame's pre-roll belongs to that beat).
+    const b = k + 1 < g.length ? starts[k + 1] - 2e-3 : Infinity
+    const inBeat = (t: number) => t >= a && t < b
+    const ev = [
+      starts[k],
+      ...tl.pulses.filter((p) => grp.some((i) => p.id.startsWith(`pulse-${i}-`))).map((p) => p.tf1),
+      ...Object.values(tl.appear).filter(inBeat).map((t) => t + REACT_END),
+      ...Object.values(tl.draw).filter((d) => inBeat(d.t0)).map((d) => d.t1),
+      ...Object.values(tl.counters).flatMap((c) => c.events.filter((e) => inBeat(e.t)).map((e) => e.t + REACT_END)),
+    ]
+    // Rounded up, so a stop is never a hair before an arrival.
+    return Math.ceil(Math.max(...ev) * 1e4 - 1e-9) / 1e4
+  })
+}
+
+/** Move-stop chapters (Shift+→ / ←): the motion end of each beat holding a `stop`, and the end. */
+export function beatMotionChapters(tl: Timeline): number[] {
+  const ends = beatMotionEnds(tl)
+  return [...beatGroups(tl).flatMap((g, k) => (g.some((i) => tl.steps[i].stop) ? [ends[k]] : [])), tl.duration]
+}
+
+/** Index of the beat in effect at `t` (the last one started, by `beatMotionStarts`; -1 before). */
+export function beatIndexAt(tl: Timeline, t: number): number {
+  const s = beatMotionStarts(tl)
+  let k = -1
+  for (let i = 0; i + 1 < s.length; i++) if (s[i] <= t + 1e-9) k = i
+  return k
+}
+
+/**
+ * The caption a beat shows (index into `timeline.captions`): its own last caption, else the one
+ * still on screen when it starts (an earlier beat's line carrying over); -1 for none.
+ */
+export function captionForBeat(tl: Timeline, k: number): number {
+  const g = beatGroups(tl)[k]
+  if (!g) return -1
+  for (let j = tl.captions.length - 1; j >= 0; j--) if (g.includes(tl.captions[j].step)) return j
+  const t0 = tl.steps[g[0]].t0
+  for (let j = tl.captions.length - 1; j >= 0; j--) if (tl.captions[j].t0 <= t0 + 1e-9 && tl.captions[j].t1 > t0 + 1e-9) return j
+  return -1
+}
+
+/**
+ * Dead time a step move skips: after beat k's graph motion ends and before beat k+1's starts
+ * (the reading hold and any authored gap). Forward from inside such a gap, heading past it:
+ * the next beat's start. Backward: the earlier beat's motion end. Otherwise `t`.
+ */
+export function skipGap(ends: number[], starts: number[], t: number, dir: 1 | -1, target: number): number {
+  for (let k = 0; k < ends.length; k++) {
+    const e = ends[k]
+    const n = starts[k + 1]
+    if (n === undefined || n <= e + 1e-6) continue
+    if (dir > 0 && t >= e - 1e-6 && t < n - 1e-6 && target >= n - 1e-6) return n
+    if (dir < 0 && t <= n + 1e-6 && t > e + 1e-6 && target <= e + 1e-6) return e
+  }
+  return t
 }
