@@ -2,7 +2,7 @@ import { animate, useMotionValue, useMotionValueEvent, type AnimationPlaybackCon
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react"
 import { story as S } from "../../theme/tokens.ts"
 import type { Scene } from "../scene.ts"
-import { beatCaption, beatChapters, beatStops, beatTicks, beatTileMin, beatTimes, stepBoundary, stepMoveSpeed, stepMoveTarget, steppedSchedule, steppedStop, steppedTime, storyState } from "../story/state.ts"
+import { beatCaption, beatChapters, mapStoryTime, beatStops, beatTicks, beatTileMin, beatTimes, stepBoundary, stepMoveSpeed, stepMoveTarget, steppedSchedule, steppedStop, steppedTime, storyState } from "../story/state.ts"
 import type { Frame, Timeline } from "../story/types.ts"
 import { Diagram } from "./Diagram.tsx"
 
@@ -296,6 +296,24 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
     play()
   }, [clock, play])
 
+  // A new timeline for the same story (the reader changed Pauses): keep the place, on the same
+  // beat with the same progress, and carry on in the same mode. Runs before the initial-state
+  // effect so a first-render recompile is overridden by the hash / gate setup below.
+  const prevTl = useRef(tl)
+  useEffect(() => {
+    const p = prevTl.current
+    prevTl.current = tl
+    if (!p || !tl || p === tl) return
+    const was = modeRef.current
+    const now = mapStoryTime(p, tl, clock.get())
+    stop()
+    setBlur(0)
+    clock.set(opts.reduced ? steppedTime(tl, now) : now)
+    if (was === "playing" || was === "rewinding") playRef.current()
+    else if (was === "ended" && now < tl.duration - 1e-3) setModeSync("paused")
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tl])
+
   // Initial state from the hash, after hydration (SSR rendered the final frame).
   useEffect(() => {
     if (!tl || opts.still) return
@@ -327,8 +345,9 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
     clock.set(0)
     setModeSync("gate")
     return undefined
+    // Keyed on having a story, not on the timeline object: a pace recompile must not reset to the gate.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tl, opts.still, opts.t, opts.autoplay])
+  }, [!!tl, opts.still, opts.t, opts.autoplay])
 
   // Switching motion mode mid-playback continues from the current step in the new mode.
   const firstReduced = useRef(true)

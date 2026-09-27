@@ -1,13 +1,14 @@
 import { animate, domAnimation, LazyMotion, m, useMotionValue } from "motion/react"
-import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react"
 import { flushSync } from "react-dom"
-import type { Frame } from "../story/types.ts"
+import type { Frame, Timeline } from "../story/types.ts"
 import { BeatSheet, Captions, Gate, Transport, useStory } from "./Story.tsx"
 import { motion as M, palettes, cssVar, type Palette, type ThemeName } from "../../theme/tokens.ts"
 import type { Scene } from "../scene.ts"
 import { Diagram } from "./Diagram.tsx"
 import { CAMERA, cameraAt, cameraAtEnd, fitCamera, followStep, readableScale, stepAt, stepFocus, type Camera, type Viewport } from "../story/camera.ts"
 import { steppedTime } from "../story/state.ts"
+import { recompilePace } from "../story/compile.ts"
 
 export interface AppProps {
   scene: Scene
@@ -26,7 +27,7 @@ export interface ViewerHooks {
   exportPng: (theme: ThemeName) => void
   onReady: (sheet: boolean) => void
   /** Called after every story frame renders (live counters overlay). */
-  onFrame?: (frame: Frame, playing: boolean) => void
+  onFrame?: (frame: Frame, playing: boolean, tl?: Timeline) => void
 }
 
 /** Parsed `location.hash` contract. */
@@ -44,6 +45,8 @@ export interface HashParams {
   /** Beat sheet layout: fixed column count and a tile range (for compact previews). */
   cols?: number
   range?: [number, number]
+  /** `#pace=<n>`: reading-hold pace (0 = none). */
+  pace?: number
   /** `#camera=follow|fit`: follow the story (also places a `#t=` frame) or keep the whole diagram in view. */
   camera?: "follow" | "fit"
 }
@@ -67,6 +70,7 @@ export function parseHash(hash: string): HashParams {
     ...(motion === "full" || motion === "reduced" ? { motion } : {}),
     ...(p.get("static") === "1" ? { still: true } : {}),
     ...(p.get("camera") === "follow" || p.get("camera") === "fit" ? { camera: p.get("camera") as "follow" | "fit" } : {}),
+    ...(p.get("pace") !== null && p.get("pace") !== "" && paceOk(Number(p.get("pace"))) ? { pace: Number(p.get("pace")) } : {}),
     ...(Number(p.get("cols")) >= 1 ? { cols: Math.min(12, Math.floor(Number(p.get("cols")))) } : {}),
     ...(/^\d+-\d+$/.test(p.get("range") ?? "") ? { range: p.get("range")!.split("-").map(Number) as [number, number] } : {}),
   }
@@ -99,6 +103,31 @@ export function resolveFollow(o: { hash?: "follow" | "fit"; stored?: string | nu
   if (o.stored === "on" || o.stored === "off") return o.stored === "on"
   return (o.author ?? "follow") === "follow"
 }
+
+export const PACE_KEY = "storyink-pace"
+/** The viewer's Pauses presets (reading-hold pace). */
+export const PACE_PRESETS: { pace: number; label: string }[] = [
+  { pace: 0, label: "None" },
+  { pace: 0.3, label: "Short" },
+  { pace: 0.6, label: "Normal" },
+  { pace: 1, label: "Long" },
+  { pace: 1.5, label: "Longer" },
+]
+const paceOk = (n: number) => Number.isFinite(n) && n >= 0 && n <= 10
+
+/**
+ * Reading-hold pace. Precedence: `#pace=` hash, then the reader's stored choice
+ * (`localStorage["storyink-pace"]`), then the author's `story.pace` (as compiled), then 0.6.
+ */
+export function resolvePace(o: { hash?: number; stored?: string | null; author?: number }): number {
+  if (o.hash !== undefined && paceOk(o.hash)) return o.hash
+  const s = o.stored != null && o.stored !== "" ? Number(o.stored) : NaN
+  if (paceOk(s)) return s
+  return o.author !== undefined && paceOk(o.author) ? o.author : 0.6
+}
+
+/** A preset's label for a pace ("Normal"), or the number ("0.8×"). */
+export const paceLabel = (p: number) => PACE_PRESETS.find((x) => Math.abs(x.pace - p) < 1e-9)?.label ?? `${+p.toFixed(2)}×`
 
 /** Pointerdown targets that never start a pan (controls inside the stage). */
 export const NO_PAN = "button, input, select, textarea, a, [role=slider], .si-tools, .si-transport, .si-gate, [data-no-pan]"
@@ -182,7 +211,13 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
   const [override, setOverride] = useState<Frame | undefined>(undefined)
   const [exportCurrent, setExportCurrent] = useState(false)
   const vb = scene.viewBox
-  const tl = scene.timeline
+  const [storedPace, setStoredPace] = useState<string | null>(null)
+  /** The author's pace (as compiled into the HTML) and the one in effect. */
+  const authorPace = scene.timeline?.pace ?? 0.6
+  const pace = resolvePace({ hash: hash.pace, stored: storedPace, author: authorPace })
+  // Server markup uses the embedded timeline; after hydration a different pace recompiles it in
+  // the browser (same function as the build, so the same numbers as `render --pace`).
+  const tl = useMemo(() => (hydrated && scene.timeline ? recompilePace(scene, pace) : scene.timeline), [scene, hydrated, pace])
   const reduced = resolveMotion({ hash: hash.motion, stored: storedMotion, author: tl?.motion, system: sysReduced }) === "reduced"
   const story = useStory(scene, tl, {
     ...(hash.t !== undefined ? { t: hash.t } : {}),
@@ -284,6 +319,7 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
     try {
       setStoredMotion(localStorage.getItem(MOTION_KEY))
       setStoredFollow(localStorage.getItem(FOLLOW_KEY))
+      setStoredPace(localStorage.getItem(PACE_KEY))
     } catch {}
     setHydrated(true)
     let stored: ThemeName | undefined
@@ -326,6 +362,8 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
     w.__storyink.stepAnimated = () => storyRef.current?.moving() ?? null
     w.__storyink.state = () => ({ t: storyRef.current?.now() ?? 0, mode: storyRef.current?.modeNow() ?? "static" })
     w.__storyink.camera = () => cameraRef.current()
+    w.__storyink.pace = () => paceRef.current
+    w.__storyink.setPace = (n: number) => setPaceRef.current(Number(n))
   }, [tl])
 
   /** Initial / resize placement: `#camera=follow` + `#t=` shows the followed view; engaged follow re-follows; else fit. */
@@ -394,7 +432,7 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
   const liveFrame = override ?? story?.frame
   useEffect(() => {
     // Reduced motion: counters jump to exact values (no rolling reels).
-    if (story && hooks?.onFrame) hooks.onFrame(story.frame, story.mode === "playing" && !reduced)
+    if (story && hooks?.onFrame) hooks.onFrame(story.frame, story.mode === "playing" && !reduced, tl)
   }, [story?.frame, story?.mode, hooks, reduced])
 
   useEffect(() => {
@@ -469,6 +507,7 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
         armed.current = true
         st.step(-1, ev.shiftKey)
       } else if (st && (ev.key === "f" || ev.key === "F")) toggleFollowRef.current()
+      else if (st && (ev.key === "[" || ev.key === "]")) stepPaceRef.current(ev.key === "]" ? 1 : -1)
       else if (st && (ev.key === "r" || ev.key === "R")) st.replay()
       else if (st && (ev.key === "m" || ev.key === "M")) toggleMotionRef.current()
       else if (ev.key === "0") fitClickRef.current()
@@ -523,6 +562,39 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
   }
   const toggleFollowRef = useRef(toggleFollow)
   toggleFollowRef.current = toggleFollow
+
+  /** Set the reader's pace (stored; the hash follows an explicit choice, like Motion). */
+  const setPace = (n: number) => {
+    if (!Number.isFinite(n) || n < 0 || n > 10) return
+    const v = String(+n.toFixed(3))
+    setStoredPace(v)
+    try {
+      localStorage.setItem(PACE_KEY, v)
+    } catch {}
+    if (hash.pace !== undefined) {
+      const p = new URLSearchParams(location.hash.replace(/^#/, ""))
+      p.set("pace", v)
+      history.replaceState(null, "", `#${p.toString()}`)
+      setHash((h) => ({ ...h, pace: Number(v) }))
+    }
+  }
+  /** `[` / `]`: the previous / next preset (from an off-preset value, the nearest one that way). */
+  const stepPace = (dir: 1 | -1) => {
+    const list = PACE_PRESETS.map((x) => x.pace)
+    const next = dir > 0 ? list.find((x) => x > pace + 1e-9) : [...list].reverse().find((x) => x < pace - 1e-9)
+    if (next !== undefined) setPace(next)
+  }
+  /** Toolbar click: cycle up through the presets, wrapping to None. */
+  const cyclePace = () => {
+    const list = PACE_PRESETS.map((x) => x.pace)
+    setPace(list.find((x) => x > pace + 1e-9) ?? list[0])
+  }
+  const stepPaceRef = useRef(stepPace)
+  stepPaceRef.current = stepPace
+  const setPaceRef = useRef(setPace)
+  setPaceRef.current = setPace
+  const paceRef = useRef(pace)
+  paceRef.current = pace
   /** Fit is a manual zoom: follow then keeps the fit scale and only pans if needed. */
   const fitClick = () => {
     fit(true)
@@ -589,7 +661,10 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
           ))}
         </div>
       ) : (
-        <div className={`si-stage${story?.mode === "gate" ? " si-gated" : ""}`} ref={stage} onClick={() => story?.mode === "gate" && story.ungate()}>
+        <div className={`si-stage${story?.mode === "gate" ? " si-gated" : ""}`} ref={stage} onClick={(e) => {
+            // A click on the diagram surface starts the story; clicks on controls (toolbar, transport) don't.
+            if (story?.mode === "gate" && !(e.target as Element).closest?.(NO_PAN)) story.ungate()
+          }}>
           <m.div className="si-canvas" style={{ x, y, scale: k, originX: 0, originY: 0, ...(hydrated && hash.camera === "follow" && hash.t !== undefined ? { visibility: "hidden" as const } : {}) }}>
             <div
               className="si-figure"
@@ -622,6 +697,11 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
                   pressed={reduced}
                   still={reduced}
                   onClick={toggleMotion}
+                />
+                <Btn
+                  label={`Pauses: ${paceLabel(pace)}`}
+                  title={`Reading pauses after each step: ${paceLabel(pace)}${Math.abs(pace - authorPace) < 1e-9 ? " (default)" : ""}. Click or [ / ] to change`}
+                  onClick={cyclePace}
                 />
                 <Btn
                   label="Follow"

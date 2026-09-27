@@ -106,8 +106,8 @@ const hooks: ViewerHooks = {
       download(b, `${slug(scene.title)}-${theme}@2x.png`)
     }, "image/png")
   },
-  onFrame(frame, playing) {
-    counters.update(frame, playing)
+  onFrame(frame, playing, tl) {
+    counters.update(frame, playing, tl)
   },
   onReady(sheet) {
     void document.fonts.ready.then(() => {

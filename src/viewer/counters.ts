@@ -1,7 +1,7 @@
 import { createRollingNumber, type RollingNumberController } from "@kitlangton/rolling-number"
 import type { Scene } from "../core/scene.ts"
 import { counterValue } from "../core/story/state.ts"
-import type { Frame } from "../core/story/types.ts"
+import type { Frame, Timeline } from "../core/story/types.ts"
 
 /**
  * Live counters. While the story plays, each SVG counter is covered by a
@@ -58,8 +58,10 @@ export function createCounterOverlay(scene: Scene) {
   }
 
   return {
-    update(frame: Frame, playing: boolean) {
+    /** `cur`: the timeline in effect (the reader's pace may have recompiled it; ids are the same). */
+    update(frame: Frame, playing: boolean, cur?: Timeline) {
       if (!tl || !ids.length) return
+      const T = cur ?? tl
       mount()
       const fig = document.querySelector<HTMLElement>(".si-stage .si-figure")
       if (playing !== live) {
@@ -69,9 +71,9 @@ export function createCounterOverlay(scene: Scene) {
           r.el.style.display = live ? "" : "none"
           if (live) {
             // Resume from the exact clock value without a roll.
-            const v = counterValue(tl.counters[id], frame.t)
+            const v = counterValue(T.counters[id], frame.t)
             r.target = v
-            r.ctl.update({ value: +v.toFixed(tl.counters[id].decimals), animated: false } as never)
+            r.ctl.update({ value: +v.toFixed(T.counters[id].decimals), animated: false } as never)
             r.ctl.finish()
             r.ctl.update({ animated: true } as never)
           }
@@ -83,7 +85,7 @@ export function createCounterOverlay(scene: Scene) {
         const v = frame.el[r.node]
         r.el.style.opacity = v && v.o < 1 ? String(v.o) : ""
         r.el.style.transform = v?.dy ? `translateY(${v.dy}px)` : ""
-        const c = tl.counters[id]
+        const c = T.counters[id]
         let target = c.start
         for (const e of c.events) if (frame.t >= e.t) target = e.to
         if (target !== r.target) {
