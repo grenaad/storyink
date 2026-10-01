@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.0
+
+- **Rich nodes** (architecture, dataflow, workflow): `panel` (window with rows: `tag`, `icon`,
+  `text`, `detail`, `status`, `indent`, `muted`), `code` (syntax-coloured program, `lang`
+  ts|js|json|text) and `chip` (icon + label, `stack` 1..3); `size: { cols, lines }` reserves body
+  space; `icon` set (wrench plug file terminal search globe bolt user spark); `muted` nodes; bare
+  groups (`bare: true`, heading only).
+- **Anchors**: edges and story targets may name a panel row (`node#row`) or a code line
+  (`node#3`); wires attach at that row/line.
+- **Content steps**: `type` (char typing with caret for code, `cps` / `duration`; word typing for
+  rows), `set` / `clear` (crossfade), `line` (active-line bar), `status` (spinner + shimmer, check,
+  cross), `dim` / `undim` (levels, independent of `hide` / `show`), `wire` / `unwire`, `glow` /
+  `unglow`, `focus`. Pulses gain `reverse` and `delay`. Story options `spotlight` and
+  `rewind: "glitch"` (HTML only). Typing speed is not scaled by `pace`. Warnings when the end state
+  still shows a spinner or a glow.
+- **Animated SVG** covers the new content (typing clips, caret, crossfades, line bar, status,
+  shimmer, levels, wire/unwire, glows, spotlight) with the final frame still the static diagram.
+  Checked in headless Chrome (frame parity, `<img>` playback, loop return); Firefox plays it;
+  Safari untested.
+- Four examples: `code-mode.architecture`, `retry-helper.architecture`,
+  `agent-session.architecture`, `failover.dataflow`; animated SVGs in `docs/gallery/`.
+- Fix: with reading holds (pace > 0), a step with an absolute `at` inside a beat stayed at its
+  authored time while its beat was pushed later, so it ran out of order and → / ← could stop with
+  pulses mid-wire. It now keeps its authored offset from the previous step.
+- Docs: `story` is no longer described as reserved; `#t=` documented as a seek.
+
 ## 0.3.6
 
 - **Default `story.pace` is 0.6** (was 1): shorter reading holds after each beat. `pace: 1` gives

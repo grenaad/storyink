@@ -17,14 +17,17 @@
 import { Fragment, type ReactElement, type ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { COMMIT_MONO_400, COMMIT_MONO_700 } from "../../generated/font.ts"
-import { ACCENTS, fonts, palettes, story as S, type as T, type Palette, type ThemeName } from "../../theme/tokens.ts"
+import { ACCENTS, fonts, geometry as G, palettes, richPalettes, story as S, type as T, type Palette, type ThemeName } from "../../theme/tokens.ts"
+import { CARET_LINGER, SHIMMER_PERIOD, SPIN_PERIOD } from "../story/content.ts"
+import { SHIMMER, SPOT } from "../story/content-state.ts"
+import { STATUS_PATHS } from "./icons.ts"
 import type { Scene } from "../scene.ts"
 import type { Spec } from "../spec.ts"
 import { storyState } from "../story/state.ts"
 import type { Frame } from "../story/types.ts"
 import { diagramCss, fontFaceCss } from "./css.ts"
 import { Diagram } from "./Diagram.tsx"
-import { toScene } from "./index.tsx"
+import { isRichScene, toScene } from "./index.tsx"
 
 export interface AnimatedSvgOptions {
   /** Pinned theme (SVG-as-image never follows the page). Default "light". */
@@ -201,6 +204,307 @@ function discrete(c: Clock, attr: string, vs: string[]): ReactElement | null {
   return <animate attributeName={attr} calcMode="discrete" keyTimes={k.keyTimes} values={k.values} {...timing(c)} />
 }
 
+/**
+ * Keyframes from exact (t, value) points (no sampling), mapped onto the cycle: holds the last
+ * value through the end hold, then returns to the first over the reset. Equal times are nudged
+ * apart by 0.1 ms so jumps stay jumps.
+ */
+function pointKeys(c: Clock, pts0: [number, Vec][]): { keyTimes: string; vals: Vec[] } | undefined {
+  if (!pts0.length) return undefined
+  const first = pts0[0][1]
+  const last = pts0[pts0.length - 1][1]
+  if (pts0.every(([, v]) => eqVec(v, first))) return undefined
+  const pts: [number, Vec][] = [[0, first], ...pts0.filter(([t]) => t > 0 && t < c.dur), [c.dur, last]]
+  if (!c.once) {
+    if (c.hold > 0) pts.push([c.dur + c.hold, last])
+    pts.push([c.cycle, first])
+  }
+  const times: string[] = []
+  const vals: Vec[] = []
+  let prev = -1
+  for (let [t, v] of pts) {
+    let k = Math.round((t / c.cycle) * 1e5) / 1e5
+    if (k <= prev) k = prev + 1e-5
+    if (k > 1) continue
+    times.push(kt(k))
+    vals.push(v)
+    prev = k
+  }
+  times[0] = "0"
+  times[times.length - 1] = "1"
+  return { keyTimes: times.join(";"), vals }
+}
+
+/** Discrete keyframes from exact change times (value from t on); resets to the first value in the reset. */
+function changeKeys(c: Clock, init: string, changes: [number, string][]): { keyTimes: string; values: string } | undefined {
+  const pts: [number, string][] = [[0, init]]
+  // Only actual changes (a caret's y repeats per character on a line).
+  for (const [t, v] of changes) if (t > 0 && t <= c.dur && v !== pts[pts.length - 1][1]) pts.push([t, v])
+  const last = pts[pts.length - 1][1]
+  if (pts.every(([, v]) => v === init)) return undefined
+  if (!c.once && last !== init) pts.push([c.dur + c.hold + c.reset / 2, init])
+  const times: string[] = []
+  const values: string[] = []
+  let prev = -1
+  for (const [t, v] of pts) {
+    const k = Math.round((t / c.cycle) * 1e5) / 1e5
+    if (k <= prev) {
+      values[values.length - 1] = v
+      continue
+    }
+    times.push(kt(k))
+    values.push(v)
+    prev = k
+  }
+  times[0] = "0"
+  return { keyTimes: times.join(";"), values: values.join(";") }
+}
+
+function discreteAt(c: Clock, attr: string, init: string, changes: [number, string][]): ReactElement | null {
+  const k = changeKeys(c, init, changes)
+  if (!k) return null
+  c.count.n++
+  return <animate attributeName={attr} calcMode="discrete" keyTimes={k.keyTimes} values={k.values} {...timing(c)} />
+}
+
+/** Length of the longest subpath of a status glyph (for the dash draw-on). */
+function glyphLength(d: string): number {
+  let best = 0
+  for (const sub of d.split("M").filter(Boolean)) {
+    const n = sub.match(/-?[\d.]+/g)!.map(Number)
+    let L = 0
+    for (let i = 2; i + 1 < n.length; i += 2) L += Math.hypot(n[i] - n[i - 2], n[i + 1] - n[i - 1])
+    best = Math.max(best, L)
+  }
+  return Math.ceil(best + 1)
+}
+
+/**
+ * Tracks for 0.4 rich scenes (panels, code, chips): content layers and typing (analytic clip
+ * widths and carets), bars, row / node / group / edge / port levels, wire cycles, status glyphs
+ * (analytic spin, dash draw-on), shimmer (analytic sweep), persistent glows, spotlight, row flashes.
+ */
+function richTracks(scene: Scene, c: Clock, add: (key: string, ...els: (ReactNode | null)[]) => void, pal: Palette): void {
+  const tl = scene.timeline!
+  const { frames, ts } = c
+  const series = <V,>(get: (f: Frame) => V) => frames.map(get)
+  const O = 0.01
+  const PX = 0.3
+  const nodes = new Map(scene.nodes.map((n) => [n.id, n]))
+  const rest = (key: string) => {
+    const n = nodes.get(key)
+    if (n) return n.muted ? G.muted : 1
+    const [nid, rid] = key.split("#")
+    const r = nodes.get(nid)?.rows?.find((x) => x.id === rid)
+    return r?.muted ? G.muted : 1
+  }
+  const level = (f: Frame, key: string) => (f.lvl?.[key] ?? rest(key)) * (f.vis?.[key] ?? 1)
+  const elo = (f: Frame, key: string) => f.el[key]?.o ?? 1
+
+  // Nodes, groups, rows: reveal × dim × visibility.
+  for (const n of scene.nodes) add(`node:${n.id}`, anim(c, "opacity", series((f) => [elo(f, n.id) * level(f, n.id)]), O))
+  for (const g of scene.groups) add(`group:${g.id}`, anim(c, "opacity", series((f) => [elo(f, g.id) * level(f, g.id)]), O))
+  for (const n of scene.nodes)
+    for (const r of n.rows ?? []) {
+      const key = `${n.id}#${r.id}`
+      add(`row:${key}`, anim(c, "opacity", series((f) => [elo(f, key) * level(f, key)]), O), translate(c, series((f) => [0, f.el[key]?.dy ?? 0]), PX))
+    }
+
+  // Edges and ports: own level × endpoint node levels; wire / unwire cycles.
+  const edgeLevel = (f: Frame, e: Scene["edges"][number]) => Math.min(level(f, e.from), level(f, e.to)) * (f.lvl?.[e.id] ?? 1) * (f.vis?.[e.id] ?? 1)
+  for (const e of scene.edges) {
+    add(`edge:${e.id}`, anim(c, "opacity", series((f) => [edgeLevel(f, e)]), O))
+    for (const p of scene.ports.filter((q) => q.edge === e.id && !q.covered))
+      add(
+        `port:${p.id}`,
+        anim(
+          c,
+          "opacity",
+          series((f) => {
+            const d = f.draw[e.id]
+            const u = f.undraw?.[e.id]
+            if (u !== undefined && (p.end === "out" ? u > 0 : u >= 0.99)) return [0]
+            const o = d === undefined ? 1 : p.end === "out" ? (d > 0 ? 1 : 0) : d >= 0.99 ? 1 : 0
+            return [o]
+          }),
+          O,
+        ),
+      )
+    if (tl.wires?.[e.id] && e.style !== "dashed") {
+      const L = (e.length ?? 0) + 24
+      const off = anim(c, "stroke-dashoffset", series((f) => [f.undraw?.[e.id] !== undefined ? -L * f.undraw[e.id] : f.draw[e.id] !== undefined ? L * (1 - f.draw[e.id]) : 0]), 0.5)
+      if (off) add(`wire:${e.id}`, <set attributeName="stroke-dasharray" to={`${num(L)} ${num(L)}`} begin="0s" />, off)
+      add(`wire:${e.id}`, anim(c, "opacity", series((f) => [(f.draw[e.id] !== undefined && f.draw[e.id] <= 0) || (f.undraw?.[e.id] ?? 0) >= 1 ? 0 : 1]), O))
+    }
+  }
+
+  // Content layers (versions, crossfades, clear), tags, icons, words.
+  const runs = new Map((tl.typing ?? []).map((r) => [`${r.target}|${r.v}`, r]))
+  const targets = new Set([...Object.keys(tl.versions ?? {}), ...(tl.typing ?? []).map((r) => r.target)])
+  const dip = (f: Frame, key: string) => {
+    const a = f.status?.[key]?.shimmer?.a
+    return a ? 1 - SHIMMER.dip * a : 1
+  }
+  for (const target of targets) {
+    const isRow = target.includes("#")
+    const vs = new Set([0, ...(tl.versions?.[target] ?? []).map((e) => e.v).filter((v) => v >= 0), ...(tl.typing ?? []).filter((r) => r.target === target).map((r) => r.v)])
+    for (const v of vs) {
+      const layer = (f: Frame) => (f.content?.[target] ? f.content[target].find((l) => l.v === v) : v === 0 ? { v: 0, o: 1 } : undefined)
+      add(`layer:${target}:${v}`, anim(c, "opacity", series((f) => [(layer(f)?.o ?? 0) * (isRow ? dip(f, target) : 1)]), O))
+      if (isRow) {
+        add(`rtag:${target}:${v}`, anim(c, "opacity", series((f) => [layer(f)?.tag ?? 1]), O))
+        const run = runs.get(`${target}|${v}`)
+        if (run?.by === "word") for (let i = 0; i < run.words!.n; i++) add(`word:${target}:${v}:${i}`, anim(c, "fill-opacity", series((f) => [layer(f)?.words?.[i] ?? 1]), O))
+      }
+    }
+    if (isRow) add(`ricon:${target}`, anim(c, "opacity", series((f) => {
+      const ls = f.content?.[target] ?? [{ v: 0, o: 1 }]
+      return [ls.length ? Math.max(...ls.map((l) => (l.tag ?? 1) * l.o)) : 0]
+    }), O))
+  }
+
+  // Char typing: exact per-character clip widths and the caret (from the run's own timing).
+  for (const run of tl.typing ?? []) {
+    if (run.by !== "char") continue
+    const isRow = run.target.includes("#")
+    const [nid, rid] = run.target.split("#")
+    const n = nodes.get(isRow ? nid : run.target)!
+    const row = isRow ? n.rows!.find((x) => x.id === rid)! : undefined
+    const adv = (isRow ? T.row : T.code) * 0.6
+    const caret: [number, string, string, string][] = []
+    run.lines!.forEach((L, k) => {
+      const full = isRow ? (L.n + 1) * adv : (L.indent + L.n + 1) * adv
+      const w = (j: number) => (j <= 0 ? 0 : j >= L.n ? full : isRow ? j * adv : (L.indent + j) * adv)
+      const ch: [number, string][] = []
+      for (let j = 1; j <= L.n; j++) ch.push([L.t0 + (j * (L.t1 - L.t0)) / L.n - 1e-6, num(w(j))])
+      if (!L.n) ch.push([L.t0, num(0)])
+      add(`clip:${run.target}:${run.v}:${k}`, discreteAt(c, "width", "0", ch))
+      // Caret: at this line from its start, one column per character.
+      const cx = (col: number) => num((isRow ? row!.x : n.code!.x) + col * adv)
+      const cy = isRow ? num(row!.lineY[k] - 11) : num(n.code!.top + k * n.code!.lh + (n.code!.lh - 13) / 2)
+      const col0 = L.n ? L.indent : 0
+      caret.push([L.t0, cx(col0), cy, "visible"])
+      for (let j = 1; j <= L.n; j++) caret.push([L.t0 + (j * (L.t1 - L.t0)) / L.n - 1e-6, cx(col0 + j), cy, "visible"])
+    })
+    caret.push([run.t1 + CARET_LINGER, caret[caret.length - 1]?.[1] ?? "0", caret[caret.length - 1]?.[2] ?? "0", "hidden"])
+    const first = caret[0]
+    add(
+      `caret:${run.target}`,
+      discreteAt(c, "visibility", "hidden", caret.map(([t, , , v]) => [t, v])),
+      discreteAt(c, "x", first[1], caret.map(([t, x]) => [t, x])),
+      discreteAt(c, "y", first[2], caret.map(([t, , y]) => [t, y])),
+    )
+  }
+
+  // Active-line bars.
+  for (const [id, ev] of Object.entries(tl.bars ?? {})) {
+    const n = nodes.get(id)!
+    const cd = n.code!
+    let a = ev[0].a
+    let b = ev[0].b
+    const ab = series((f) => {
+      const x = f.bars?.[id]
+      if (x) {
+        a = x.a
+        b = x.b
+      }
+      return [cd.top + (a - 1) * cd.lh, (b - a + 1) * cd.lh]
+    })
+    add(`bar:${id}`, anim(c, "opacity", series((f) => [f.bars?.[id]?.o ?? 0]), O))
+    add(`barrect:${id}`, anim(c, "y", ab.map((v) => [v[0]]), PX), anim(c, "height", ab.map((v) => [v[1]]), PX))
+  }
+
+  // Row statuses: glyph opacity, analytic spin, dash draw-on; shimmer.
+  for (const n of scene.nodes)
+    for (const r of n.rows ?? []) {
+      const key = `${n.id}#${r.id}`
+      const restS = r.status ?? "none"
+      const ev = tl.status?.[key] ?? []
+      if (restS === "none" && !ev.length) continue
+      const states = [{ t: 0, to: restS }, ...ev]
+      const kinds = [...new Set(states.map((x) => x.to))].filter((x) => x !== "none")
+      for (const g of kinds) {
+        const o = series((f) => {
+          const sf = f.status?.[key]
+          if (!sf) return [restS === g ? 1 : 0]
+          return [(sf.s === g ? sf.o : 0) + (sf.prev?.s === g ? sf.prev.o : 0)]
+        })
+        const els: (ReactNode | null)[] = [anim(c, "opacity", o, O)]
+        if (g === "running") {
+          // rotate = 360°·(t − start)/period through each run and its fade-out.
+          const pts: [number, Vec][] = []
+          states.forEach((st, j) => {
+            if (st.to !== "running") return
+            const end = Math.min(states[j + 1] ? states[j + 1].t + 0.8 : c.dur, c.dur)
+            pts.push([st.t, [0]], [end, [(360 * (end - st.t)) / SPIN_PERIOD]])
+          })
+          const k = pointKeys(c, pts)
+          if (k) {
+            c.count.n++
+            els.push(<animateTransform attributeName="transform" type="rotate" additive="sum" calcMode="linear" keyTimes={k.keyTimes} values={k.vals.map((v) => num(v[0])).join(";")} {...timing(c)} />)
+          }
+        }
+        add(`status:${key}:${g}`, ...els)
+        if (g === "done" || g === "error") {
+          const L = glyphLength(STATUS_PATHS[g])
+          const d = anim(c, "stroke-dasharray", series((f) => {
+            const sf = f.status?.[key]
+            return [sf?.s === g ? (sf.draw ?? 1) * L : L]
+          }), 0.2, (v) => `${num(v[0])} ${L}`)
+          add(`draw:${key}:${g}`, d)
+        }
+      }
+      if (kinds.includes("running")) {
+        add(`shim:${key}`, anim(c, "opacity", series((f) => [SHIMMER.peak * (f.status?.[key]?.shimmer?.a ?? 0)]), O))
+        const pts: [number, Vec][] = []
+        states.forEach((st, j) => {
+          if (st.to !== "running") return
+          const nextRun = states.slice(j + 1).find((x) => x.to === "running")
+          const end = Math.min(nextRun ? nextRun.t - 1e-3 : c.dur, states[j + 1] ? states[j + 1].t + 1.5 : c.dur, c.dur)
+          pts.push([st.t, [0, 0]], [end, [(SHIMMER.width * (end - st.t)) / SHIMMER_PERIOD, 0]])
+        })
+        const k = pointKeys(c, pts)
+        if (k) {
+          c.count.n++
+          add(`shimx:${key}`, <animateTransform attributeName="gradientTransform" type="translate" calcMode="linear" keyTimes={k.keyTimes} values={k.vals.map((v) => `${num(v[0])} 0`).join(";")} {...timing(c)} />)
+        }
+      }
+    }
+
+  // Persistent glows and the spotlight.
+  for (const id of Object.keys(tl.lit ?? {})) add(`lit:${id}`, anim(c, "opacity", series((f) => [f.lit?.[id] ?? 0]), O))
+  if (tl.spot?.length) {
+    let last = { x: tl.spot[0].x, y: tl.spot[0].y, r: tl.spot[0].r }
+    const sp = series((f) => {
+      if (f.spot) last = f.spot
+      return [last.x, last.y, last.r]
+    })
+    add("spot", anim(c, "opacity", series((f) => [(f.spot?.a ?? 0) / SPOT.a]), O))
+    // The spot is a soft radial glow (r ≈ 120 px, fading to 0): 1.5 px of path error is invisible
+    // and keeps the glide to a handful of keys instead of one per frame.
+    const SPOT_PX = 1.5
+    add("spotc", anim(c, "cx", sp.map((v) => [v[0]]), SPOT_PX), anim(c, "cy", sp.map((v) => [v[1]]), SPOT_PX), anim(c, "r", sp.map((v) => [v[2]]), SPOT_PX))
+  }
+
+  // Row arrival flashes (reverse pulses): literal sRGB mix like the runtime's color-mix.
+  const ink = hex(pal.ink)
+  const flashC = hex(pal.flash)
+  for (const g of new Set(tl.glows.map((x) => x.node).filter((x) => x.includes("#")))) {
+    const col = series((f) => {
+      const p = f.flash[g]
+      if (!p || p <= 0.005) return ink as Vec
+      const w = Math.round(p * 100) / 100
+      return ink.map((x, i) => flashC[i] * w + x * (1 - w))
+    })
+    const k = linearKeys(c, col, 2)
+    if (k) {
+      c.count.n++
+      add(`rflash:${g}`, <animate attributeName="fill" calcMode="linear" keyTimes={k.keyTimes} values={k.vals.map(toHex).join(";")} {...timing(c)} />)
+    }
+  }
+  void ts
+}
+
 // ---------------------------------------------------------------------------
 // Theme pinning: resolve every var(--si-*) to a literal colour.
 
@@ -211,15 +515,15 @@ function hex(c: string): [number, number, number] {
 const toHex = (v: Vec) => `#${v.map((x) => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, "0")).join("")}`
 
 /** Diagram CSS with the theme's literal colours (no custom properties, no media queries). */
-export function pinnedCss(theme: ThemeName): string {
-  const p = palettes[theme]
+export function pinnedCss(theme: ThemeName, rich = false): string {
+  const p = (rich ? { ...palettes[theme], ...richPalettes[theme] } : palettes[theme]) as Palette
   const sub = (s: string, accent?: string) =>
     s
       .replace(/var\(--si-accentFill\)/g, accent ? p[`${accent}Fill` as keyof Palette] : "")
       .replace(/var\(--si-accent\)/g, accent ? p[accent as keyof Palette] : "")
       .replace(/var\(--si-(\w+)\)/g, (_, k: string) => p[k as keyof Palette] ?? "")
   const out: string[] = []
-  for (const m of diagramCss().matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+  for (const m of diagramCss(rich).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     const sel = m[1].trim()
     const body = m[2]
     if (body.trim().startsWith("--")) continue
@@ -254,7 +558,7 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
   const pal = palettes[theme]
   const tl = scene.timeline
   const vb = scene.viewBox
-  const style = [opts.font === "embed" ? fontFaceCss(COMMIT_MONO_400, COMMIT_MONO_700) : "", pinnedCss(theme)].filter(Boolean).join("\n")
+  const style = [opts.font === "embed" ? fontFaceCss(COMMIT_MONO_400, COMMIT_MONO_700) : "", pinnedCss(theme, isRichScene(scene))].filter(Boolean).join("\n")
 
   // Header: title, subtitle, caption slot (there is no HTML around an <img>).
   const hasCaptions = !!tl?.captions.length
@@ -290,6 +594,7 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
     const O = 0.01
     const PX = 0.3
 
+    const rich = isRichScene(scene)
     // Reveals.
     const nodes = new Map(scene.nodes.map((n) => [n.id, n]))
     const groups = new Set(scene.groups.map((g) => g.id))
@@ -299,8 +604,9 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
       const o = series((f) => [f.el[id]?.o ?? 1])
       const dy = series((f) => f.el[id]?.dy ?? 0)
       const n = nodes.get(id)
-      if (n) add(`node:${id}`, anim(c, "opacity", o, O), translate(c, dy.map((d) => [n.x, n.y + d]), PX))
-      else if (groups.has(id)) add(`group:${id}`, anim(c, "opacity", o, O), translate(c, dy.map((d) => [0, d]), PX))
+      // Rich scenes: opacity comes from the combined reveal × dim × visibility track (richTracks).
+      if (n) add(`node:${id}`, rich ? null : anim(c, "opacity", o, O), translate(c, dy.map((d) => [n.x, n.y + d]), PX))
+      else if (groups.has(id)) add(`group:${id}`, rich ? null : anim(c, "opacity", o, O), translate(c, dy.map((d) => [0, d]), PX))
       else if (frameIds.has(id)) add(`frame:${id}`, anim(c, "opacity", o, O))
       else if (acts.has(id)) add(`act:${id}`, anim(c, "opacity", o, O))
       if (n) add(`life:${id}`, anim(c, "opacity", o, O))
@@ -324,7 +630,7 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
       add(`head:${id}`, anim(c, "opacity", d.map((x) => [x >= 0.98 ? 1 : 0]), O))
       add(`seq:${id}`, anim(c, "opacity", d.map((x) => [x > 0 ? 1 : 0]), O))
       add(`elabel:${id}`, anim(c, "opacity", d.map((x) => [Math.max(0, Math.min(1, (x - 0.35) / 0.4))]), O))
-      for (const p of scene.ports.filter((q) => q.edge === id && !q.covered))
+      for (const p of rich ? [] : scene.ports.filter((q) => q.edge === id && !q.covered))
         add(`port:${p.id}`, anim(c, "opacity", d.map((x) => [p.end === "out" ? (x > 0 ? 1 : 0) : x >= 0.99 ? 1 : 0]), O))
     }
 
@@ -404,6 +710,8 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
         ))
       add(`cdup:${cn.id}`, ...dups)
     }
+
+    if (rich) richTracks(scene, c, add, { ...pal, ...richPalettes[theme] } as Palette)
 
     // Pulses: dot + halo + arrival ring + a three-segment cooling trail (dash window on the route).
     const overlay: ReactNode[] = []
@@ -528,7 +836,12 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
       {smil?.(key)}
     </>
   ) : smil?.(key))
-  let markup = renderToStaticMarkup(<Diagram scene={scene} style={`${style}\n${extraCss}`} frame={base} smil={smilWithHead} />)
+  const richScene = isRichScene(scene)
+  const union = richScene ? { pin: { ...pal, ...richPalettes[theme] } as unknown as Record<string, string> } : undefined
+  let markup = renderToStaticMarkup(<Diagram scene={scene} style={`${style}\n${extraCss}`} frame={base} smil={smilWithHead} {...(union ? { union } : {})} />)
+  // Rich scenes animate opacity on elements whose base opacity is inline style; SMIL animates the
+  // presentation attribute, which an inline style would override: move it to the attribute.
+  if (richScene) markup = markup.replace(/ style="opacity:([0-9.]+)"/g, ' opacity="$1"')
   const H = vb.h + headH
   markup = markup.replace(
     `viewBox="${vb.x} ${vb.y} ${vb.w} ${vb.h}" width="${vb.w}" height="${vb.h}"`,

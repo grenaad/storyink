@@ -1,0 +1,25 @@
+[
+  [
+    "[kw:export] [kw:async] [kw:function] [fn:get]([param:url]: [type:string]) {",
+    "  [kw:const] [def:res] [op:=] [kw:await] [fn:fetch](url)",
+    "  [kw:if] ([op:!]res.ok) [kw:throw] [kw:new] [type:Error](res.statusText)",
+    "  [kw:return] res.[fn:json]()",
+    "}"
+  ],
+  [
+    "[kw:export] [kw:async] [kw:function] [fn:get]([param:url]: [type:string]) {",
+    "  [kw:for] ([kw:let] [def:i] [op:=] [num:0]; i [op:<] [num:3]; i[op:++]) {",
+    "    [kw:const] [def:res] [op:=] [kw:await] [fn:fetch](url)",
+    "    [kw:if] (res.ok) [kw:return] res.[fn:json]()",
+    "    [kw:await] [fn:sleep]([num:200] [op:*] [num:2] [op:**] i)",
+    "  }",
+    "  [kw:throw] [kw:new] [type:Error]([str:`GET ][kw:${]url[kw:}][str: failed`])",
+    "}"
+  ],
+  [
+    "[kw:import] { retry } [kw:from] [str:\"./retry\"]",
+    "",
+    "[kw:export] [kw:const] [def:get] [op:=] ([param:url]: [type:string]) [op:=>]",
+    "  [fn:retry](() [op:=>] [fn:fetch](url).[fn:then](ok), { tries: [num:3] })"
+  ]
+]

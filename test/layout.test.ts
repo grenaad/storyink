@@ -28,7 +28,7 @@ describe("paths", () => {
 
 describe("layout", () => {
   test("examples: deterministic, finite, no overlapping nodes, stable ids", () => {
-    expect(specs.length).toBe(8)
+    expect(specs.length).toBe(12)
     for (const s of specs) {
       const a = layout(s)
       const b = layout(s)

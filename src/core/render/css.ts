@@ -1,7 +1,39 @@
 import { fonts, geometry as G, type as T, v, ACCENTS, type Palette } from "../../theme/tokens.ts"
 
-/** Diagram rules. Colours come only from the `--si-*` variables. */
-export function diagramCss(): string {
+/** Rules for rich nodes (panel / code / chip, bare groups); only emitted for scenes that use them. */
+export function richCss(): string {
+  const tk = (k: string, c: Parameters<typeof v>[0]) => `.storyink .si-tk-${k}{fill:${v(c)};}`
+  return `
+.si-win{fill:${v("panel")};stroke:${v("line")};stroke-width:${G.panelStroke};}
+.si-win-head{fill:${v("panelAlt")};stroke:none;}
+.si-win-rule{stroke:${v("line")};stroke-width:1;}
+.storyink .si-win-title{font-size:${T.header}px;letter-spacing:${T.tagTracking * 1.5}em;fill:${v("inkMuted")};}
+.si-icon{fill:none;stroke:${v("inkMuted")};stroke-width:1.2;stroke-linecap:round;stroke-linejoin:round;}
+.storyink .si-row-tag{font-size:${T.tag}px;letter-spacing:${T.tagTracking}em;fill:${v("inkFaint")};}
+.storyink .si-row-text{font-size:${T.row}px;fill:${v("ink")};white-space:pre;}
+.storyink .si-row-detail{fill:${v("inkFaint")};}
+.si-status path{fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;}
+.si-status-running path{stroke:${v("inkMuted")};}
+.si-status-done path{stroke:${v("inkMuted")};}
+.si-status-error path{stroke:${v("statusError")};}
+.storyink .si-code-line{font-size:${T.code}px;fill:${v("ink")};white-space:pre;}
+${tk("kw", "codeKw")}${tk("op", "codeKw")}${tk("str", "codeStr")}${tk("num", "codeConst")}${tk("def", "codeConst")}${tk("type", "codeConst")}${tk("fn", "codeFn")}${tk("param", "codeParam")}${tk("com", "codeCom")}
+.si-code-bar{fill:${v("codeBar")};}
+.si-code-bar-edge{fill:${v("codeBarEdge")};}
+.si-caret{fill:${v("ink")};}
+.si-lit-rim{fill:none;stroke:${v("ink")};stroke-width:1;}
+.si-stage svg.storyink{overflow:visible;}
+.si-chip-sheet{fill:${v("panel")};stroke:${v("line")};stroke-width:1;}
+.storyink .si-chip-label{font-size:${T.label}px;fill:${v("ink")};}
+`.trim()
+}
+
+/** Diagram rules. Colours come only from the `--si-*` variables. `rich` adds the rich-node rules. */
+export function diagramCss(rich = false): string {
+  return rich ? `${baseCss()}\n${richCss()}` : baseCss()
+}
+
+function baseCss(): string {
   const accentRules = ACCENTS.map(
     (a) =>
       `.si-a-${a}{--si-accent:${v(a as keyof Palette)};--si-accentFill:${v(`${a}Fill` as keyof Palette)};}`,

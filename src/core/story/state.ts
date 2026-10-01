@@ -2,7 +2,8 @@ import { story as S } from "../../theme/tokens.ts"
 import type { Pt, Scene } from "../scene.ts"
 import { clamp01, easeOutCubic, inOutCubic, react, smooth, smoothstep, spring, springSettle } from "./ease.ts"
 import type { Frame, GlowFrame, PulseFrame, Timeline } from "./types.ts"
-import { composeTitle, readTime, truncate } from "./compile.ts"
+import { composeTitle, contentEvents, readTime, truncate } from "./compile.ts"
+import { contentFrame } from "./content-state.ts"
 
 export interface StateOptions {
   /** Reduced motion: springs become steps, no pulses or glows. */
@@ -209,6 +210,9 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
 
   // Counters: exact values from the clock.
   for (const [id, c] of Object.entries(tl.counters)) frame.counters[id] = formatCounter(counterValue(c, t, reduced), c.decimals, c.prefix, c.suffix)
+
+  // 0.4 content: typing, versions, line bars, dim / visibility, wire cycles.
+  contentFrame(scene, tl, t, tc, reduced, frame)
 
   // Captions belong to their step: words stagger in, the line fades after its step settles.
   // When the next caption takes over directly, the old line lingers dimmed to 0.52 (not current).
@@ -541,6 +545,7 @@ export function beatMotionEnds(tl: Timeline): number[] {
       ...Object.values(tl.appear).filter(inBeat).map((t) => t + REACT_END),
       ...Object.values(tl.draw).filter((d) => inBeat(d.t0)).map((d) => d.t1),
       ...Object.values(tl.counters).flatMap((c) => c.events.filter((e) => inBeat(e.t)).map((e) => e.t + REACT_END)),
+      ...contentEvents(tl).filter(([t0]) => inBeat(t0)).map(([, e]) => e),
     ]
     // Rounded up, so a stop is never a hair before an arrival.
     return Math.ceil(Math.max(...ev) * 1e4 - 1e-9) / 1e4

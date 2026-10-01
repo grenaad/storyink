@@ -121,60 +121,12 @@
                       "pulse": {
                         "oneOf": [
                           {
-                            "oneOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "properties": {
-                                  "edge": {
-                                    "type": "string"
-                                  },
-                                  "route": {
-                                    "type": "array",
-                                    "items": {
-                                      "type": "string"
-                                    },
-                                    "minItems": 1
-                                  },
-                                  "duration": {
-                                    "type": "number",
-                                    "exclusiveMinimum": 0
-                                  }
-                                }
-                              }
-                            ]
+                            "$ref": "#/$defs/pulseRef"
                           },
                           {
                             "type": "array",
                             "items": {
-                              "oneOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "object",
-                                  "additionalProperties": false,
-                                  "properties": {
-                                    "edge": {
-                                      "type": "string"
-                                    },
-                                    "route": {
-                                      "type": "array",
-                                      "items": {
-                                        "type": "string"
-                                      },
-                                      "minItems": 1
-                                    },
-                                    "duration": {
-                                      "type": "number",
-                                      "exclusiveMinimum": 0
-                                    }
-                                  }
-                                }
-                              ]
+                              "$ref": "#/$defs/pulseRef"
                             }
                           }
                         ]
@@ -263,6 +215,132 @@
                         "minimum": 0,
                         "maximum": 60,
                         "description": "Reading hold (s) after the beat this step ends; overrides the computed hold (not scaled by pace)."
+                      },
+                      "type": {
+                        "oneOf": [
+                          {
+                            "$ref": "#/$defs/typeRef"
+                          },
+                          {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/$defs/typeRef"
+                            }
+                          }
+                        ]
+                      },
+                      "line": {
+                        "oneOf": [
+                          {
+                            "$ref": "#/$defs/lineRef"
+                          },
+                          {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/$defs/lineRef"
+                            }
+                          }
+                        ]
+                      },
+                      "status": {
+                        "oneOf": [
+                          {
+                            "$ref": "#/$defs/statusRef"
+                          },
+                          {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/$defs/statusRef"
+                            }
+                          }
+                        ]
+                      },
+                      "dim": {
+                        "oneOf": [
+                          {
+                            "$ref": "#/$defs/refs"
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "ids"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "ids": {
+                                "type": "array",
+                                "items": {
+                                  "$ref": "#/$defs/ref"
+                                }
+                              },
+                              "to": {
+                                "type": "number",
+                                "minimum": 0.05,
+                                "maximum": 1
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "undim": {
+                        "$ref": "#/$defs/refs"
+                      },
+                      "hide": {
+                        "$ref": "#/$defs/refs"
+                      },
+                      "show": {
+                        "$ref": "#/$defs/refs"
+                      },
+                      "set": {
+                        "oneOf": [
+                          {
+                            "$ref": "#/$defs/setRef"
+                          },
+                          {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/$defs/setRef"
+                            }
+                          }
+                        ]
+                      },
+                      "clear": {
+                        "$ref": "#/$defs/refs"
+                      },
+                      "wire": {
+                        "oneOf": [
+                          {
+                            "$ref": "#/$defs/wireRef"
+                          },
+                          {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/$defs/wireRef"
+                            }
+                          }
+                        ]
+                      },
+                      "unwire": {
+                        "oneOf": [
+                          {
+                            "$ref": "#/$defs/wireRef"
+                          },
+                          {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/$defs/wireRef"
+                            }
+                          }
+                        ]
+                      },
+                      "glow": {
+                        "$ref": "#/$defs/refs"
+                      },
+                      "unglow": {
+                        "$ref": "#/$defs/refs"
+                      },
+                      "focus": {
+                        "$ref": "#/$defs/ref"
                       }
                     }
                   }
@@ -272,6 +350,17 @@
                   "description": "Derive the steps (like \"story\": \"auto\")"
                 }
               ]
+            },
+            "spotlight": {
+              "type": "boolean",
+              "description": "A soft light that follows the action."
+            },
+            "rewind": {
+              "enum": [
+                "tape",
+                "glitch"
+              ],
+              "description": "Loop reset effect in the HTML viewer."
             }
           }
         }
@@ -390,7 +479,10 @@
         "external",
         "cache",
         "function",
-        "note"
+        "note",
+        "panel",
+        "code",
+        "chip"
       ]
     },
     "workflowKind": {
@@ -400,7 +492,10 @@
         "step",
         "decision",
         "io",
-        "note"
+        "note",
+        "panel",
+        "code",
+        "chip"
       ]
     },
     "lifecycleKind": {
@@ -491,6 +586,57 @@
                   }
                 },
                 "description": "Rolling counter driven by story counter steps."
+              },
+              "icon": {
+                "$ref": "#/$defs/icon",
+                "description": "chip: glyph before the label; panel/code: before the header title."
+              },
+              "rows": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/panelRow"
+                },
+                "description": "panel only: body rows."
+              },
+              "code": {
+                "$ref": "#/$defs/codeText",
+                "description": "code only: source (string split on newlines, or a list of lines)."
+              },
+              "lang": {
+                "enum": [
+                  "ts",
+                  "js",
+                  "json",
+                  "text"
+                ],
+                "description": "code only (default ts)."
+              },
+              "size": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "cols": {
+                    "type": "integer",
+                    "minimum": 8,
+                    "maximum": 160
+                  },
+                  "lines": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 60
+                  }
+                },
+                "description": "panel/code: reserved body size; content swaps and typing never resize."
+              },
+              "muted": {
+                "type": "boolean",
+                "description": "Dimmed at rest (0.42); story undim lifts it."
+              },
+              "stack": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3,
+                "description": "chip: sheets peeking below."
               }
             }
           }
@@ -511,11 +657,11 @@
               },
               "from": {
                 "type": "string",
-                "description": "Node or group id."
+                "description": "Node or group id, or an anchor: \"panel#row\", \"code#3\"."
               },
               "to": {
                 "type": "string",
-                "description": "Node or group id."
+                "description": "Node or group id, or an anchor: \"panel#row\", \"code#3\"."
               },
               "label": {
                 "type": "string"
@@ -569,6 +715,10 @@
                   "RL"
                 ],
                 "description": "Inner layout direction for this group's members (best-effort)."
+              },
+              "bare": {
+                "type": "boolean",
+                "description": "Label only, no box (a column heading)."
               }
             }
           }
@@ -816,6 +966,284 @@
           "description": "Groups of adjacent participants (Mermaid box)."
         }
       }
+    },
+    "icon": {
+      "enum": [
+        "wrench",
+        "plug",
+        "file",
+        "terminal",
+        "search",
+        "globe",
+        "bolt",
+        "user",
+        "spark"
+      ]
+    },
+    "rowStatus": {
+      "enum": [
+        "none",
+        "running",
+        "done",
+        "error"
+      ]
+    },
+    "ref": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:\\-]*(#([A-Za-z_][A-Za-z0-9_.:\\-]*|[1-9][0-9]*))?$",
+      "description": "Node, group or edge id, or an anchor: \"panel#row\", \"code#3\"."
+    },
+    "refs": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ref"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ref"
+          }
+        }
+      ]
+    },
+    "codeText": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "panelRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "text"
+          ]
+        },
+        {
+          "required": [
+            "tag"
+          ]
+        }
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_.:\\-]*$",
+          "description": "Anchor / story target: \"<node>#<id>\". Starts with a letter or _."
+        },
+        "tag": {
+          "type": "string",
+          "description": "Small uppercase line above the text."
+        },
+        "icon": {
+          "$ref": "#/$defs/icon"
+        },
+        "text": {
+          "type": "string",
+          "description": "Main text; wraps at the panel's size.cols (default 40)."
+        },
+        "detail": {
+          "type": "string",
+          "description": "Muted text after the text."
+        },
+        "status": {
+          "$ref": "#/$defs/rowStatus"
+        },
+        "indent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "muted": {
+          "type": "boolean"
+        }
+      }
+    },
+    "pulseRef": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "edge": {
+              "type": "string"
+            },
+            "route": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            "duration": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "reverse": {
+              "type": "boolean",
+              "description": "Travel backwards (return pulse)."
+            },
+            "delay": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Start this many seconds after the step."
+            }
+          }
+        }
+      ]
+    },
+    "typeRef": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ref"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/ref"
+            },
+            "by": {
+              "enum": [
+                "char",
+                "word"
+              ]
+            },
+            "cps": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1000
+            },
+            "duration": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        }
+      ]
+    },
+    "lineRef": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:\\-]*#[1-9][0-9]*(-[1-9][0-9]*)?$"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "lines": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              ]
+            },
+            "off": {
+              "const": true
+            }
+          }
+        }
+      ]
+    },
+    "statusRef": {
+      "type": "object",
+      "required": [
+        "id",
+        "to"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ref"
+        },
+        "to": {
+          "$ref": "#/$defs/rowStatus"
+        }
+      }
+    },
+    "setRef": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "minProperties": 2,
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ref"
+        },
+        "code": {
+          "$ref": "#/$defs/codeText"
+        },
+        "text": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      }
+    },
+    "wireRef": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "required": [
+            "edge"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "edge": {
+              "type": "string"
+            },
+            "duration": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        }
+      ]
     }
   }
 }

@@ -47,7 +47,7 @@ function exportSvgText(theme: ThemeName): string {
   const font = document.getElementById("storyink-font")?.textContent ?? ""
   const rules = document.getElementById("storyink-diagram-css")?.textContent ?? ""
   const style = document.createElementNS("http://www.w3.org/2000/svg", "style")
-  style.textContent = `${font}\nsvg.storyink{${paletteCss(theme)}}\n${rules}`
+  style.textContent = `${font}\nsvg.storyink{${paletteCss(theme, true)}}\n${rules}`
   svg.insertBefore(style, svg.firstChild?.nextSibling ?? null)
   svg.setAttribute("xmlns", "http://www.w3.org/2000/svg")
   svg.removeAttribute("data-copy")

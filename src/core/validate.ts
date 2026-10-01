@@ -1,6 +1,9 @@
 import {
   ARROWS,
+  CODE_LANGS,
   DIAGRAM_TYPES,
+  ICONS,
+  ROW_STATUSES,
   EDGE_STYLES,
   FRAME_KINDS,
   GRAPH_NODE_KINDS,
@@ -15,6 +18,8 @@ import {
 import { layoutGraph } from "./layout/graph.ts"
 import { layoutSequence } from "./layout/sequence.ts"
 import { compileStory } from "./story/compile.ts"
+import { lineOf, parseRef } from "./anchor.ts"
+import { codeVersions } from "./layout/panels.ts"
 
 export type Severity = "error" | "warning"
 
@@ -188,7 +193,11 @@ export function validate(input: unknown): ValidationResult {
   return ok ? { ok, diagnostics: c.diagnostics, spec } : { ok, diagnostics: c.diagnostics }
 }
 
-const STEP_KEYS = new Set(["id", "at", "reveal", "pulse", "highlight", "caption", "counter", "stop", "hold"])
+const STEP_KEYS = new Set([
+  "id", "at", "reveal", "pulse", "highlight", "caption", "counter", "stop", "hold",
+  // 0.4 content steps
+  "type", "line", "status", "dim", "undim", "hide", "show", "set", "clear", "wire", "unwire", "glow", "unglow", "focus",
+])
 
 function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefined {
   if (raw === "auto") return "auto"
@@ -196,12 +205,21 @@ function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefin
     c.error("story", `"story" must be an object or "auto"`, `{ "steps": [ { "reveal": ["api"] } ] } or "auto"`)
     return undefined
   }
-  unknownKeys(c, raw, new Set(["autoplay", "camera", "end", "motion", "pace", "steps"]), "story")
+  unknownKeys(c, raw, new Set(["autoplay", "camera", "end", "motion", "pace", "steps", "spotlight", "rewind"]), "story")
+  if (raw.spotlight !== undefined && typeof raw.spotlight !== "boolean") c.error("story.spotlight", `"spotlight" must be true or false`)
+  const rewind = oneOf(c, raw.rewind, ["tape", "glitch"] as const, "story.rewind", "story rewind")
   const motion = oneOf(c, raw.motion, ["full", "reduced", "system"] as const, "story.motion", "story motion")
   const camera = oneOf(c, raw.camera, ["follow", "fit"] as const, "story.camera", "story camera")
   const paceOk = raw.pace === undefined || (typeof raw.pace === "number" && Number.isFinite(raw.pace) && raw.pace >= 0 && raw.pace <= 10)
   if (!paceOk) c.error("story.pace", `"pace" must be a number from 0 to 10`, `1 = default reading holds, 0 = none, 1.5 = slower`)
-  const opts = { ...(raw.autoplay === true ? { autoplay: true } : {}), ...(motion ? { motion } : {}), ...(camera ? { camera } : {}), ...(paceOk && typeof raw.pace === "number" ? { pace: raw.pace } : {}) }
+  const opts = {
+    ...(raw.autoplay === true ? { autoplay: true } : {}),
+    ...(motion ? { motion } : {}),
+    ...(camera ? { camera } : {}),
+    ...(paceOk && typeof raw.pace === "number" ? { pace: raw.pace } : {}),
+    ...(raw.spotlight === true ? { spotlight: true } : {}),
+    ...(rewind ? { rewind } : {}),
+  }
   if (raw.autoplay !== undefined && typeof raw.autoplay !== "boolean") c.error("story.autoplay", `"autoplay" must be true or false`)
   const end = oneOf(c, raw.end, ["hold", "loop"] as const, "story.end", "story end")
   if (raw.steps === "auto") {
@@ -233,6 +251,31 @@ function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefin
       const list = Array.isArray(s0.counter) ? s0.counter : [s0.counter]
       if (!list.every((x) => isObj(x) && typeof x.id === "string" && typeof x.to === "number")) c.error(`${p}.counter`, `"counter" must be { "id": "...", "to": number }`)
     }
+    for (const k of ["undim", "hide", "show", "clear", "glow", "unglow"]) strList(s0[k], k)
+    if (s0.focus !== undefined && typeof s0.focus !== "string") c.error(`${p}.focus`, `"focus" must be an id`)
+    const objList = (key: string, ok: (x: unknown) => boolean, msg: string) => {
+      const v = s0[key]
+      if (v === undefined) return
+      const list = Array.isArray(v) ? v : [v]
+      if (!list.every(ok)) c.error(`${p}.${key}`, msg)
+    }
+    const idOrObj = (req: string) => (x: unknown) => typeof x === "string" || (isObj(x) && typeof x[req] === "string")
+    objList("type", idOrObj("id"), `"type" must be a code node / panel row id, or { "id": ..., "cps"?: n }`)
+    objList("line", idOrObj("id"), `"line" must be "code#2", "code#2-4" or { "id": ..., "lines"?: .., "off"?: true }`)
+    objList("status", (x) => isObj(x) && typeof x.id === "string" && typeof x.to === "string" && (ROW_STATUSES as readonly string[]).includes(x.to), `"status" must be { "id": "panel#row", "to": "running" | "done" | "error" | "none" }`)
+    objList("set", (x) => isObj(x) && typeof x.id === "string" && Object.keys(x).length >= 2, `"set" must be { "id": ..., "code" | "text" | "detail" | "tag" | "label": ... }`)
+    objList(
+      "set",
+      (x) =>
+        !isObj(x) ||
+        ((x.code === undefined || typeof x.code === "string" || (Array.isArray(x.code) && x.code.every((l) => typeof l === "string"))) &&
+          ["text", "detail", "tag", "label"].every((k) => x[k] === undefined || typeof x[k] === "string")),
+      `"set" values must be strings ("code" may be a list of lines)`,
+    )
+    objList("wire", idOrObj("edge"), `"wire" must be an edge id or { "edge": ..., "duration"?: s }`)
+    objList("unwire", idOrObj("edge"), `"unwire" must be an edge id or { "edge": ..., "duration"?: s }`)
+    if (s0.dim !== undefined && !(isObj(s0.dim) && Array.isArray(s0.dim.ids))) strList(s0.dim, "dim")
+    if (isObj(s0.dim) && s0.dim.to !== undefined && !(typeof s0.dim.to === "number" && s0.dim.to >= 0.05 && s0.dim.to <= 1)) c.error(`${p}.dim.to`, `"to" must be a level from 0.05 to 1`)
     if (s0.pulse !== undefined) {
       const list = Array.isArray(s0.pulse) ? s0.pulse : [s0.pulse]
       if (!list.every((x) => typeof x === "string" || (isObj(x) && (typeof x.edge === "string" || Array.isArray(x.route)))))
@@ -272,7 +315,8 @@ function validateGraph(
   arr(c, o, "groups", false).forEach((g, i) => {
     const p = `groups[${i}]`
     if (!isObj(g)) return c.error(p, "group must be an object", `{ "id": "vpc", "label": "VPC" }`)
-    unknownKeys(c, g, new Set(["id", "label", "kind", "parent", "direction"]), p)
+    unknownKeys(c, g, new Set(["id", "label", "kind", "parent", "direction", "bare"]), p)
+    if (g.bare !== undefined && typeof g.bare !== "boolean") c.error(`${p}.bare`, `"bare" must be true or false`)
     const id = str(c, g, "id", p, true)
     if (!id) return
     if (!ID_RE.test(id)) c.error(`${p}.id`, `invalid id "${id}"`, "use letters, digits, _ . : -")
@@ -283,6 +327,7 @@ function validateGraph(
       ...(typeof g.kind === "string" ? { kind: g.kind } : {}),
       ...(typeof g.parent === "string" ? { parent: g.parent } : {}),
       ...(g.direction !== undefined && dirOf(g.direction, `${p}.direction`) ? { direction: dirOf(g.direction, `${p}.direction`) } : {}),
+      ...(g.bare === true ? { bare: true } : {}),
     })
   })
 
@@ -292,7 +337,7 @@ function validateGraph(
   rawNodes.forEach((n, i) => {
     const p = `nodes[${i}]`
     if (!isObj(n)) return c.error(p, "node must be an object", `{ "id": "api", "label": "API" }`)
-    unknownKeys(c, n, new Set(["id", "label", "kind", "detail", "tag", "parent", "group", "direction", "counter"]), p)
+    unknownKeys(c, n, new Set(["id", "label", "kind", "detail", "tag", "parent", "group", "direction", "counter", ...RICH_NODE_KEYS]), p)
     const id = str(c, n, "id", p, true)
     if (!id) return
     if (!ID_RE.test(id)) c.error(`${p}.id`, `invalid id "${id}"`, "use letters, digits, _ . : -")
@@ -308,6 +353,7 @@ function validateGraph(
       ...(parent ? { parent } : {}),
       ...(n.direction !== undefined && dirOf(n.direction, `${p}.direction`) ? { direction: dirOf(n.direction, `${p}.direction`) } : {}),
       ...(counterOf(c, n.counter, `${p}.counter`) ?? {}),
+      ...richOf(c, n, kind ?? defaultKind, p, id),
     })
   })
   const counterIds = new Set<string>()
@@ -361,8 +407,12 @@ function validateGraph(
     unknownKeys(c, e, new Set(["id", "from", "to", "label", "style", "arrow"]), p)
     const from = str(c, e, "from", p, true)
     const to = str(c, e, "to", p, true)
-    if (from && !known.has(from)) c.error(`${p}.from`, `unknown node "${from}"`, hintId(from, [...known]))
-    if (to && !known.has(to)) c.error(`${p}.to`, `unknown node "${to}"`, hintId(to, [...known]))
+    for (const [end, ref] of [["from", from], ["to", to]] as const) {
+      if (!ref) continue
+      const r = parseRef(ref)
+      if (!known.has(r.node)) c.error(`${p}.${end}`, `unknown node "${r.node}"`, hintId(r.node, [...known]))
+      else if (r.anchor) checkAnchor(c, `${p}.${end}`, ref, r.node, r.anchor, nodes, { ...o, nodes } as unknown as GraphSpec)
+    }
     const style = oneOf(c, e.style, EDGE_STYLES, `${p}.style`, "edge style")
     const arrow = oneOf(c, e.arrow, ARROWS, `${p}.arrow`, "arrow mode")
     let id = str(c, e, "id", p, false)
@@ -391,6 +441,115 @@ function validateGraph(
     edges,
     groups,
   }
+}
+
+const RICH_NODE_KEYS = ["icon", "rows", "code", "lang", "size", "muted", "stack"]
+const ROW_KEYS = new Set(["id", "tag", "icon", "text", "detail", "status", "indent", "muted"])
+const ROW_ID_RE = /^[A-Za-z_][A-Za-z0-9_.:\-]*$/
+// Emoji / wide (East Asian) characters break the 0.6 em monospace measurement.
+const WIDE_RE = /[\p{Extended_Pictographic}\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6]/u
+const ICON_HINTS: Record<string, string> = { "🔧": "wrench", "🛠": "wrench", "🔌": "plug", "📄": "file", "📁": "file", "💻": "terminal", "🔍": "search", "🔎": "search", "🌐": "globe", "⚡": "bolt", "👤": "user", "✨": "spark" }
+
+function wideCheck(c: Collector, path: string, text: string) {
+  const m = WIDE_RE.exec(text)
+  if (!m) return
+  const icon = ICON_HINTS[m[0]]
+  c.warn(path, `"${m[0]}" is not monospace${icon ? `; use "icon": "${icon}"` : ""}`, icon ? undefined : `icons: ${ICONS.join(", ")}`)
+}
+
+/** Rich-node fields (0.4): icon, rows, code, lang, size, muted, stack. */
+function richOf(c: Collector, n: Obj, kind: string, p: string, id: string): Partial<GraphSpec["nodes"][number]> {
+  const out: Partial<GraphSpec["nodes"][number]> = {}
+  const icon = oneOf(c, n.icon, ICONS, `${p}.icon`, "icon")
+  if (icon) out.icon = icon
+  if (n.muted !== undefined) {
+    if (typeof n.muted !== "boolean") c.error(`${p}.muted`, `"muted" must be true or false`)
+    else if (n.muted) out.muted = true
+  }
+  if (n.stack !== undefined) {
+    if (n.stack !== 1 && n.stack !== 2 && n.stack !== 3) c.error(`${p}.stack`, `"stack" must be 1, 2 or 3`)
+    else out.stack = n.stack
+  }
+  if (n.lang !== undefined) {
+    const lang = oneOf(c, n.lang, CODE_LANGS, `${p}.lang`, "code language")
+    if (lang) out.lang = lang
+  }
+  if (n.size !== undefined) {
+    const s = n.size
+    const okN = (v: unknown, lo: number, hi: number) => v === undefined || (typeof v === "number" && Number.isInteger(v) && v >= lo && v <= hi)
+    if (!isObj(s) || !okN(s.cols, 8, 160) || !okN(s.lines, 1, 60) || Object.keys(s).some((k) => k !== "cols" && k !== "lines"))
+      c.error(`${p}.size`, `"size" must be { "cols": 8–160, "lines": 1–60 }`)
+    else out.size = { ...(typeof s.cols === "number" ? { cols: s.cols } : {}), ...(typeof s.lines === "number" ? { lines: s.lines } : {}) }
+  }
+  if (n.code !== undefined) {
+    if (kind !== "code") c.warn(`${p}.code`, `"code" is only drawn on "code" nodes`, `set "kind": "code"`)
+    if (typeof n.code !== "string" && !(Array.isArray(n.code) && n.code.every((l) => typeof l === "string")))
+      c.error(`${p}.code`, `"code" must be a string or a list of lines`)
+    else {
+      out.code = n.code as string | string[]
+      const lines = (Array.isArray(n.code) ? n.code : n.code.split("\n")) as string[]
+      if (lines.some((l) => l.includes("\t"))) c.warn(`${p}.code`, "tabs are shown as 2 spaces")
+      lines.forEach((l, k) => {
+        const len = Array.from(l.replace(/\t/g, "  ")).length
+        if (len > 120) c.warn(`${p}.code`, `code line ${k + 1} is ${len} characters; the panel grows to fit`)
+        wideCheck(c, `${p}.code`, l)
+      })
+    }
+  }
+  if (n.rows !== undefined) {
+    if (kind !== "panel") c.warn(`${p}.rows`, `"rows" is only drawn on "panel" nodes`, `set "kind": "panel"`)
+    if (!Array.isArray(n.rows)) c.error(`${p}.rows`, `"rows" must be an array`)
+    else {
+      const seen = new Set<string>()
+      const rows: NonNullable<GraphSpec["nodes"][number]["rows"]> = []
+      n.rows.forEach((r, j) => {
+        const rp = `${p}.rows[${j}]`
+        if (!isObj(r)) return c.error(rp, "row must be an object", `{ "text": "..." }`)
+        unknownKeys(c, r, ROW_KEYS, rp)
+        if (typeof r.text !== "string" && typeof r.tag !== "string") c.error(rp, `row needs "text" (or "tag")`)
+        for (const k of ["text", "detail", "tag"]) if (r[k] !== undefined && typeof r[k] !== "string") c.error(`${rp}.${k}`, `"${k}" must be a string`)
+        if (r.id !== undefined) {
+          if (typeof r.id !== "string" || !ROW_ID_RE.test(r.id))
+            c.error(`${rp}.id`, `invalid row id ${JSON.stringify(r.id)}`, `row ids start with a letter or _; "node#12" means code line 12`)
+          else if (seen.has(r.id)) c.error(`${rp}.id`, `duplicate row id "${r.id}" in "${id}"`)
+          else seen.add(r.id)
+        }
+        const ricon = oneOf(c, r.icon, ICONS, `${rp}.icon`, "icon")
+        const status = oneOf(c, r.status, ROW_STATUSES, `${rp}.status`, "row status")
+        if (r.indent !== undefined && !(typeof r.indent === "number" && Number.isInteger(r.indent) && r.indent >= 0 && r.indent <= 4))
+          c.error(`${rp}.indent`, `"indent" must be an integer from 0 to 4`)
+        if (r.muted !== undefined && typeof r.muted !== "boolean") c.error(`${rp}.muted`, `"muted" must be true or false`)
+        for (const k of ["text", "detail", "tag"]) if (typeof r[k] === "string") wideCheck(c, `${rp}.${k}`, r[k] as string)
+        rows.push({
+          ...(typeof r.id === "string" ? { id: r.id } : {}),
+          ...(typeof r.tag === "string" ? { tag: r.tag } : {}),
+          ...(ricon ? { icon: ricon } : {}),
+          ...(typeof r.text === "string" ? { text: r.text } : {}),
+          ...(typeof r.detail === "string" ? { detail: r.detail } : {}),
+          ...(status ? { status } : {}),
+          ...(typeof r.indent === "number" && r.indent > 0 ? { indent: r.indent } : {}),
+          ...(r.muted === true ? { muted: true } : {}),
+        })
+      })
+      out.rows = rows
+    }
+  }
+  return out
+}
+
+/** An edge anchor must name a panel row or an in-range code line. */
+function checkAnchor(c: Collector, path: string, ref: string, node: string, anchor: string, nodes: GraphSpec["nodes"], spec: GraphSpec) {
+  const n = nodes.find((x) => x.id === node)
+  if (!n || (n.kind !== "panel" && n.kind !== "code")) return c.error(path, `"${ref}": anchors work on panel rows and code lines only`, n ? `"${node}" is a ${n.kind ?? "node"}` : `"${node}" is a group`)
+  const k = lineOf(anchor)
+  if (n.kind === "code") {
+    if (k === undefined) return c.error(path, `"${ref}": code anchors are line numbers ("${node}#1")`)
+    const lines = Math.max(n.size?.lines ?? 0, ...codeVersions(spec, n).map((v) => v.length))
+    if (k > lines) c.error(path, `"${ref}": "${node}" has ${lines} lines`, `reserve more with "size": { "lines": ${k} }`)
+    return
+  }
+  const ids = (n.rows ?? []).map((r) => r.id).filter((x): x is string => !!x)
+  if (!ids.includes(anchor)) c.error(path, `unknown row "${anchor}" in "${node}"`, ids.length ? `rows: ${ids.slice(0, 8).join(", ")}${ids.length > 8 ? ", ..." : ""}` : "give the row an \"id\"")
 }
 
 function counterOf(c: Collector, v: unknown, path: string): { counter: NonNullable<GraphSpec["nodes"][number]["counter"]> } | undefined {

@@ -6,6 +6,8 @@ import { autoStory } from "./auto.ts"
 import { springSettle } from "./ease.ts"
 import { flattenPath } from "../layout/paths.ts"
 import { beatGroups } from "./state.ts"
+import { boxOfRef, parseRef } from "../anchor.ts"
+import { CARET_LINGER, Content, CROSSFADE, LIT_FALL, LIT_RISE, STATUS_DRAW } from "./content.ts"
 import type { StorySource, Timeline, TimelineDraw, TimelineGlow, TimelinePulse } from "./types.ts"
 
 const REACT_SETTLE = springSettle(S.springs.react)
@@ -77,9 +79,34 @@ function stillAfter(tl: Timeline, groups: number[][]): number[] {
       ...Object.values(tl.appear).filter(inBeat).map((t) => t + REACT_SETTLE),
       ...Object.values(tl.draw).filter((d) => inBeat(d.t0)).map((d) => d.t1 + REACT_SETTLE),
       ...Object.values(tl.counters).flatMap((c) => c.events.filter((e) => inBeat(e.t)).map((e) => e.t + REACT_SETTLE)),
+      ...contentEvents(tl).filter(([t]) => inBeat(t)).map(([, e]) => e),
+      // The caret lingers briefly after a char run; a hold starts once it has gone.
+      ...(tl.typing ?? []).filter((r) => r.by === "char" && inBeat(r.t0)).map((r) => r.t1 + CARET_LINGER + 0.02),
     ]
     return Math.max(0, Math.max(...events) - end)
   })
+}
+
+/**
+ * Content events as [start, settled] pairs: typing runs, crossfades, bar moves, dim / hide
+ * transitions, wire draws and retracts. Ambient motion (caret linger) is not included.
+ */
+export function contentEvents(tl: Timeline): [number, number][] {
+  const out: [number, number][] = []
+  for (const x of tl.typing ?? []) out.push([x.t0, x.t1])
+  for (const l of Object.values(tl.versions ?? {})) for (const e of l) out.push([e.t, e.t + CROSSFADE])
+  for (const l of Object.values(tl.bars ?? {})) for (const e of l) out.push([e.t, e.t + REACT_SETTLE])
+  for (const l of Object.values(tl.levels ?? {})) for (const e of l) out.push([e.t, e.t + REACT_SETTLE])
+  for (const l of Object.values(tl.vis ?? {})) for (const e of l) out.push([e.t, e.t + REACT_SETTLE])
+  for (const l of Object.values(tl.wires ?? {})) for (const e of l) out.push([e.t0, e.t1])
+  // Status glyph transitions (not the spinner / shimmer: ambient, never part of a settle).
+  for (const l of Object.values(tl.status ?? {})) for (const e of l) out.push([e.t, e.t + Math.max(REACT_SETTLE, e.to === "done" || e.to === "error" ? STATUS_DRAW : 0)])
+  for (const l of Object.values(tl.lit ?? {}))
+    for (const w of l) {
+      out.push([w.t0, w.t0 + springSettle(LIT_RISE)])
+      if (w.t1 !== undefined) out.push([w.t1, w.t1 + springSettle(LIT_FALL)])
+    }
+  return out
 }
 
 /**
@@ -128,7 +155,7 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
     // A zero hold adds nothing (not even a "wait until still"): pace 0 is the authored timing.
     if (k > 0 && holds[k - 1] > 0) plan.set(g[0], { prev: groups[k - 1], hold: holds[k - 1], still: still[k - 1] + lead[k] })
   })
-  const second = compileOnce(scene, spec, plan, new Map(groups.map((g, k) => [g[g.length - 1], { group: g, hold: holds[k], still: still[k] }])))
+  const second = compileOnce(scene, spec, plan, new Map(groups.map((g, k) => [g[g.length - 1], { group: g, hold: holds[k], still: still[k] }])), tl1.steps.map((s) => s.t0))
   // Diagnostics are about the authored story (pass 1), including the length warning: reading
   // holds are the viewer's pacing, not story the author has to shorten.
   const timeline = second.timeline && { ...second.timeline, pace, source: storySource(scene, spec) }
@@ -165,7 +192,7 @@ export function recompilePace(scene: Scene, pace: number): Timeline | undefined 
 /** The authored timing without reading holds (pass 1 of `compileStory`; for tests and tooling). */
 export const compileStoryAuthored = (scene: Scene, spec: Spec): CompileResult => compileOnce(scene, spec)
 
-function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<number, { group: number[]; hold: number; still: number }>): CompileResult {
+function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<number, { group: number[]; hold: number; still: number }>, authoredT0?: number[]): CompileResult {
   const diagnostics: Diagnostic[] = []
   const err = (path: string, message: string, hint?: string) => diagnostics.push({ severity: "error", path, message, hint })
   const warn = (path: string, message: string, hint?: string) => diagnostics.push({ severity: "warning", path, message, hint })
@@ -196,6 +223,7 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
   const steps: Timeline["steps"] = []
 
   const nodeBox = (id: string) => scene.nodes.find((n) => n.id === id) ?? scene.groups.find((g) => g.id === id)
+  const content = new Content(scene, story.steps, (ref) => resolveEdge(scene, ref).id)
 
   let prevEnd = 0
   let prevT0 = 0
@@ -206,6 +234,10 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
     if (step.at === undefined) t0 = i === 0 ? 0 : prevEnd
     else if (typeof step.at === "number") {
       t0 = step.at
+      // Pass 2: an absolute `at` keeps at least its authored offset from the previous step's
+      // start, so a step inside a beat a reading hold pushed later moves with its beat (never
+      // before its beat-mates, e.g. a staggered pulse step chained after a "+0" neighbour).
+      if (authoredT0 && i > 0 && steps[i - 1]) t0 = Math.max(t0, steps[i - 1].t0 + (step.at - authoredT0[i - 1]))
       if (t0 < prevT0 - 1e-9) err(`${p}.at`, `at ${t0}s goes backwards (previous step starts at ${+prevT0.toFixed(3)}s)`, `use "+${Math.max(0, +(t0 - prevEnd).toFixed(2))}" or a later time`)
     } else {
       const m = /^\+\s*(\d+(?:\.\d+)?)$/.exec(step.at.trim())
@@ -227,13 +259,30 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
         else if (edgeReveal[r.id] === undefined) edgeReveal[r.id] = t0
       } else if (nodeIds.has(id) || groupIds.has(id) || frameIds.has(id) || actIds.has(id)) {
         if (appear[id] === undefined) appear[id] = t0
+      } else if (id.includes("#") && nodeIds.has(parseRef(id).node) && boxOfRef(scene, id)) {
+        // A panel row / code line ("session#exec1").
+        if (appear[id] === undefined) appear[id] = t0
       } else err(`${p}.reveal`, `unknown id "${id}"`, "reveal takes node, group, edge, note or frame ids")
       ends.push(t0 + REACT_SETTLE)
     }
 
+    // Content steps (0.4): set / clear, type, line, dim / hide, wire.
+    for (const [key, list] of [["wire", step.wire], ["unwire", step.unwire]] as const)
+      asList(list as unknown).forEach((w, k) => {
+        const ref = typeof w === "string" ? w : w && typeof w === "object" ? (w as { edge?: unknown }).edge : undefined
+        if (typeof ref !== "string") return
+        const r = resolveEdge(scene, ref)
+        if (!r.id) err(`${p}.${key}${Array.isArray(list) ? `[${k}]` : ""}`, r.error!, r.hint)
+      })
+    const cs = content.step(step, i, t0, p, appear, err, warn)
+    ends.push(...cs.ends)
+
     // Pulses.
     asList(step.pulse as PulseRef | PulseRef[]).forEach((ref, k) => {
       const pp = `${p}.pulse${Array.isArray(step.pulse) ? `[${k}]` : ""}`
+      const reverse = typeof ref === "object" && ref.reverse === true
+      const delay = typeof ref === "object" && typeof ref.delay === "number" && ref.delay > 0 ? ref.delay : 0
+      const pt0 = t0 + delay
       const refs = typeof ref === "string" ? [ref] : ref.route ?? (ref.edge ? [ref.edge] : [])
       if (!refs.length) return err(pp, "pulse needs an edge or a route", `{ "edge": "a->b" } or { "route": ["a->b", "b->c"] }`)
       const ids: string[] = []
@@ -246,12 +295,20 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
       for (let j = 1; j < ids.length; j++)
         if (edgeById.get(ids[j - 1])!.to !== edgeById.get(ids[j])!.from)
           warn(pp, `route breaks between "${ids[j - 1]}" and "${ids[j]}"`, "each hop should start where the previous one ends")
+      for (const id of ids) {
+        const w = content.wireState(id)
+        if (w === "unwired") warn(pp, `${reverse ? "reverse " : ""}pulse on "${id}" after it is unwired`, `wire it again first`)
+        else if (w === "undrawn" && reverse) warn(pp, `reverse pulse on "${id}" before it is drawn`, `add "wire": "${id}" to an earlier step`)
+      }
+      // Reverse pulses travel the same rounded wires backwards (last hop first).
+      const hops = reverse ? [...ids].reverse() : ids
       const points: Pt[] = []
       const spans: TimelinePulse["spans"] = []
       let L = 0
-      for (const id of ids) {
+      for (const id of hops) {
         // The drawn (rounded) wire, not its corner points: the dot and trail stay on the curve.
-        const pts = flattenPath(edgeById.get(id)!.d)
+        const fwd = flattenPath(edgeById.get(id)!.d)
+        const pts = reverse ? [...fwd].reverse() : fwd
         const len = polyLength(pts)
         // Keep each hop's own start (skip it only when it repeats the previous end), so the route
         // never cuts a corner off the next wire; the dot crosses the node straight between hops.
@@ -262,16 +319,34 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
         points.push(...(last && Math.hypot(last.x - pts[0].x, last.y - pts[0].y) < 1e-6 ? pts.slice(1) : pts))
       }
       const flight = typeof ref === "object" && ref.duration ? ref.duration : Math.min(S.pulse.flightMax, Math.max(S.pulse.flightMin, L / S.pulse.pxPerSecond))
-      const tf0 = t0 + S.pulse.gather
+      const tf0 = pt0 + S.pulse.gather
       const tf1 = tf0 + flight
-      const last = edgeById.get(ids[ids.length - 1])!
+      const lastE = edgeById.get(ids[reverse ? 0 : ids.length - 1])!
+      const arriveNode = reverse ? lastE.from : lastE.to
+      const arriveAnchor = reverse ? lastE.fromAnchor : lastE.toAnchor
       const pid = `pulse-${i}-${k}`
-      pulses.push({ id: pid, edges: ids, points, spans, length: L, t0, tf0, tf1, target: seq ? undefined : last.to })
-      for (const sp of spans)
-        if (!flights[sp.edge]) flights[sp.edge] = { mode: "flight", pulse: pid, t0: tf0 + (sp.s0 / L) * flight, t1: tf0 + (sp.s1 / L) * flight, s0: sp.s0, s1: sp.s1 }
-      if (!seq && nodeBox(last.to)) {
+      pulses.push({
+        id: pid,
+        edges: hops,
+        points,
+        spans,
+        length: L,
+        t0: pt0,
+        tf0,
+        tf1,
+        target: seq ? undefined : arriveNode,
+        ...(reverse ? { reverse: true } : {}),
+        ...(!seq && (reverse || arriveAnchor) ? { arrive: { node: arriveNode, ...(arriveAnchor ? { anchor: arriveAnchor } : {}) } } : {}),
+      })
+      // Forward pulses draw hidden wires as they fly; reverse pulses and wire-managed edges never do.
+      if (!reverse)
+        for (const sp of spans)
+          if (!flights[sp.edge] && !content.managed.has(sp.edge)) flights[sp.edge] = { mode: "flight", pulse: pid, t0: tf0 + (sp.s0 / L) * flight, t1: tf0 + (sp.s1 / L) * flight, s0: sp.s0, s1: sp.s1 }
+      if (!seq && nodeBox(arriveNode)) {
         const end = points[points.length - 1]
-        glows.push({ node: last.to, t: tf1, dur: S.glow.duration, cx: end.x, cy: end.y })
+        // On a row / code line: a ring and a flash on that row, no panel flood.
+        if (arriveAnchor) glows.push({ node: `${arriveNode}#${arriveAnchor}`, t: tf1, dur: 0, cx: end.x, cy: end.y })
+        else glows.push({ node: arriveNode, t: tf1, dur: S.glow.duration, cx: end.x, cy: end.y })
       }
       ends.push(tf1)
     })
@@ -314,9 +389,10 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
 
     const t1 = Math.max(...ends)
     const parts = titleParts(step, scene)
-    const label = step.stop ?? (step.caption ? truncate(step.caption, 40) : composeTitle([parts]))
+    if (cs.acts.length) parts.acts = cs.acts
+    const label = step.stop ?? (step.caption ? truncate(step.caption, 40) : composeTitle([parts], 48, i > 0 && isEmptyStep(step) ? "Hold" : "Start"))
     const be = beatEnds?.get(i)
-    steps.push({ id: step.id ?? `step-${i + 1}`, label, t0, t1, parts, ...(step.stop ? { stop: step.stop } : {}), ...(step.caption ? { caption: step.caption } : {}), ...(be ? { hold: Math.round(be.hold * 1000) / 1000 } : {}) })
+    steps.push({ id: step.id ?? `step-${i + 1}`, label, t0, t1, parts, ...(cs.focus ? { focus: cs.focus } : {}), ...(step.stop ? { stop: step.stop } : {}), ...(step.caption ? { caption: step.caption } : {}), ...(be ? { hold: Math.round(be.hold * 1000) / 1000 } : {}) })
     prevEnd = t1
     prevT0 = t0
 
@@ -358,6 +434,7 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
   const draw: Record<string, TimelineDraw> = {}
   const FADE = 0.45
   for (const e of scene.edges) {
+    if (content.managed.has(e.id)) continue
     const fa = appear[e.from]
     const ta = appear[e.to]
     const hidden = seq ? flights[e.id] !== undefined || edgeReveal[e.id] !== undefined : fa !== undefined || ta !== undefined || edgeReveal[e.id] !== undefined
@@ -401,6 +478,7 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
     ...Object.values(draw).map((d) => d.t1 + REACT_SETTLE),
     ...Object.values(appear).map((t) => t + REACT_SETTLE),
     ...Object.values(counters).flatMap((c) => c.events.map((e) => e.t + REACT_SETTLE)),
+    ...contentEvents(content.fields() as Timeline).map(([, e]) => e),
     0,
   ]
   const lastEvent = Math.max(...events)
@@ -421,6 +499,17 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
       c.handoff = true
     } else c.t1 = own
   })
+  // End state: the static diagram is the final frame.
+  {
+    const end = content.endState()
+    for (const id of end.lit) warn("story", `"${id}" still glows at the end: the static diagram shows it lit`, `add "unglow": "${id}"`)
+    for (const n of scene.nodes)
+      for (const r of n.rows ?? []) {
+        const key = `${n.id}#${r.id}`
+        if (content.status(key) !== "running" || end.hidden(key) || end.hidden(n.id)) continue
+        warn("story", `"${key}" is still running at the end: the static diagram shows a spinner`, `add "status": { "id": "${key}", "to": "done" }`)
+      }
+  }
   if (duration > S.warnTotal) warn("story", `story runs ${duration.toFixed(1)}s (over ${S.warnTotal}s, reading holds not counted)`, "shorten gaps or split the story")
   if (!story.steps.length) warn("story.steps", "story has no steps")
 
@@ -441,8 +530,95 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
     glows,
     captions,
     counters,
+    ...content.fields(),
+    ...(story.spotlight ? { spot: spotTargets(scene, steps, pulses, glows, content.fields() as Timeline, story.steps) } : {}),
+    ...(story.rewind ? { rewind: story.rewind } : {}),
   }
   return { timeline, diagnostics }
+}
+
+/**
+ * Spotlight target per step, first match: focus → status slot → pulse arrival → glow /
+ * highlight node → typed box → lit bar → wire midpoint → reveal union. Steps with nothing keep
+ * the previous target.
+ */
+function spotTargets(scene: Scene, steps: Timeline["steps"], pulses: TimelinePulse[], glows: TimelineGlow[], c: Timeline, src: StoryStep[]): NonNullable<Timeline["spot"]> {
+  const out: NonNullable<Timeline["spot"]> = []
+  const r3 = (x: number) => Math.round(x * 1000) / 1000
+  const box = (id: string) => boxOfRef(scene, id.replace(/@label$/, ""))
+  const at0 = (t: number, t0: number) => Math.abs(t - t0) < 1e-6
+  const ofBox = (b: { x: number; y: number; w: number; h: number }) => ({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: Math.max(90, Math.min(260, 0.6 * Math.max(b.w, b.h))) })
+  steps.forEach((st, i) => {
+    // Content events sit on the published (ms-rounded) step start.
+    const t0 = r3(st.t0)
+    let p: { x: number; y: number; r: number } | undefined
+    const f = st.focus ? box(st.focus) : undefined
+    if (f) p = ofBox(f)
+    if (!p)
+      for (const [key, ev] of Object.entries(c.status ?? {}))
+        if (ev.some((e) => at0(e.t, t0))) {
+          const r = parseRef(key)
+          const n = scene.nodes.find((x) => x.id === r.node)
+          const row = n?.rows?.find((x) => x.id === r.anchor)
+          if (n && row) {
+            p = { x: n.x + row.statusX, y: n.y + row.anchorY, r: 110 }
+            break
+          }
+        }
+    if (!p) {
+      const q = pulses.find((x) => x.id.startsWith(`pulse-${i}-`))
+      if (q) p = { ...q.points[q.points.length - 1], r: 120 }
+    }
+    if (!p) {
+      const lit = Object.entries(c.lit ?? {}).find(([, w]) => w.some((x) => at0(x.t0, t0)))?.[0]
+      const g = lit ?? glows.find((x) => at0(x.t, t0) && !x.node.includes("#"))?.node
+      const b = g ? box(g) : undefined
+      if (b) p = ofBox(b)
+    }
+    if (!p) {
+      const ty = (c.typing ?? []).find((x) => at0(x.t0, t0))
+      const b = ty ? box(ty.target) : undefined
+      if (b) p = ofBox(b)
+    }
+    if (!p)
+      for (const [id, ev] of Object.entries(c.bars ?? {})) {
+        const e = ev.find((x) => at0(x.t, t0) && x.on)
+        const a = e && box(`${id}#${e.a}`)
+        const b = e && box(`${id}#${e.b}`)
+        if (a && b) {
+          p = ofBox({ x: a.x, y: a.y, w: a.w, h: b.y + b.h - a.y })
+          break
+        }
+      }
+    if (!p)
+      for (const [id, ev] of Object.entries(c.wires ?? {}))
+        if (ev.some((x) => at0(x.t0, t0))) {
+          const e = scene.edges.find((x) => x.id === id)
+          if (e) {
+            const m = e.points[Math.floor(e.points.length / 2)]
+            const a = e.points[Math.floor((e.points.length - 1) / 2)]
+            p = { x: (a.x + m.x) / 2, y: (a.y + m.y) / 2, r: 110 }
+            break
+          }
+        }
+    if (!p) {
+      const bs = asList(src[i]?.reveal)
+        .map((id) => (typeof id === "string" ? box(id) : undefined))
+        .filter((b): b is NonNullable<typeof b> => !!b)
+      if (bs.length) {
+        const x0 = Math.min(...bs.map((b) => b.x))
+        const y0 = Math.min(...bs.map((b) => b.y))
+        p = ofBox({ x: x0, y: y0, w: Math.max(...bs.map((b) => b.x + b.w)) - x0, h: Math.max(...bs.map((b) => b.y + b.h)) - y0 })
+      }
+    }
+    if (p) out.push({ t: r3(t0), x: r3(p.x), y: r3(p.y), r: r3(p.r) })
+  })
+  return out
+}
+
+/** A step that does nothing (only id / at / hold): a held pause. */
+function isEmptyStep(step: StoryStep): boolean {
+  return Object.keys(step).every((k) => k === "id" || k === "at" || k === "hold")
 }
 
 function parentOf(spec: Spec, id: string): string | undefined {
@@ -463,6 +639,12 @@ const PSEUDO: Record<string, string> = { initial: "Start", final: "End", choice:
 
 /** Human name for an element: its label, or a word for label-less pseudo states. */
 export function humanName(scene: Scene, id: string): string {
+  if (id.includes("#") && !scene.nodes.some((x) => x.id === id)) {
+    const r = parseRef(id)
+    const row = scene.nodes.find((x) => x.id === r.node)?.rows?.find((x) => x.id === r.anchor)
+    const v = row?.versions[0]
+    if (v) return (v.lines.join(" ") || v.tag || id).trim()
+  }
   const n = scene.nodes.find((x) => x.id === id)
   if (n) {
     const l = n.label.join(" ").trim()
@@ -491,7 +673,8 @@ export function titleParts(step: StoryStep, scene: Scene): NonNullable<import(".
       paths.push(l)
       continue
     }
-    const hops = [name(es[0].from), ...es.map((e) => name(e.to))]
+    const fwd = [name(es[0].from), ...es.map((e) => name(e.to))]
+    const hops = typeof p === "object" && p.reverse ? fwd.reverse() : fwd
     paths.push(hops.filter((h, i) => h !== hops[i - 1]).join(" → "))
   }
   const reveals = asList(step.reveal)
@@ -508,7 +691,7 @@ export function titleParts(step: StoryStep, scene: Scene): NonNullable<import(".
 }
 
 /** Join the parts of one or more merged steps into a short title, without repeating names. */
-export function composeTitle(list: NonNullable<import("./types.ts").TimelineStep["parts"]>[], max = 48): string {
+export function composeTitle(list: NonNullable<import("./types.ts").TimelineStep["parts"]>[], max = 48, empty = "Start"): string {
   // Parallel single hops from one source read as "A → B, C".
   const raw = [...new Set(list.flatMap((p) => p.paths))]
   const bySource = new Map<string, string[]>()
@@ -539,6 +722,7 @@ export function composeTitle(list: NonNullable<import("./types.ts").TimelineStep
   const inPaths = new Set(paths.flatMap((p) => p.split(/ → | · |, /)))
   const reveals = [...new Set(list.flatMap((p) => p.reveals))].filter((r) => !inPaths.has(r))
   const counters = list.flatMap((p) => p.counters)
-  const bits = [paths.length ? paths.join(" + ") : "", reveals.length ? reveals.join(", ") : "", ...counters].filter(Boolean)
-  return truncate(bits.join(" · ") || "Start", max)
+  const acts = [...new Set(list.flatMap((p) => p.acts ?? []))]
+  const bits = [paths.length ? paths.join(" + ") : "", reveals.length ? reveals.join(", ") : "", ...counters, ...acts].filter(Boolean)
+  return truncate(bits.join(" · ") || empty, max)
 }

@@ -15,6 +15,8 @@ export interface StoryControls {
   /** Content dim (gate .55, settled end .75). */
   dim: number
   blur: number
+  /** `rewind: "glitch"` only: 0..1 displacement strength while rewinding (0 otherwise). */
+  glitch: number
   reduced: boolean
   play: () => void
   pause: () => void
@@ -438,7 +440,9 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
   const frameAt = useCallback((x: number) => storyState(scene, tl, x, { reduced: opts.reduced, stepped: opts.reduced }), [scene, tl, opts.reduced])
   if (!tl) return undefined
   const dim = mode === "gate" ? (opts.reduced ? 1 : S.gateDim) : mode === "ended" && settled ? S.endedDim : 1
-  return { t, frame, mode, dim, blur, reduced: opts.reduced, play, pause, toggle, seek, replay, step, moving, now: () => clock.get(), modeNow: () => modeRef.current, ungate, frameAt }
+  // Glitch rewind (HTML only): the same velocity envelope as the blur, only while rewinding.
+  const glitch = tl?.rewind === "glitch" && mode === "rewinding" && !opts.reduced ? Math.min(1, blur / S.rewind.blur) : 0
+  return { t, frame, mode, dim, blur, glitch, reduced: opts.reduced, play, pause, toggle, seek, replay, step, moving, now: () => clock.get(), modeNow: () => modeRef.current, ungate, frameAt }
 }
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}.${Math.floor((s % 1) * 10)}`

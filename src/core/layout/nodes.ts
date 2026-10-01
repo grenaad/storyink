@@ -37,6 +37,10 @@ const KINDS: Record<string, KindStyle> = {
   participant: { shape: "panel", accent: "blue", tag: "" },
   actor: { shape: "actor", accent: "plain", tag: "actor" },
   note: { shape: "note", accent: "gold", tag: "" },
+  // rich nodes (sized by panels.ts)
+  panel: { shape: "window", accent: "plain", tag: "" },
+  code: { shape: "window", accent: "plain", tag: "" },
+  chip: { shape: "chip", accent: "plain", tag: "" },
 }
 
 export function kindStyle(kind: string): KindStyle {

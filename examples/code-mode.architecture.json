@@ -1,0 +1,89 @@
+{
+  "$schema": "../schema/storyink.schema.json",
+  "type": "architecture",
+  "title": "Code mode",
+  "subtitle": "The model writes one program; the program calls the MCP servers",
+  "direction": "LR",
+  "groups": [{ "id": "servers", "label": "MCP servers", "bare": true }],
+  "nodes": [
+    {
+      "id": "session", "kind": "panel", "label": "Session", "size": { "cols": 32, "lines": 11 },
+      "rows": [
+        { "id": "ask", "tag": "You", "text": "File GitHub bugs in Linear." },
+        { "id": "exec1", "icon": "wrench", "text": "EXECUTE", "detail": "{ code }" },
+        { "id": "found1", "text": "tools.github.list_issues", "indent": 1 },
+        { "id": "found2", "text": "tools.linear.save_issue", "indent": 1 },
+        { "id": "exec2", "icon": "wrench", "text": "EXECUTE", "detail": "{ code }" },
+        { "id": "filed", "text": "[\"OC-412\", \"OC-413\", \"OC-414\"]", "indent": 1 }
+      ]
+    },
+    {
+      "id": "code", "kind": "code", "label": "Code mode", "lang": "ts", "size": { "lines": 9 },
+      "code": [
+        "return [search({ query: \"list github issues\" }),",
+        "  search({ query: \"create linear issue\" })]"
+      ]
+    },
+    { "id": "github", "kind": "chip", "label": "github", "icon": "plug", "parent": "servers" },
+    { "id": "linear", "kind": "chip", "label": "linear", "icon": "plug", "parent": "servers" },
+    { "id": "sentry", "kind": "chip", "label": "sentry", "icon": "plug", "parent": "servers", "muted": true, "stack": 2 }
+  ],
+  "edges": [
+    { "id": "call1", "from": "session#exec1", "to": "code#1" },
+    { "id": "call2", "from": "session#exec2", "to": "code#1" },
+    { "id": "gh", "from": "code", "to": "github" },
+    { "id": "ln", "from": "code", "to": "linear" },
+    { "id": "se", "from": "code", "to": "sentry" }
+  ],
+  "story": {
+    "autoplay": true,
+    "end": "loop",
+    "pace": 0,
+    "spotlight": true,
+    "rewind": "glitch",
+    "steps": [
+      { "id": "ask", "at": 0.5, "type": "session#ask", "stop": "Ask" },
+      { "at": 1.8, "dim": "session#ask", "reveal": "session#exec1", "status": { "id": "session#exec1", "to": "running" } },
+      { "at": 2.0, "wire": { "edge": "call1", "duration": 0.45 } },
+      { "at": 2.6, "type": { "id": "code", "cps": 160 }, "stop": "Search" },
+      { "at": 3.3, "line": "code#1", "pulse": { "edge": "gh", "duration": 0.3 }, "glow": "github" },
+      { "at": 3.85, "line": "code#2", "unglow": "github", "pulse": { "edge": "ln", "duration": 0.3 }, "glow": "linear" },
+      { "at": 4.45, "line": { "id": "code", "off": true }, "unglow": "linear", "pulse": { "edge": "call1", "reverse": true, "duration": 0.35 } },
+      { "at": 5.15, "reveal": ["session#found1", "session#found2"], "status": { "id": "session#exec1", "to": "done" } },
+      { "at": 5.85, "dim": ["session#exec1", "session#found1", "session#found2"], "reveal": "session#exec2", "status": { "id": "session#exec2", "to": "running" }, "stop": "Execute" },
+      { "at": 6.1, "clear": "code" },
+      { "at": 6.3, "wire": { "edge": "call2", "duration": 0.4 } },
+      {
+        "at": 6.8,
+        "set": {
+          "id": "code",
+          "code": [
+            "const { issues } = await tools.github.list_issues({",
+            "  owner: \"anomalyco\", repo: \"opencode\",",
+            "  labels: [\"bug\"], state: \"OPEN\",",
+            "})",
+            "const filed = await Promise.all(issues.map(({ title }) =>",
+            "  tools.linear.save_issue({ team: \"OC\", title })))",
+            "return filed.map(issue => issue.identifier)"
+          ]
+        },
+        "type": { "id": "code", "cps": 170 }
+      },
+      { "at": 8.6, "line": "code#1-4", "pulse": { "edge": "gh", "duration": 0.35 }, "glow": "github", "stop": "Call tools" },
+      { "at": 9.75, "pulse": { "edge": "gh", "reverse": true, "duration": 0.35 } },
+      {
+        "at": 10.45, "line": "code#5-6", "unglow": "github", "glow": "linear",
+        "pulse": [
+          { "edge": "ln", "duration": 0.35 },
+          { "edge": "ln", "duration": 0.35, "delay": 0.2 },
+          { "edge": "ln", "duration": 0.35, "delay": 0.4 }
+        ]
+      },
+      { "at": 12.0, "pulse": { "edge": "ln", "reverse": true, "duration": 0.35 } },
+      { "at": 12.85, "line": "code#7", "unglow": "linear" },
+      { "at": 13.2, "line": { "id": "code", "off": true }, "pulse": { "edge": "call2", "reverse": true, "duration": 0.5 }, "stop": "Return" },
+      { "at": 14.05, "reveal": "session#filed", "status": { "id": "session#exec2", "to": "done" } },
+      { "id": "end", "at": 16.2 }
+    ]
+  }
+}

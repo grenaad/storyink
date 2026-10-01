@@ -1,4 +1,5 @@
 import type { Pt } from "../scene.ts"
+import type { RowStatus } from "../spec.ts"
 
 export interface TimelineStep {
   id: string
@@ -9,8 +10,10 @@ export interface TimelineStep {
   caption?: string
   /** On the last step of a beat: its reading hold (s), inserted before the next beat in continuous play. */
   hold?: number
+  /** Camera / spotlight target override (`focus`). */
+  focus?: string
   /** Title parts for beat tiles: pulse paths, revealed node names, counter changes. */
-  parts?: { paths: string[]; reveals: string[]; counters: string[] }
+  parts?: { paths: string[]; reveals: string[]; counters: string[]; acts?: string[] }
 }
 
 export interface TimelinePulse {
@@ -25,6 +28,10 @@ export interface TimelinePulse {
   tf0: number
   tf1: number
   target?: string
+  /** Travels the route backwards (return pulse). */
+  reverse?: boolean
+  /** Arrival on a node (and optionally a row / code line anchor). */
+  arrive?: { node: string; anchor?: string }
 }
 
 export interface TimelineGlow {
@@ -39,7 +46,7 @@ export interface TimelineGlow {
 export interface TimelineDraw {
   t0: number
   t1: number
-  mode: "flight" | "fade"
+  mode: "flight" | "fade" | "wire"
   /** For flight draws: the pulse and this edge's span on its route. */
   pulse?: string
   s0?: number
@@ -81,6 +88,68 @@ export interface Timeline {
   /** A caption belongs to its step: shown from t0, gone by t1 (step end + settle, or the next caption). */
   captions: { i?: number; text: string; t0: number; t1: number; step: number; handoff: boolean }[]
   counters: Record<string, { node: string; start: number; events: { t: number; to: number }[]; prefix?: string; suffix?: string; decimals: number }>
+  // 0.4 content timeline (all optional; absent = nothing of that kind).
+  typing?: TimelineTyping[]
+  /**
+   * set / clear events per target (code node id, "node#row", or "node@label" for a label);
+   * v = the version shown from t on, -1 = cleared.
+   */
+  versions?: Record<string, { t: number; v: number }[]>
+  /** Active-line bar ranges per code node (1-based inclusive lines). */
+  bars?: Record<string, { t: number; a: number; b: number; on: boolean }[]>
+  status?: Record<string, { t: number; to: RowStatus }[]>
+  /** dim / undim level events (the dim channel; rest = muted ? 0.42 : 1). */
+  levels?: Record<string, { t: number; to: number }[]>
+  /** hide / show events (the visibility channel, independent of the dim channel). */
+  vis?: Record<string, { t: number; to: 0 | 1 }[]>
+  /** glow / unglow windows. */
+  lit?: Record<string, { t0: number; t1?: number }[]>
+  /**
+   * wire / unwire events per edge, in time order. `on` draws the wire on over [t0, t1]; off
+   * retracts it (source end first). Before the first event the wire is hidden when that event
+   * draws it, else drawn. Repeated cycles are allowed.
+   */
+  wires?: Record<string, { t0: number; t1: number; on: boolean }[]>
+  /** Spotlight targets per step (story.spotlight): centre and radius. */
+  spot?: { t: number; x: number; y: number; r: number }[]
+  rewind?: "tape" | "glitch"
+}
+
+export interface TimelineTyping {
+  /** Code node id or "node#row". */
+  target: string
+  /** Version being typed. */
+  v: number
+  by: "char" | "word"
+  t0: number
+  t1: number
+  /** Rows: the version's text lines; code: the program lines. char mode: per-line runs. */
+  lines?: { t0: number; t1: number; n: number; indent: number }[]
+  /** word mode (caption formula). */
+  words?: { n: number; lead: number; fade: number; stagger: number }
+}
+
+export interface ContentLayer {
+  v: number
+  o: number
+  chars?: number[]
+  words?: number[]
+  /** Word-typed rows: the tag / icon opacity (they appear as the typing starts). */
+  tag?: number
+}
+
+export interface StatusFrame {
+  /** Glyph shown ("none" = no glyph, only the outgoing one fades). */
+  s: RowStatus
+  o: number
+  /** Spinner rotation (deg); absent = the static arc. */
+  spin?: number
+  /** Check / cross draw-on 0..1; absent = drawn. */
+  draw?: number
+  /** Shimmer over the running label: amplitude and gradient offset (px). */
+  shimmer?: { a: number; x: number }
+  /** The outgoing glyph during a transition. */
+  prev?: { s: RowStatus; o: number; spin?: number }
 }
 
 export interface PulseFrame {
@@ -122,4 +191,18 @@ export interface Frame {
   captions: { i?: number; text: string; o: number; words: number[]; current: boolean }[]
   /** Every event has settled (the frame equals the static diagram). */
   settled: boolean
+  // 0.4 content keys (deltas from the spec's static default; optional until the compiler emits them).
+  /** Level per node / group / edge / row; omitted = rest (muted ? 0.42 : 1). */
+  lvl?: Record<string, number>
+  /** Omitted = version 0, whole. */
+  content?: Record<string, ContentLayer[]>
+  caret?: { target: string; line: number; col: number }[]
+  bars?: Record<string, { a: number; b: number; o: number }>
+  status?: Record<string, StatusFrame>
+  lit?: Record<string, number>
+  /** hide / show channel per node / group / edge / row; omitted = shown. */
+  vis?: Record<string, number>
+  /** Wire retract progress 0..1 (1 = gone). */
+  undraw?: Record<string, number>
+  spot?: { x: number; y: number; r: number; a: number }
 }

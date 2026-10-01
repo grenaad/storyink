@@ -35,6 +35,11 @@ export function toScene(input: Spec | Scene | unknown): Scene {
   return layout(v.spec)
 }
 
+/** Does the scene use 0.4 rich nodes (their CSS / palette is only emitted then)? */
+export function isRichScene(scene: Scene): boolean {
+  return scene.nodes.some((n) => n.shape === "window" || n.shape === "chip" || n.muted) || scene.groups.some((g) => g.bare)
+}
+
 function isScene(x: unknown): x is Scene {
   return typeof x === "object" && x !== null && "viewBox" in x && "nodes" in x && "edges" in x && "ports" in x
 }
@@ -53,7 +58,8 @@ export interface SvgOptions {
 /** Static, self-contained SVG (React SSR). */
 export function renderSvg(spec: Spec | Scene | unknown, opts: SvgOptions = {}): string {
   const scene = toScene(spec)
-  const style = [opts.font === false ? "" : fontCss(), themeCss("svg.storyink", opts.theme), diagramCss()].filter(Boolean).join("\n")
+  const rich = isRichScene(scene)
+  const style = [opts.font === false ? "" : fontCss(), themeCss("svg.storyink", opts.theme, rich), diagramCss(rich)].filter(Boolean).join("\n")
   const tl = scene.timeline
   const t = !tl || opts.t === undefined || opts.t === "end" ? (tl?.duration ?? 0) : opts.t
   const markup = renderToStaticMarkup(<Diagram scene={scene} style={style} frame={storyState(scene, tl, t)} />)
@@ -87,8 +93,8 @@ export function renderHtml(spec: Spec | Scene | unknown, opts: HtmlOptions = {})
 <meta name="generator" content="storyink ${VERSION}">
 <title>${escapeHtml(scene.title)}</title>
 <style id="storyink-font">${fontCss()}</style>
-<style id="storyink-theme">${themeCss(":root")}</style>
-<style id="storyink-diagram-css">${diagramCss()}</style>
+<style id="storyink-theme">${themeCss(":root", undefined, isRichScene(scene))}</style>
+<style id="storyink-diagram-css">${diagramCss(isRichScene(scene))}</style>
 <style id="storyink-viewer-css">${viewerCss()}${scene.timeline && Object.keys(scene.timeline.counters).length ? ROLLING_CSS : ""}</style>
 <script>${BOOT}</script>
 </head>

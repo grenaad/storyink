@@ -1,0 +1,15 @@
+[
+  [
+    "[kw:return] [[fn:search]({ query: [str:\"list github issues\"] }),",
+    "  [fn:search]({ query: [str:\"create linear issue\"] })]"
+  ],
+  [
+    "[kw:const] { [def:issues] } [op:=] [kw:await] tools.github.[fn:list_issues]({",
+    "  owner: [str:\"anomalyco\"], repo: [str:\"opencode\"],",
+    "  labels: [[str:\"bug\"]], state: [str:\"OPEN\"],",
+    "})",
+    "[kw:const] [def:filed] [op:=] [kw:await] [type:Promise].[fn:all](issues.[fn:map](({ [param:title] }) [op:=>]",
+    "  tools.linear.[fn:save_issue]({ team: [str:\"OC\"], title })))",
+    "[kw:return] filed.[fn:map]([param:issue] [op:=>] issue.identifier)"
+  ]
+]

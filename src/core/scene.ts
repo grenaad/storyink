@@ -1,5 +1,5 @@
 import type { Accent } from "../theme/tokens.ts"
-import type { ArrowMode, DiagramType, Direction, EdgeStyle, FrameKind, MessageKind } from "./spec.ts"
+import type { ArrowMode, CodeLang, DiagramType, Direction, EdgeStyle, FrameKind, IconName, MessageKind, RowStatus } from "./spec.ts"
 
 export interface Pt {
   x: number
@@ -27,6 +27,55 @@ export type Shape =
   | "external"
   | "bar"
   | "choice"
+  /** panel & code nodes: header strip + body. */
+  | "window"
+  | "chip"
+
+/** Syntax token classes (omitted = plain ink). */
+export type TokKind = "kw" | "op" | "str" | "num" | "fn" | "def" | "type" | "param" | "com"
+/** One code line: tokens with their start column. */
+export type CodeLine = { t: string; c: number; k?: TokKind }[]
+
+export interface SceneCode {
+  lang: CodeLang
+  /** [0] = spec code, then each story `set` on this node in step order. */
+  versions: CodeLine[][]
+  /** Relative to the node box; line k is centred at top + (k − 0.5)·lh. */
+  x: number
+  top: number
+  lh: number
+  /** Reserved lines / columns (≥ every version). */
+  slots: number
+  cols: number
+}
+
+export interface SceneRowVersion {
+  lines: string[]
+  /** Char offset (across the joined lines) where the muted detail starts. */
+  split?: number
+  tag?: string
+}
+
+export interface SceneRow {
+  /** Authored id, else "row-<k>". */
+  id: string
+  /** Slot box relative to the node (x = text start). */
+  y: number
+  h: number
+  x: number
+  tagY?: number
+  /** Baselines of the text lines. */
+  lineY: number[]
+  iconY?: number
+  icon?: IconName
+  status?: RowStatus
+  muted?: boolean
+  indent?: number
+  statusX: number
+  /** Centre of the first text line (anchor/port y). */
+  anchorY: number
+  versions: SceneRowVersion[]
+}
 
 export interface SceneNode extends Box {
   id: string
@@ -42,6 +91,16 @@ export interface SceneNode extends Box {
   text: { tagY: number; labelY: number[]; detailY: number[]; cx: number; counterY?: number }
   /** Rolling counter slot (value = initial; the story drives it). */
   counter?: { id: string; value: number; label?: string; prefix?: string; suffix?: string }
+  /** window: header strip. */
+  header?: { h: number; title: string }
+  rows?: SceneRow[]
+  code?: SceneCode
+  icon?: IconName
+  muted?: boolean
+  /** chip: sheets below the face; the face is h − stack·stackStep tall. */
+  stack?: number
+  /** Label versions (story `set` label); [0] = spec. */
+  labels?: string[][]
 }
 
 export interface SceneGroup extends Box {
@@ -50,6 +109,8 @@ export interface SceneGroup extends Box {
   kind?: string
   depth: number
   composite: boolean
+  /** Label only, no box. */
+  bare?: boolean
 }
 
 export interface Arrowhead {
@@ -83,6 +144,9 @@ export interface SceneEdge {
   message?: MessageKind
   /** Sequence number (autonumber). */
   seq?: number
+  /** Row id / code line the edge leaves from / arrives at (from/to stay node ids). */
+  fromAnchor?: string
+  toAnchor?: string
 }
 
 export interface ScenePort extends Pt {
@@ -92,6 +156,7 @@ export interface ScenePort extends Pt {
   end: "out" | "in"
   /** Hidden under an arrowhead (kept for Phase 2 animation). */
   covered: boolean
+  anchor?: string
 }
 
 export interface SceneLifeline {

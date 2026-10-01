@@ -164,6 +164,57 @@ export const palettes: Record<ThemeName, Palette> = {
   },
 }
 
+/**
+ * Palette additions for rich nodes (panel / code / chip). Kept apart from `Palette` and only
+ * emitted when a scene uses them, so pre-0.4 diagrams render byte-identically.
+ * Code colours: GitHub dark / GitHub light.
+ */
+export interface RichPalette {
+  codeKw: string
+  codeStr: string
+  codeConst: string
+  codeFn: string
+  codeParam: string
+  codeCom: string
+  /** Active-line bar and its 2px leading edge. */
+  codeBar: string
+  codeBarEdge: string
+  /** Running-row shimmer highlight. */
+  shimmer: string
+  /** Row status glyphs. */
+  statusDone: string
+  statusError: string
+}
+
+export const richPalettes: Record<ThemeName, RichPalette> = {
+  light: {
+    codeKw: "#d73a49",
+    codeStr: "#032f62",
+    codeConst: "#005cc5",
+    codeFn: "#6f42c1",
+    codeParam: "#e36209",
+    codeCom: "#6a737d",
+    codeBar: "#dcdad4",
+    codeBarEdge: "#8a857c",
+    shimmer: "#141311",
+    statusDone: "#5f7a4f",
+    statusError: "#b0574a",
+  },
+  dark: {
+    codeKw: "#f97583",
+    codeStr: "#9ecbff",
+    codeConst: "#79b8ff",
+    codeFn: "#b392f0",
+    codeParam: "#ffab70",
+    codeCom: "#6a737d",
+    codeBar: "#1b1b1a",
+    codeBarEdge: "#6e6b65",
+    shimmer: "#ffffff",
+    statusDone: "#9aaf8c",
+    statusError: "#e1887a",
+  },
+}
+
 /** Base step inks from the source look (reference values). */
 export const stepInks = {
   light: ["#b88f85", "#819eb8", "#b8a571"],
@@ -189,6 +240,10 @@ export const type = {
   lineHeight: 1.45,
   title: 30,
   subtitle: 15,
+  /** Rich nodes: panel rows, code, header strip title. */
+  row: 13,
+  code: 13,
+  header: 10,
 }
 
 export const geometry = {
@@ -218,6 +273,26 @@ export const geometry = {
   nodeGap: 28,
   groupGap: 24,
   margin: 32,
+  // Rich nodes (panel / code / chip).
+  headerH: 36,
+  panelPadX: 16,
+  panelPadY: 14,
+  rowLH: 20,
+  /** Gap between top-level rows; an indented row sits `rowGapChild` under its parent, siblings touch. */
+  rowGap: 12,
+  rowGapChild: 4,
+  tagH: 20,
+  iconW: 18,
+  statusW: 22,
+  codeLH: 22,
+  codePadX: 18,
+  chipH: 44,
+  chipMinW: 120,
+  chipPadX: 14,
+  stackStep: 5,
+  rowCols: 40,
+  /** Rest opacity of muted / dimmed elements. */
+  muted: 0.42,
 }
 
 /** Storyboard timing (STYLE.md §5). All in seconds of scene time. */
@@ -251,26 +326,27 @@ export const motion = {
 }
 
 /** CSS custom property name for a palette key. */
-export const cssVar = (key: keyof Palette): string => `--si-${key}`
+export const cssVar = (key: keyof Palette | keyof RichPalette): string => `--si-${key}`
 /** `var(--si-key)` reference. */
-export const v = (key: keyof Palette): string => `var(${cssVar(key)})`
+export const v = (key: keyof Palette | keyof RichPalette): string => `var(${cssVar(key)})`
 
-export function paletteCss(theme: ThemeName): string {
-  const p = palettes[theme]
-  return (Object.keys(p) as (keyof Palette)[]).map((k) => `${cssVar(k)}:${p[k]};`).join("")
+/** Custom properties for a theme; `rich` adds the rich-node palette. */
+export function paletteCss(theme: ThemeName, rich = false): string {
+  const p: Record<string, string> = rich ? { ...palettes[theme], ...richPalettes[theme] } : { ...palettes[theme] }
+  return Object.keys(p).map((k) => `${cssVar(k as keyof Palette)}:${p[k]};`).join("")
 }
 
 /**
  * CSS for both themes. `scope` is the selector that carries the variables.
  * With `fixed`, only that theme is emitted (no media query).
  */
-export function themeCss(scope: string, fixed?: ThemeName): string {
-  if (fixed) return `${scope}{${paletteCss(fixed)}color-scheme:${fixed};}`
+export function themeCss(scope: string, fixed?: ThemeName, rich = false): string {
+  if (fixed) return `${scope}{${paletteCss(fixed, rich)}color-scheme:${fixed};}`
   // Custom properties inherit, so the nearest `[data-theme]` ancestor wins.
   return [
-    `${scope}{${paletteCss("light")}color-scheme:light;}`,
-    `@media (prefers-color-scheme: dark){${scope}{${paletteCss("dark")}color-scheme:dark;}}`,
-    `${scope}[data-theme="light"],${scope} [data-theme="light"]{${paletteCss("light")}color-scheme:light;}`,
-    `${scope}[data-theme="dark"],${scope} [data-theme="dark"]{${paletteCss("dark")}color-scheme:dark;}`,
+    `${scope}{${paletteCss("light", rich)}color-scheme:light;}`,
+    `@media (prefers-color-scheme: dark){${scope}{${paletteCss("dark", rich)}color-scheme:dark;}}`,
+    `${scope}[data-theme="light"],${scope} [data-theme="light"]{${paletteCss("light", rich)}color-scheme:light;}`,
+    `${scope}[data-theme="dark"],${scope} [data-theme="dark"]{${paletteCss("dark", rich)}color-scheme:dark;}`,
   ].join("\n")
 }

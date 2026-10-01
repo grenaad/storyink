@@ -8,9 +8,9 @@ export type Direction = "TB" | "BT" | "LR" | "RL"
 export const DIRECTIONS = ["TB", "BT", "LR", "RL"] as const
 
 export const GRAPH_NODE_KINDS = {
-  architecture: ["service", "database", "store", "queue", "client", "user", "external", "cache", "function", "note"],
-  dataflow: ["service", "database", "store", "queue", "client", "user", "external", "cache", "function", "note"],
-  workflow: ["start", "end", "step", "decision", "io", "note"],
+  architecture: ["service", "database", "store", "queue", "client", "user", "external", "cache", "function", "note", "panel", "code", "chip"],
+  dataflow: ["service", "database", "store", "queue", "client", "user", "external", "cache", "function", "note", "panel", "code", "chip"],
+  workflow: ["start", "end", "step", "decision", "io", "note", "panel", "code", "chip"],
   lifecycle: ["initial", "final", "state", "composite", "choice", "fork", "join", "note"],
 } as const
 
@@ -44,6 +44,39 @@ interface Common {
   story?: Story | "auto"
 }
 
+export const ICONS = ["wrench", "plug", "file", "terminal", "search", "globe", "bolt", "user", "spark"] as const
+export type IconName = (typeof ICONS)[number]
+export const ROW_STATUSES = ["none", "running", "done", "error"] as const
+export type RowStatus = (typeof ROW_STATUSES)[number]
+/** Code languages for syntax colouring ("js" uses the TypeScript lexer). */
+export const CODE_LANGS = ["ts", "js", "json", "text"] as const
+export type CodeLang = (typeof CODE_LANGS)[number]
+
+/** One body row of a `panel` node. Anchor + story target: "<node>#<id>". */
+export interface PanelRow {
+  /** Starts with a letter or _ (digits-only refs are code lines: "code#3"). */
+  id?: string
+  /** Small uppercase line above the text ("YOU"). */
+  tag?: string
+  icon?: IconName
+  /** Main text; wraps at the panel's size.cols (default 40). */
+  text?: string
+  /** Muted text after `text` on the same line ("{ code }"). */
+  detail?: string
+  /** Rest status in the right-edge slot (default none). */
+  status?: RowStatus
+  /** 0..4 levels, 2 columns each. */
+  indent?: number
+  /** Dimmed at rest (story `undim` lifts it). */
+  muted?: boolean
+}
+
+/** Reserved body space for panel/code nodes; content swaps and typing never resize. */
+export interface ContentSize {
+  cols?: number
+  lines?: number
+}
+
 export interface GraphNode {
   id: string
   label?: string
@@ -58,6 +91,20 @@ export interface GraphNode {
   direction?: Direction
   /** A rolling counter shown on the node (driven by story `counter` steps). */
   counter?: NodeCounter
+  /** chip: glyph before the label; panel/code: glyph before the header title. */
+  icon?: IconName
+  /** panel only: body rows. */
+  rows?: PanelRow[]
+  /** code only: source (a string is split on newlines; tabs become 2 spaces). */
+  code?: string | string[]
+  /** code only (default "ts"). */
+  lang?: CodeLang
+  /** panel/code: reserved body size. */
+  size?: ContentSize
+  /** Dimmed/disabled at rest (0.42); story `undim` lifts it. */
+  muted?: boolean
+  /** chip: 1..3 sheets peeking below ("more items"). */
+  stack?: number
 }
 
 export interface NodeCounter {
@@ -71,7 +118,35 @@ export interface NodeCounter {
 }
 
 /** A pulse reference: an edge / message id, a unique "from->to", or a multi-hop route. */
-export type PulseRef = string | { edge?: string; route?: string[]; duration?: number }
+export type PulseRef =
+  | string
+  | {
+      edge?: string
+      route?: string[]
+      duration?: number
+      /** Travel backwards (return pulses). */
+      reverse?: boolean
+      /** Start this many seconds after the step. */
+      delay?: number
+    }
+/** Typewriter target: a code node or a panel row ("node#row"). */
+export type TypeRef = string | { id: string; by?: "char" | "word"; cps?: number; duration?: number }
+/** Active-line bar: "code#2", "code#2-4", or an object (`off: true` hides it). */
+export type LineRef = string | { id: string; lines?: number | [number, number]; off?: true }
+export interface StatusRef {
+  id: string
+  to: RowStatus
+}
+export type LevelRef = string | string[] | { ids: string[]; to?: number }
+export interface SetRef {
+  id: string
+  code?: string | string[]
+  text?: string
+  detail?: string
+  tag?: string
+  label?: string
+}
+export type WireRef = string | { edge: string; duration?: number }
 
 export interface StoryStep {
   id?: string
@@ -90,6 +165,31 @@ export interface StoryStep {
    * by `pace`). 0 = go straight on.
    */
   hold?: number
+  /** Typewriter: a code node, or a panel row. */
+  type?: TypeRef | TypeRef[]
+  /** Active-line bar on a code node. */
+  line?: LineRef | LineRef[]
+  /** Row status: spinner / check / cross. */
+  status?: StatusRef | StatusRef[]
+  /** Dim nodes, groups, edges or rows (default level 0.42). */
+  dim?: LevelRef
+  undim?: string | string[]
+  hide?: string | string[]
+  /** Inverse of hide (not a reveal). */
+  show?: string | string[]
+  /** Swap content (crossfade), or start empty when also typed. */
+  set?: SetRef | SetRef[]
+  /** Fade a code node's / row's content out. */
+  clear?: string | string[]
+  /** Draw an edge on at wire speed (hidden before). */
+  wire?: WireRef | WireRef[]
+  /** Retract an edge (source end first). */
+  unwire?: WireRef | WireRef[]
+  /** Persistent glow on / off (nodes). */
+  glow?: string | string[]
+  unglow?: string | string[]
+  /** Camera focus + spotlight target override. */
+  focus?: string
 }
 
 export interface Story {
@@ -116,6 +216,10 @@ export interface Story {
   pace?: number
   /** Steps, or "auto" to derive them (like `"story": "auto"`, with the options above). */
   steps: StoryStep[] | "auto"
+  /** A soft light that follows the action. */
+  spotlight?: boolean
+  /** Loop reset effect in the HTML viewer. */
+  rewind?: "tape" | "glitch"
 }
 
 export type StoryMotion = "full" | "reduced" | "system"
@@ -130,6 +234,8 @@ export interface GraphGroup {
   parent?: string
   /** Lay out this group's members in their own direction (best-effort). */
   direction?: Direction
+  /** Label only, no box (a column heading). */
+  bare?: boolean
 }
 
 /** Diagram-level presentation options. */

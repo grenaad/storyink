@@ -1,3 +1,4 @@
+import { boxOfRef } from "../anchor.ts"
 /**
  * The follow camera: pure geometry. Where each story step happens (`stepFocus`) and where the
  * viewer's camera sits for it (`followStep`, `cameraAt`). No DOM, no wall time: the viewer, the
@@ -99,7 +100,14 @@ export function stepFocus(scene: Scene, tl: Timeline, i: number, pad: number = C
     const e = scene.edges.find((x) => x.id === id)
     if (e) return union([ptsBox(e.points)!, ...(e.label ? [e.label] : [])])
     const p = scene.lifelines.find((x) => x.participant === id)
-    return p ? { x: p.x, y: p.y1, w: 0, h: p.y2 - p.y1 } : undefined
+    if (p) return { x: p.x, y: p.y1, w: 0, h: p.y2 - p.y1 }
+    // Rows, code lines ("node#row", "code#3"), label targets ("node@label").
+    return boxOfRef(scene, id.replace(/@label$/, ""))
+  }
+  const pad1 = (b: Box) => ({ x: b.x - pad, y: b.y - pad, w: b.w + 2 * pad, h: b.h + 2 * pad })
+  if (st.focus) {
+    const b = boxOf(st.focus)
+    if (b) return pad1(b)
   }
   const boxes: Box[] = []
   const add = (b: Box | undefined) => b && boxes.push(b)
@@ -109,9 +117,20 @@ export function stepFocus(scene: Scene, tl: Timeline, i: number, pad: number = C
   for (const [id, d] of Object.entries(tl.draw)) if (d.mode === "fade" && inStep(d.t0)) add(boxOf(id))
   for (const g of tl.glows) if (inStep(g.t)) add(boxOf(g.node))
   for (const c of Object.values(tl.counters)) if (c.events.some((e) => inStep(e.t))) add(boxOf(c.node))
+  for (const r of tl.typing ?? []) if (inStep(r.t0)) add(boxOf(r.target))
+  for (const [id, ev] of Object.entries(tl.versions ?? {})) if (ev.some((e) => inStep(e.t))) add(boxOf(id))
+  for (const [id, ev] of Object.entries(tl.bars ?? {}))
+    for (const e of ev)
+      if (inStep(e.t) && e.on) {
+        const a = boxOf(`${id}#${e.a}`)
+        const b = boxOf(`${id}#${e.b}`)
+        add(a && b ? union([a, b]) : boxOf(id))
+      }
+  for (const rec of [tl.levels, tl.vis]) for (const [id, ev] of Object.entries(rec ?? {})) if (ev.some((e) => inStep(e.t))) add(boxOf(id))
+  for (const [id, ev] of Object.entries(tl.wires ?? {})) if (ev.some((e) => inStep(e.t0))) add(boxOf(id))
   const u = union(boxes)
   if (!u) return undefined
-  return { x: u.x - pad, y: u.y - pad, w: u.w + 2 * pad, h: u.h + 2 * pad }
+  return pad1(u)
 }
 
 /** A diagram box on screen under `cam`. */

@@ -1,0 +1,38 @@
+{
+  "$schema": "../schema/storyink.schema.json",
+  "type": "dataflow",
+  "title": "Failover",
+  "subtitle": "A router retires its wire to a failing upstream and draws one to the replica",
+  "direction": "LR",
+  "groups": [{ "id": "pool", "label": "Upstreams", "bare": true }],
+  "nodes": [
+    { "id": "client", "kind": "chip", "label": "client", "icon": "user" },
+    {
+      "id": "router", "kind": "panel", "label": "Router",
+      "rows": [
+        { "id": "req", "icon": "globe", "text": "GET", "detail": "/orders" },
+        { "id": "a", "text": "orders-a", "indent": 1 },
+        { "id": "b", "text": "orders-b", "indent": 1, "muted": true }
+      ]
+    },
+    { "id": "primary", "kind": "chip", "label": "orders-a", "icon": "bolt", "parent": "pool" },
+    { "id": "replica", "kind": "chip", "label": "orders-b", "icon": "bolt", "parent": "pool", "muted": true }
+  ],
+  "edges": [
+    { "id": "in", "from": "client", "to": "router#req" },
+    { "id": "to-a", "from": "router#a", "to": "primary" },
+    { "id": "to-b", "from": "router#b", "to": "replica" }
+  ],
+  "story": {
+    "spotlight": true,
+    "steps": [
+      { "at": 0.3, "pulse": "in", "caption": "Requests reach the router", "stop": "Route" },
+      { "status": { "id": "router#a", "to": "running" }, "pulse": "to-a", "glow": "primary", "caption": "The primary serves them" },
+      { "status": { "id": "router#a", "to": "error" }, "unglow": "primary", "dim": { "ids": ["primary"], "to": 0.3 }, "caption": "The primary stops answering", "stop": "Fail" },
+      { "unwire": "to-a", "dim": "router#a", "undim": ["router#b", "replica"], "caption": "Its wire is retired" },
+      { "wire": "to-b", "status": { "id": "router#b", "to": "running" }, "focus": "router#b", "caption": "A new wire goes to the replica", "stop": "Failover" },
+      { "pulse": { "route": ["in", "to-b"] }, "glow": "replica", "caption": "Traffic flows again" },
+      { "status": { "id": "router#b", "to": "done" }, "unglow": "replica", "caption": "Served by the replica" }
+    ]
+  }
+}

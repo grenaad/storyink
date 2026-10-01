@@ -666,10 +666,13 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
             if (story?.mode === "gate" && !(e.target as Element).closest?.(NO_PAN)) story.ungate()
           }}>
           <m.div className="si-canvas" style={{ x, y, scale: k, originX: 0, originY: 0, ...(hydrated && hash.camera === "follow" && hash.t !== undefined ? { visibility: "hidden" as const } : {}) }}>
+            {story && story.glitch > 0 ? <GlitchFilter t={story.t} amount={story.glitch} /> : null}
             <div
               className="si-figure"
               style={
-                story && (story.dim < 1 || story.blur > 0)
+                story && story.glitch > 0
+                  ? { opacity: story.dim, filter: `url(#si-glitch) blur(${+(0.3 * story.blur).toFixed(2)}px)` }
+                  : story && (story.dim < 1 || story.blur > 0)
                   ? { opacity: story.dim, ...(story.blur > 0 ? { filter: `blur(${story.blur}px)` } : {}) }
                   : undefined
               }
@@ -722,5 +725,28 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
       )}
     </div>
     </LazyMotion>
+  )
+}
+
+/**
+ * Glitch rewind (HTML only): horizontal band displacement. Noise → only the extremes of R
+ * displace (bands), G pinned at 0.5 (no vertical shift); strength follows the rewind speed.
+ */
+function GlitchFilter({ t, amount }: { t: number; amount: number }) {
+  return (
+    <svg className="si-glitch-defs" width="0" height="0" aria-hidden="true" style={{ position: "absolute" }}>
+      <filter id="si-glitch" x="0" y="0" width="100%" height="100%" colorInterpolationFilters="sRGB">
+        <feTurbulence type="fractalNoise" baseFrequency="0.0008 0.09" numOctaves={1} seed={Math.round(t * 24)} result="n" />
+        {/* Contrast first (noise sits near 0.5), then only the extremes displace: bands. */}
+        <feComponentTransfer in="n" result="c">
+          <feFuncR type="linear" slope={4} intercept={-1.5} />
+        </feComponentTransfer>
+        <feComponentTransfer in="c" result="b">
+          <feFuncR type="discrete" tableValues="0 .5 .5 .5 1" />
+        </feComponentTransfer>
+        <feColorMatrix in="b" type="matrix" values="1 0 0 0 0  0 0 0 0 0.5  0 0 1 0 0  0 0 0 1 0" result="m" />
+        <feDisplacementMap in="SourceGraphic" in2="m" scale={+(16 * amount).toFixed(2)} xChannelSelector="R" yChannelSelector="G" />
+      </filter>
+    </svg>
   )
 }

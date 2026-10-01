@@ -148,7 +148,26 @@ and a drag pauses following until the next step that is out of view. Toggle it w
 (`F`, remembered), `#camera=fit`, or `"story": { "camera": "fit" }` / `--camera fit`.
 `storyink snapshot --camera follow --at …` captures the followed view.
 
-The final frame is always the static diagram. Every frame is a pure function of time
+### Rich nodes and content steps (0.4.0)
+
+For agent sessions, generated code and tool servers, graph diagrams take `panel` (a window of
+rows), `code` (a syntax-coloured program) and `chip` nodes, with wires anchored to a row
+(`session#exec`) or a code line (`code#1`). Stories can then `type` code and rows, swap content
+(`set` / `clear`), move an active-line bar (`line`), show row `status` (spinner and shimmer,
+check, cross), `dim` / `hide` / `show`, draw or retract wires (`wire` / `unwire`), keep nodes lit
+(`glow`), follow the action with a `spotlight`, send reverse and staggered pulses, and reset with
+a `glitch` rewind (HTML only). Examples:
+[code-mode](examples/code-mode.architecture.json),
+[retry-helper](examples/retry-helper.architecture.json),
+[agent-session](examples/agent-session.architecture.json),
+[failover](examples/failover.dataflow.json). Details: [docs/spec.md](docs/spec.md#rich-nodes-panel-code-chip).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/gallery/code-mode.architecture.animated.dark.svg">
+  <img alt="Code mode: a session runs a program that calls MCP servers (animated)" src="docs/gallery/code-mode.architecture.animated.light.svg">
+</picture>
+
+The final frame is the static diagram (with content steps: the story's end state). Every frame is a pure function of time
 (`storyState(scene, timeline, t)`), so `#t=2.5` seeks exactly and
 `storyink snapshot --at 1,2.5,end --sheet beats` renders stills and a beat contact sheet. The
 receipt gates check that the end frame and the reduced-motion page match the static diagram. See
@@ -184,12 +203,19 @@ storyink render examples/checkout.architecture.json --animated-svg docs/checkout
 - Library: `renderAnimatedSvg(spec, { theme, once, font })` from `storyink/core`; plugin:
   `storyink_render` with `animatedSvg: true | "both"`, `once`, `font`.
 - GitHub's image proxy caches by URL: when a diagram changes, give it a new file name (or URL).
+- Rich content (typing, status glyphs, line bars, spotlight) animates too. Frame parity is checked
+  in headless Chrome; Firefox plays it in `<img>`; Safari is untested. The glitch rewind and the
+  follow camera are HTML-only.
 
 ## Gallery
 
 `bun run gallery` renders every example and Mermaid sample and writes one light and one dark PNG per
 example to `docs/gallery/`. `bun run gallery:animated` writes the animated SVGs of the story
-examples (`*.animated.light.svg` / `*.animated.dark.svg`); `bun run verify:smil` checks them in
+examples (`*.animated.light.svg` / `*.animated.dark.svg`; `--only name,…` writes just those);
+animated: [code-mode](docs/gallery/code-mode.architecture.animated.light.svg),
+[failover](docs/gallery/failover.dataflow.animated.light.svg),
+[retry-helper](docs/gallery/retry-helper.architecture.animated.light.svg),
+[agent-session](docs/gallery/agent-session.architecture.animated.light.svg). `bun run verify:smil` checks them in
 headless Chrome (frame parity with the viewer's frames, `<img>` playback, embedded font).
 
 | | |

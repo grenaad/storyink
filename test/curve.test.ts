@@ -90,7 +90,7 @@ describe("animated overlays follow the rounded wire", () => {
         // The raw polyline corner is never part of an animated path.
         for (const c of corners) for (const v of verts(storyState(s, tl, p.tf1 - 0.01).pulses.find((x) => x.id === p.id)?.trail.map((x) => x.d).join("") ?? "")) expect(Math.hypot(v.x - c.x, v.y - c.y) > 0.5 || dist(c, curve) < 0.5).toBe(true)
       }
-      expect(checked).toBeGreaterThan(0)
+      if (s.timeline?.pulses.length) expect(checked).toBeGreaterThan(0)
       if (s.edges.some((e) => e.points.length > 2 && e.d.includes("Q"))) expect(atCorners).toBeGreaterThan(0)
     })
   }

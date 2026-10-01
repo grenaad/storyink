@@ -20,7 +20,9 @@ light/dark, SVG/PNG export) plus a static SVG. Warm ink-on-paper style, Commit M
 
 Node kinds: architecture/dataflow `service database store queue client user external cache function`;
 workflow `start end step decision io`; lifecycle `initial final state composite choice fork
-join`; any graph may add `note` nodes.
+join`; any graph may add `note` nodes. Architecture/dataflow/workflow also have **rich nodes**:
+`panel` (a window of rows: chat, tool calls, logs), `code` (a syntax-coloured program) and `chip`
+(small tile, e.g. a server); see section 2b.
 
 ## 2. Write the spec (or convert Mermaid)
 
@@ -47,7 +49,33 @@ join`; any graph may add `note` nodes.
   break, with `sections` for else/and) / `notes` referencing messages by index or `id`;
   `autonumber: true`.
 - Keep labels short (<= 26 chars wrap). Put technology in `detail`, not the label.
-- `story` is reserved (ignored for now).
+- `story` is optional: add it only for an animated diagram (section 6).
+
+### 2b. Rich nodes and anchors (agent sessions, code, tool servers)
+
+```json
+"nodes": [
+  { "id": "session", "kind": "panel", "label": "Session", "size": { "cols": 32, "lines": 6 },
+    "rows": [
+      { "id": "ask", "tag": "You", "text": "File GitHub bugs in Linear." },
+      { "id": "exec", "icon": "wrench", "text": "EXECUTE", "detail": "{ code }", "status": "done" }
+    ] },
+  { "id": "code", "kind": "code", "label": "Code mode", "lang": "ts", "code": ["return tools.github.list_issues()"] },
+  { "id": "github", "kind": "chip", "label": "github", "icon": "plug", "parent": "servers" }
+],
+"groups": [{ "id": "servers", "label": "MCP servers", "bare": true }],
+"edges": [{ "from": "session#exec", "to": "code#1" }, { "from": "code", "to": "github" }]
+```
+
+- Rows: `id` (starts with a letter), `tag`, `icon`, `text`, `detail` (muted), `status`
+  none|running|done|error, `indent` 0–4, `muted`. Icons: wrench plug file terminal search globe
+  bolt user spark. `lang`: ts js json text.
+- `size: { cols, lines }` reserves space so later `set`/typing never resizes the window.
+- Anchors: `node#rowId` / `node#3` (1-based code line) attach wires at that row/line and target
+  story steps. `muted: true` dims a node at rest; chip `stack: 1..3` draws extra sheets;
+  `bare: true` groups are just a column heading.
+- Copy from the examples: `examples/code-mode.architecture.json`,
+  `retry-helper.architecture.json`, `agent-session.architecture.json`, `failover.dataflow.json`.
 
 Mermaid in: `flowchart`/`graph`, `sequenceDiagram`, `stateDiagram-v2`. Convert with the
 `storyink_from_mermaid` tool (or `storyink mermaid in.mmd -o spec.json`), then refine the JSON:
@@ -114,6 +142,17 @@ Loop: render, then `storyink_snapshot` with `sheet: "beats"` (CLI `--sheet beats
   at the end). To see what a reader sees mid-story, snapshot with `camera: "follow"` + `at`;
   `"camera": "fit"` in `story` (or `camera` on `storyink_render`) turns it off.
 
+**Content steps** (rich nodes): `type` (code types by char, default 90/s, `cps`; rows by word),
+`set` (crossfade to new code/text; with `type` in the same step it types the new version),
+`clear`, `line` (`"code#2-4"`, `{ "id": "code", "off": true }`), `status` (`{ "id": "node#row",
+"to": "running" }`: spinner + shimmer; `done`/`error` draw a check/cross), `dim`/`undim`
+(independent of visibility), `hide`/`show` (take away / bring back something already there;
+`reveal` is for things that are *new*), `wire`/`unwire`, `glow`/`unglow` (persistent), `focus`.
+Pulses take `"reverse": true` and `"delay": s`. Story options: `"spotlight": true`,
+`"rewind": "glitch"` (HTML only). `pace` changes only the holds between beats, never typing
+speed. Finish with spinners `done` and glows `unglow`ed: the final frame is the static diagram
+(the compiler warns otherwise).
+
 Max 3 passes. Stills can't show smoothness or real-time pacing: say so when reporting.
 
 **Animated SVG** for READMEs, PR comments and docs, where only an `<img>` is allowed (no script):
@@ -128,7 +167,9 @@ Max 3 passes. Stills can't show smoothness or real-time pacing: say so when repo
 ```
 
 Default font is the system mono (small); `font: "embed"` for the exact look (+~127 KB). No story
-in the spec → auto story. On GitHub, a changed diagram needs a new file name (camo caches by URL).
+in the spec → auto story. Rich content (typing, status, spotlight…) animates in the SVG too
+(checked in Chrome; Firefox plays it; Safari untested); the glitch rewind and the follow camera are
+HTML-only. On GitHub, a changed diagram needs a new file name (camo caches by URL).
 
 ## Images and context
 

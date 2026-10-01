@@ -1,0 +1,56 @@
+{
+  "$schema": "../schema/storyink.schema.json",
+  "type": "architecture",
+  "title": "Retry with backoff",
+  "subtitle": "A code panel typed in, walked line by line, revised and rewritten",
+  "nodes": [
+    {
+      "id": "fetch", "kind": "code", "label": "get.ts", "lang": "ts",
+      "code": [
+        "export async function get(url: string) {",
+        "  const res = await fetch(url)",
+        "  if (!res.ok) throw new Error(res.statusText)",
+        "  return res.json()",
+        "}"
+      ]
+    }
+  ],
+  "story": {
+    "steps": [
+      { "at": 0.3, "type": "fetch", "caption": "A plain fetch helper", "stop": "Write" },
+      { "line": "fetch#2", "caption": "One request" },
+      { "line": "fetch#3", "caption": "Any failure throws straight away" },
+      {
+        "set": {
+          "id": "fetch",
+          "code": [
+            "export async function get(url: string) {",
+            "  for (let i = 0; i < 3; i++) {",
+            "    const res = await fetch(url)",
+            "    if (res.ok) return res.json()",
+            "    await sleep(200 * 2 ** i)",
+            "  }",
+            "  throw new Error(`GET ${url} failed`)",
+            "}"
+          ]
+        },
+        "line": "fetch#2-6", "caption": "Revised: try up to three times", "stop": "Revise"
+      },
+      { "line": "fetch#5", "caption": "Back off 200, 400, 800 ms" },
+      { "line": "fetch#7", "caption": "Then give up" },
+      { "line": { "id": "fetch", "off": true }, "clear": "fetch", "caption": "Or start over", "stop": "Rewrite" },
+      {
+        "set": {
+          "id": "fetch",
+          "code": [
+            "import { retry } from \"./retry\"",
+            "",
+            "export const get = (url: string) =>",
+            "  retry(() => fetch(url).then(ok), { tries: 3 })"
+          ]
+        },
+        "type": { "id": "fetch", "cps": 60 }, "caption": "With a retry helper"
+      }
+    ]
+  }
+}

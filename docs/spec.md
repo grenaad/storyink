@@ -13,7 +13,7 @@ errors (JSON path, message, fix hint) and never throw.
 | `subtitle`  | string                                                            | optional italic line                            |
 | `direction` | `TB` (`TD`), `BT`, `LR`, `RL`                                     | graph types; **omit to auto-pick** (see below)  |
 | `style`     | `{ "arrowheads": boolean }`                                       | graph arrowheads, default `false` (see below)   |
-| `story`     | any                                                               | reserved for Phase 2 storyboards; warned and ignored |
+| `story`     | object or `"auto"`                                                | storyboard; see [Storyboard](#storyboard-story-opt-in) |
 | `$schema`   | string                                                            | ignored by the renderer                         |
 
 ### Auto direction
@@ -50,6 +50,57 @@ the port under a head is hidden. Sequence diagrams always draw arrowheads.
 | architecture, dataflow  | `service` panel/blue, `function` panel/rose, `database` `store` cylinder/gold, `cache` panel/sage, `queue` panel with ticks/rose, `client` panel/plain, `user` actor glyph, `external` dashed panel |
 | workflow                | `start` pill/sage, `end` pill/rose, `step` panel/blue, `decision` diamond/gold, `io` parallelogram/sage |
 | lifecycle               | `initial` dot, `final` bullseye, `state` panel, `composite` container, `choice` small diamond, `fork` / `join` bar across the flow |
+| architecture, dataflow, workflow | `panel` window with rows, `code` window with a program, `chip` small labelled tile (see Rich nodes) |
+
+### Rich nodes (`panel`, `code`, `chip`)
+
+Not available in lifecycle or sequence diagrams. Examples:
+[code-mode](../examples/code-mode.architecture.json),
+[retry-helper](../examples/retry-helper.architecture.json),
+[agent-session](../examples/agent-session.architecture.json),
+[failover](../examples/failover.dataflow.json).
+
+```json
+{
+  "type": "architecture", "title": "Code mode", "direction": "LR",
+  "groups": [{ "id": "servers", "label": "MCP servers", "bare": true }],
+  "nodes": [
+    { "id": "session", "kind": "panel", "label": "Session", "size": { "cols": 32, "lines": 6 },
+      "rows": [
+        { "id": "ask", "tag": "You", "text": "File GitHub bugs in Linear." },
+        { "id": "exec", "icon": "wrench", "text": "EXECUTE", "detail": "{ code }", "status": "done" },
+        { "id": "found", "text": "tools.github.list_issues", "indent": 1, "muted": true }
+      ] },
+    { "id": "code", "kind": "code", "label": "Code mode", "lang": "ts",
+      "code": ["const issues = await tools.github.list_issues()", "return issues.length"] },
+    { "id": "github", "kind": "chip", "label": "github", "icon": "plug", "parent": "servers" },
+    { "id": "sentry", "kind": "chip", "label": "sentry", "icon": "plug", "parent": "servers", "muted": true, "stack": 2 }
+  ],
+  "edges": [
+    { "id": "call", "from": "session#exec", "to": "code#1" },
+    { "id": "gh", "from": "code", "to": "github" },
+    { "from": "code", "to": "sentry" }
+  ]
+}
+```
+
+- **`panel`**: a window (header = `label`, optional `icon`) with `rows[]`:
+  `{ id?, tag?, icon?, text?, detail?, status?, indent?, muted? }`. `tag` is a small uppercase
+  line above the text, `detail` muted text after it, `status` the rest glyph in the right slot
+  (`none` `running` `done` `error`), `indent` 0–4 (2 columns each), `muted` dims the row at rest.
+  Row ids start with a letter or `_`. Text wraps at `size.cols` (default 40).
+- **`code`**: a window showing `code` (string split on newlines, or an array of lines; tabs become
+  2 spaces), syntax-coloured by `lang`: `ts` (default), `js`, `json`, `text`.
+- **`size`** (`panel`, `code`): `{ cols?, lines? }` reserves body space. The box is also sized to fit
+  every version a story `set`s, so content swaps and typing never resize the node.
+- **`chip`**: a small tile with `icon` + `label`; `stack: 1..3` draws sheets peeking below it
+  ("more of these").
+- **`icon`**: `wrench` `plug` `file` `terminal` `search` `globe` `bolt` `user` `spark`.
+- **`muted: true`** (any graph node): drawn at 0.42 at rest; a story `undim` lifts it.
+- **Bare groups**: `groups[].bare: true` draws only the label (a column heading), no box.
+- **Anchors**: an edge end (and most story targets) may name a panel row `node#rowId` or a 1-based
+  code line `node#3`; the wire then attaches at that row or line's height. The first `#` splits;
+  exact edge ids such as `a->b#2` are matched first.
 
 ## Sequence
 
@@ -93,8 +144,9 @@ when they have no outgoing edges. Unknown lines produce warnings, never crashes.
 
 ## Page contract (HTML)
 
-- Hash: `#theme=light|dark`, `#chrome=0` (hide toolbar), `#t=<s|end>` (accepted, no-op in Phase 1),
-  `#sheet=light,dark` (both themes side by side).
+- Hash: `#theme=light|dark`, `#chrome=0` (hide toolbar), `#t=<s|end>` (seek, paused; on a spec
+  without a story it is accepted and has no effect), `#sheet=light,dark` (both themes side by side).
+  The storyboard adds more (see the page contract under [Storyboard](#storyboard-story-opt-in)).
 - `window.__storyink = { ready, whenReady, setTime(t), duration: 0, lint, version }`;
   `document.documentElement.dataset.ready = "1"` once hydrated and fonts are ready.
 - `<script type="application/json" id="storyink-data">` holds `{ version, scene }`.
@@ -105,7 +157,11 @@ when they have no outgoing edges. Unknown lines produce warnings, never crashes.
 
 A spec may carry `"story": { ... }` or `"story": "auto"`. The HTML then plays the diagram as
 a sequence of beats; the SVG, the no-JS page, exports (by default), `#t=end`, reduced motion on load and
-print all show the **final frame, which is exactly the static diagram**.
+print all show the **final frame, which is exactly the static diagram**. With content steps the
+final frame is the story's end state, not necessarily the spec as written: a `set` shows the last
+version, a `clear` / `hide` / `unwire` leaves the target empty / hidden / undrawn, `dim` levels
+stay. The compiler warns when the end state still shows a spinner (`running`) or a persistent
+`glow`.
 
 ```jsonc
 "story": {
@@ -134,6 +190,46 @@ print all show the **final frame, which is exactly the static diagram**.
 | `counter`   | `{ "id", "to" }` (or a list): rolls a node counter (`nodes[].counter = { id, value, label, prefix, suffix }`) |
 | `stop`      | chapter label: a tall scrubber tick, a beat-sheet title and a `Shift+←/→` stop |
 | `hold`      | seconds: the reading hold after the beat this step ends, overriding the computed one (not scaled by `pace`; `0` = go straight on) |
+| `id`        | step id (beat sheets, `__storyink.steps`) |
+
+Story options beside `steps`: `spotlight: true` (a soft light follows the action; `focus` steers
+it) and `rewind: "tape"` (default) or `"glitch"` (the loop / R replay reset effect in the HTML
+viewer). A pulse may also be `{ "edge", "reverse": true }` (travels to → from) and take
+`"delay": s` (starts that long after its step; a list of delayed pulses staggers).
+
+#### Content steps (rich nodes, rows, lines, edges)
+
+```json
+"story": {
+  "pace": 0, "spotlight": true, "rewind": "glitch",
+  "steps": [
+    { "at": 0.5, "type": "session#ask", "stop": "Ask" },
+    { "reveal": "session#exec", "status": { "id": "session#exec", "to": "running" } },
+    { "wire": { "edge": "call", "duration": 0.45 } },
+    { "type": { "id": "code", "cps": 160 } },
+    { "line": "code#1", "pulse": { "edge": "gh", "duration": 0.3 }, "glow": "github" },
+    { "pulse": { "edge": "gh", "reverse": true }, "unglow": "github", "line": { "id": "code", "off": true } },
+    { "status": { "id": "session#exec", "to": "done" }, "dim": "session#ask" },
+    { "set": { "id": "code", "code": ["return 42"] }, "type": "code" }
+  ]
+}
+```
+
+| step field | meaning |
+| ---------- | ------- |
+| `type`     | typewriter on a `code` node or a panel row `node#row`: id or `{ id, by?, cps?, duration? }`. Code types by `char` (default 90 chars/s, `cps` overrides, `duration` fixes the total; a caret follows); rows type by `word` (words fade in, 0.3–2.8 s). Typing speed is **not** scaled by `pace` (pace only sets the reading holds between beats); a beat's stop waits for its typing. Typing a row also reveals it. |
+| `set`      | swap content with a 0.25 s crossfade: `{ id, code? }` on a code node, `{ id, text?, detail?, tag? }` on a row, `{ id, label? }` on a panel, code or chip node (header / chip label). Set + `type` in the same step starts the new version empty and types it. |
+| `clear`    | fade a code node's / row's content out (type again only after a `set`). |
+| `line`     | active-line bar on a code node: `"code#2"`, `"code#2-4"`, `{ id, lines }`, or `{ id, off: true }`. |
+| `status`   | `{ id: "node#row", to }` with `none` `running` (spinner + shimmer sweep over the text) `done` (check draws on) `error` (cross). |
+| `dim` / `undim` | lower to a level (`"x"`, a list, or `{ ids, to }`; default 0.42) / back to 1. Nodes, groups, edges, rows. Independent of visibility: a dimmed thing that is hidden and shown again comes back dimmed. |
+| `hide` / `show` | take a visible thing away / bring it back (fade). Unlike `reveal`, which marks something as *new* (absent until its step, with a rise), `hide`/`show` act on things already in the diagram and can repeat. |
+| `wire` / `unwire` | draw an edge on at wire speed (hidden before the step) / retract it source end first; `"edge"` or `{ edge, duration }`. |
+| `glow` / `unglow` | persistent glow on a node until `unglow` (a pulse's arrival glow is separate and brief). |
+| `focus`    | an id the follow camera and the spotlight aim at for this step. |
+
+Mistakes are diagnostics with a hint, never crashes: typing a cleared target, a line past the
+program's last line, `undim` on something not dimmed, a status that doesn't change, and so on.
 
 A step **ends** when its reveals settle (react spring, 0.53 s), its pulses arrive (gather 0.34 s
 + flight 0.45–1.6 s by path length), or its caption's reading time (0.25 s + 0.075 s/word, 1–3 s)
@@ -339,6 +435,22 @@ Captions are `<text>` lines in a header under the title (opacity × word reveal)
 | checkout.architecture    | 84 KB         | 209 KB       | 84 KB        | 208 KB      |
 | oauth.sequence           | 113 KB        | 237 KB       | 113 KB       | 237 KB      |
 | order.state (auto story) | 141 KB        | 266 KB       | 141 KB       | 265 KB      |
+| code-mode.architecture   | 117 KiB       | 241 KiB      | 117 KiB      | 241 KiB     |
+| failover.dataflow        | 51 KiB        | 175 KiB      | 51 KiB       | 175 KiB     |
+| retry-helper.architecture| 32 KiB        | 156 KiB      | 32 KiB       | 156 KiB     |
+| agent-session.architecture| 38 KiB       | 162 KiB      | 38 KiB       | 162 KiB     |
+
+**Rich nodes and content steps in SMIL.** Typing (a clip width per line plus a caret), word
+reveals, `set`/`clear` crossfades, the line bar, row status (spinner, check / cross draw-on,
+shimmer sweep), `dim`/`hide`/`show`, `wire`/`unwire`, persistent glows and the spotlight are all
+encoded as tracks; things that exist only mid-story (old versions, the caret, spinner, shimmer, the
+spot) are extra elements hidden in the final frame, so the no-SMIL fallback is still the static
+diagram. Verified in headless Chrome against the HTML viewer's frames (PSNR ≥ 38 dB mid-story,
+final frame identical or ≥ 82 dB, both themes, inline and `<img>`, loop return). Firefox: `<img>`
+playback seen animating, no frame-parity check. **Safari: untested.** The `rewind: "glitch"` effect
+is HTML-only (the SVG keeps its 0.4 s reset tween); no follow camera. With `font: "system"` the
+code and row text use the reader's monospace; token x positions are explicit, so columns hold,
+but glyphs differ from Commit Mono, so use `embed` for the exact look.
 
 **Limits:** no transport (play/pause, scrubbing), no click-to-play gate, no tape-rewind blur; it
 always loops (or plays once) from load. No reduced-motion variant: SVG-as-image can't see the page,

@@ -1,0 +1,33 @@
+{
+  "$schema": "../schema/storyink.schema.json",
+  "type": "architecture",
+  "title": "Agent session",
+  "subtitle": "Tool calls stream into a session: running, done, failed and retried",
+  "nodes": [
+    {
+      "id": "chat", "kind": "panel", "label": "Session", "size": { "cols": 40 },
+      "rows": [
+        { "id": "ask", "tag": "You", "text": "Fix the flaky login test." },
+        { "id": "read", "icon": "file", "text": "READ", "detail": "test/login.test.ts" },
+        { "id": "edit", "icon": "file", "text": "EDIT", "detail": "src/auth/session.ts" },
+        { "id": "run", "icon": "terminal", "text": "BASH", "detail": "bun test login" },
+        { "id": "out", "text": "1 failed: token expired", "indent": 1 },
+        { "id": "reply", "tag": "Agent", "text": "Fixed: the test clock now freezes before the token is minted." },
+        { "id": "work", "icon": "spark", "text": "Working", "muted": true, "status": "running" }
+      ]
+    }
+  ],
+  "story": {
+    "steps": [
+      { "at": 0.3, "type": "chat#ask", "caption": "The user asks for a fix", "stop": "Ask" },
+      { "reveal": ["chat#work", "chat#read"], "status": { "id": "chat#read", "to": "running" }, "caption": "The agent reads the test" },
+      { "status": [{ "id": "chat#read", "to": "done" }, { "id": "chat#edit", "to": "running" }], "reveal": "chat#edit", "dim": "chat#read", "caption": "It edits the session code" },
+      { "status": [{ "id": "chat#edit", "to": "done" }, { "id": "chat#run", "to": "running" }], "reveal": "chat#run", "dim": "chat#edit", "caption": "It runs the test" },
+      { "status": { "id": "chat#run", "to": "error" }, "reveal": "chat#out", "hide": "chat#work", "caption": "One failure: the token expired", "stop": "Fail" },
+      { "show": "chat#work", "undim": "chat#edit", "set": { "id": "chat#edit", "detail": "test/helpers/clock.ts" }, "status": { "id": "chat#edit", "to": "running" }, "caption": "It patches the test clock" },
+      { "status": [{ "id": "chat#edit", "to": "done" }, { "id": "chat#run", "to": "running" }], "dim": "chat#edit", "set": { "id": "chat#out", "text": "rerunning..." }, "caption": "And reruns the test" },
+      { "status": { "id": "chat#run", "to": "done" }, "set": { "id": "chat#out", "text": "12 passed" }, "hide": "chat#work", "caption": "Green", "stop": "Pass" },
+      { "type": "chat#reply", "dim": ["chat#run", "chat#out"], "caption": "The agent replies" }
+    ]
+  }
+}

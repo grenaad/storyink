@@ -3,6 +3,8 @@ import type { Arrowhead, Box, Pt, Scene, SceneEdge, SceneGroup, SceneLabel, Scen
 import type { Direction, GraphSpec } from "../spec.ts"
 import { r2, snap, textWidth } from "./measure.ts"
 import { sizeNode } from "./nodes.ts"
+import { faceH, isRichKind, sizeRich } from "./panels.ts"
+import { anchorOffsetY, parseRef } from "../anchor.ts"
 import { wirePath } from "./paths.ts"
 import { type Dir, Router } from "./route.ts"
 
@@ -18,6 +20,9 @@ interface LevelEdge {
   to: string
   labelW: number
   labelH: number
+  /** Anchor offset from the member's centre along the cross axis (LR/RL only; 0 = none). */
+  offFrom?: number
+  offTo?: number
 }
 
 /** Centre positions relative to the level's top-left, plus the level size. */
@@ -301,6 +306,33 @@ function layoutLevel(members: Member[], edges: LevelEdge[], dir: "TB" | "LR"): L
     })
   }
 
+  // Anchor-aware alignment: a pair joined by an anchored edge (a panel row / code line) lines the
+  // anchor up with the other end. The member with fewer other neighbours follows. No anchors, no-op.
+  const anchored = new Map<string, { a: number; b: number; offA: number; offB: number }>()
+  for (const e of edges) {
+    if (!e.offFrom && !e.offTo) continue
+    const a = index.get(e.from)!
+    const b = index.get(e.to)!
+    if (a === b) continue
+    const k = a < b ? `${a}|${b}` : `${b}|${a}`
+    if (!anchored.has(k)) anchored.set(k, { a, b, offA: e.offFrom ?? 0, offB: e.offTo ?? 0 })
+  }
+  if (anchored.size) {
+    const nbrs = (v: number) => new Set([...up[v], ...down[v]].filter(real))
+    for (const { a, b, offA, offB } of anchored.values()) {
+      if (vlayer[a] === vlayer[b]) continue
+      const na = nbrs(a).size - 1
+      const nb = nbrs(b).size - 1
+      const [mv, other, offMv, offOther] = na < nb ? [a, b, offA, offB] : [b, a, offB, offA]
+      const t = cpos[other] + offOther - offMv
+      const lay = layers[vlayer[mv]]
+      const i = lay.indexOf(mv)
+      const okL = i === 0 || t - cpos[lay[i - 1]] >= sep(verts[lay[i - 1]], verts[mv]) - 0.01
+      const okR = i === lay.length - 1 || cpos[lay[i + 1]] - t >= sep(verts[mv], verts[lay[i + 1]]) - 0.01
+      if (okL && okR) cpos[mv] = t
+    }
+  }
+
   // Normalise to a top-left origin.
   let minC = Infinity
   let maxC = -Infinity
@@ -370,18 +402,39 @@ function layoutGraphDir(spec: GraphSpec, direction: Direction): Scene {
   }
   const sized = new Map<string, SceneNode>()
   for (const n of spec.nodes)
-    if (!composites.has(n.id))
-      sized.set(
-        n.id,
-        sizeNode({ id: n.id, kind: n.kind ?? "service", label: n.label ?? n.id, detail: n.detail, tag: n.tag, ...(n.counter ? { counter: counterSlot(spec, n.counter) } : {}) }, { tags }),
-      )
+    if (!composites.has(n.id)) {
+      const s = isRichKind(n.kind)
+        ? sizeRich(spec, n)
+        : sizeNode({ id: n.id, kind: n.kind ?? "service", label: n.label ?? n.id, detail: n.detail, tag: n.tag, ...(n.counter ? { counter: counterSlot(spec, n.counter) } : {}) }, { tags })
+      if (n.muted) s.muted = true
+      sized.set(n.id, s)
+    }
+  // Chips under the same parent share the widest width.
+  const chipsBy = new Map<string, SceneNode[]>()
+  for (const n of spec.nodes) {
+    const s = sized.get(n.id)
+    if (s?.shape !== "chip") continue
+    const k = n.parent ?? ""
+    chipsBy.set(k, [...(chipsBy.get(k) ?? []), s])
+  }
+  for (const list of chipsBy.values()) {
+    const w = Math.max(...list.map((x) => x.w))
+    for (const x of list) x.w = w
+  }
 
   const chain = (id: string): string[] => {
     const out: string[] = []
     for (let cur: string | undefined = id; cur !== undefined; cur = parent.get(cur)) out.push(cur)
     return out
   }
-  const edges = spec.edges ?? []
+  const edges = anchorEdges(spec.edges ?? [])
+  // Anchor offsets from the node centre (cross axis of LR / RL levels only).
+  const anchorOff = (id: string, anchor: string | undefined, d: Direction): number => {
+    if (!anchor || baseOf(d) !== "LR") return 0
+    const n = sized.get(id)
+    const y = n && anchorOffsetY(n, anchor)
+    return n && y !== undefined ? y - n.h / 2 : 0
+  }
   const labelSize = (s?: string) =>
     s ? { w: textWidth(s, T.edgeLabel) + 2 * G.pillPadX, h: T.edgeLabel + 2 * G.pillPadY + 4 } : { w: 0, h: 0 }
 
@@ -413,7 +466,9 @@ function layoutGraphDir(spec: GraphSpec, direction: Direction): Scene {
       if (!a || !b || a === b) continue
       // Only lift when the common container is exactly this one.
       const ls = labelSize(e.label)
-      lifted.push({ from: a, to: b, labelW: ls.w, labelH: ls.h })
+      const offFrom = a === e.from ? anchorOff(e.from, e.fromAnchor, own) : 0
+      const offTo = b === e.to ? anchorOff(e.to, e.toAnchor, own) : 0
+      lifted.push({ from: a, to: b, labelW: ls.w, labelH: ls.h, ...(offFrom || offTo ? { offFrom, offTo } : {}) })
     }
     const lay = layoutLevel(members, lifted, baseOf(own))
     levelOf.set(container ?? "", lay)
@@ -448,6 +503,7 @@ function layoutGraphDir(spec: GraphSpec, direction: Direction): Scene {
           kind: groupsById.get(id)?.kind,
           depth,
           composite: composites.has(id),
+          ...(groupsById.get(id)?.bare ? { bare: true } : {}),
           x: r2(x),
           y: r2(y),
           w: s.w,
@@ -467,7 +523,7 @@ function layoutGraphDir(spec: GraphSpec, direction: Direction): Scene {
   const boxes = new Map<string, Box>([...nodes.map((n) => [n.id, n] as const), ...groups.map((g) => [g.id, g] as const)])
 
   const arrowheads = spec.style?.arrowheads ?? G.graphArrowheads
-  const routed = routeEdges(spec, direction, boxes, nodes, groups, labelSize, arrowheads)
+  const routed = routeEdges(edges, direction, boxes, nodes, groups, labelSize, arrowheads)
 
   // viewBox: content bounds plus margin.
   let maxX = M + root.w
@@ -510,8 +566,23 @@ type Side = "top" | "right" | "bottom" | "left"
 const SIDE_DIR: Record<Side, Dir> = { right: 0, bottom: 1, left: 2, top: 3 }
 const OPP: Record<Side, Side> = { top: "bottom", bottom: "top", left: "right", right: "left" }
 
+type GraphEdgeIn = NonNullable<GraphSpec["edges"]>[number]
+/** A spec edge with node-id endpoints and the anchors split off ("session#exec1"). */
+type AEdge = GraphEdgeIn & { fromAnchor?: string; toAnchor?: string }
+
+function anchorEdges(list: GraphEdgeIn[]): AEdge[] {
+  return list.map((e) => {
+    const a = parseRef(e.from)
+    const b = parseRef(e.to)
+    if (!a.anchor && !b.anchor) return e
+    return { ...e, from: a.node, to: b.node, ...(a.anchor ? { fromAnchor: a.anchor } : {}), ...(b.anchor ? { toAnchor: b.anchor } : {}) }
+  })
+}
+
+const STRAIGHT_SHAPES = new Set(["window", "chip"])
+
 function routeEdges(
-  spec: GraphSpec,
+  edges: AEdge[],
   direction: Direction,
   boxes: Map<string, Box>,
   nodes: SceneNode[],
@@ -521,7 +592,6 @@ function routeEdges(
 ): { edges: SceneEdge[]; ports: ScenePort[] } {
   const dir = baseOf(direction)
   const rev = isReversed(direction)
-  const edges = spec.edges ?? []
   const nodeById = new Map(nodes.map((n) => [n.id, n]))
   const fwdSide: Side = direction === "TB" ? "bottom" : direction === "BT" ? "top" : direction === "LR" ? "right" : "left"
   const backSide: Side = dir === "TB" ? "right" : "bottom"
@@ -570,6 +640,10 @@ function routeEdges(
       if (Math.abs(off) > a.w / 5 && dir === "TB") sa = off > 0 ? "right" : "left"
       if (Math.abs(off) > a.h / 5 && dir === "LR") sa = off > 0 ? "bottom" : "top"
     }
+    // Anchored ends sit on the left / right side facing the other end's centre.
+    const cx = (x: Box) => x.x + x.w / 2
+    if (e.fromAnchor) sa = cx(b) >= cx(a) ? "right" : "left"
+    if (e.toAnchor) sb = cx(a) >= cx(b) ? "right" : "left"
     return { i, a, b, sa, sb, self: false }
   })
 
@@ -579,12 +653,22 @@ function routeEdges(
     end: "a" | "b"
   }
   const slots = new Map<string, Slot[]>()
+  const anchoredAt = new Map<string, Pt>()
   for (const p of plans) {
     const e = edges[p.i]
     for (const [end, id, side] of [
       ["a", e.from, p.sa],
       ["b", e.to, p.sb],
     ] as const) {
+      const anchor = end === "a" ? e.fromAnchor : e.toAnchor
+      const nd = nodeById.get(id)
+      if (anchor && nd && !p.self) {
+        const y = anchorOffsetY(nd, anchor)
+        if (y !== undefined) {
+          anchoredAt.set(`${p.i}|${end}`, { x: r2(side === "left" ? nd.x : nd.x + nd.w), y: r2(nd.y + y) })
+          continue
+        }
+      }
       const k = `${id}|${side}`
       const l = slots.get(k) ?? []
       l.push({ plan: p, end })
@@ -608,7 +692,7 @@ function routeEdges(
       const t = single && node ? 0.5 : (k2 + 1) / (n + 1)
       let inset = 0
       if (node?.shape === "pill" && horizontalSide) inset = box.h / 2
-      const span = (horizontalSide ? box.w : box.h) - 2 * inset
+      const span = (horizontalSide ? box.w : node?.shape === "chip" ? faceH(node) : box.h) - 2 * inset
       const along = (horizontalSide ? box.x : box.y) + inset + span * t
       let pt: Pt
       if (side === "top") pt = { x: along, y: box.y }
@@ -620,14 +704,64 @@ function routeEdges(
       portAt.set(`${s.plan.i}|${s.end}`, { x: r2(pt.x), y: r2(pt.y) })
     })
   }
+  for (const [k, pt] of anchoredAt) portAt.set(k, pt)
 
   // Obstacles: every leaf node.
   // Straighten near-miss pairs: if the two ports of a forward edge differ by
   // a few px, slide one onto the other's line so the wire needs no jog.
   const portsOn = new Map<string, Pt[]>()
   for (const [k, list] of slots) portsOn.set(k, list.map((s) => portAt.get(`${s.plan.i}|${s.end}`)!))
+  // Straight wires for rich shapes (window / chip): any offset, the taller (longer-side) end moves
+  // so chip ports stay centred; anchored ports never move. Targets are planned first so siblings
+  // that will move don't block each other.
+  const richPlan = new Map<number, { move: "a" | "b"; to: number }>()
   for (const p of plans) {
     if (p.self) continue
+    const e = edges[p.i]
+    const sa = nodeById.get(e.from)?.shape
+    const sb = nodeById.get(e.to)?.shape
+    if (!STRAIGHT_SHAPES.has(sa ?? "") && !STRAIGHT_SHAPES.has(sb ?? "")) continue
+    const horiz = p.sa === "left" || p.sa === "right"
+    if ((p.sb === "left" || p.sb === "right") !== horiz) continue
+    const pa = portAt.get(`${p.i}|a`)!
+    const pb = portAt.get(`${p.i}|b`)!
+    const fixA = anchoredAt.has(`${p.i}|a`) || sa === "chip"
+    const fixB = anchoredAt.has(`${p.i}|b`) || sb === "chip"
+    const len = (b: Box) => (horiz ? b.h : b.w)
+    let move: "a" | "b" | undefined
+    if (fixA && fixB) move = undefined
+    else if (fixA) move = "b"
+    else if (fixB) move = "a"
+    else move = len(p.b) >= len(p.a) ? "b" : "a"
+    if (!move) continue
+    const to = move === "b" ? (horiz ? pa.y : pa.x) : horiz ? pb.y : pb.x
+    richPlan.set(p.i, { move, to })
+  }
+  for (const [i, { move, to }] of richPlan) {
+    const p = plans[i]
+    const e = edges[i]
+    const id = move === "a" ? e.from : e.to
+    const side = move === "a" ? p.sa : p.sb
+    const pt = portAt.get(`${i}|${move}`)!
+    const horiz = side === "left" || side === "right"
+    const box = boxes.get(id)!
+    const node = nodeById.get(id)
+    const hiLen = horiz ? (node ? faceH(node) : box.h) : box.w
+    const lo = (horiz ? box.y : box.x) + 8
+    const hi = (horiz ? box.y : box.x) + hiLen - 8
+    const t = Math.max(lo, Math.min(hi, to))
+    const sibKey = `${id}|${side}`
+    const planned = (q: Pt) => {
+      for (const [j, r] of richPlan) if (j !== i && portAt.get(`${j}|${r.move}`) === q) return r.to
+      return horiz ? q.y : q.x
+    }
+    const sib = (portsOn.get(sibKey) ?? []).filter((q) => q !== pt)
+    if (sib.some((q) => Math.abs(planned(q) - t) < 10)) continue
+    if (horiz) pt.y = r2(t)
+    else pt.x = r2(t)
+  }
+  for (const p of plans) {
+    if (p.self || richPlan.has(p.i)) continue
     const e = edges[p.i]
     const pa = portAt.get(`${p.i}|a`)!
     const pb = portAt.get(`${p.i}|b`)!
@@ -638,6 +772,7 @@ function routeEdges(
     const d = Math.abs(ca - cb)
     if (d < 0.5 || d > 18) continue
     const tryMove = (pt: Pt, id: string, side: Side, to: number) => {
+      if (pt === pa ? anchoredAt.has(`${p.i}|a`) : anchoredAt.has(`${p.i}|b`)) return false
       const box = boxes.get(id)!
       const node = nodeById.get(id)
       if (node && (node.shape === "diamond" || node.shape === "dot" || node.shape === "bullseye" || node.shape === "pill" || node.shape === "choice")) return false
@@ -656,7 +791,7 @@ function routeEdges(
   const obstacles = nodes.map((n) => ({ x: n.x, y: n.y, w: n.w, h: n.h }))
   const router = new Router(obstacles, { margin: 8, stub: G.stub, bend: 28 })
   router.avoid(
-    groups.map((g) => [
+    groups.filter((g) => !g.bare).map((g) => [
       { x: g.x, y: g.y },
       { x: g.x + g.w, y: g.y },
       { x: g.x + g.w, y: g.y + g.h },
@@ -750,11 +885,13 @@ function routeEdges(
       style: e.style ?? "solid",
       arrow,
       heads,
+      ...(e.fromAnchor ? { fromAnchor: e.fromAnchor } : {}),
+      ...(e.toAnchor ? { toAnchor: e.toAnchor } : {}),
     }
     result[p.i] = edge
     ports.push(
-      { id: `${id}:out`, node: e.from, edge: id, end: "out", covered: arrowheads && arrow === "both", ...from },
-      { id: `${id}:in`, node: e.to, edge: id, end: "in", covered: arrowheads && arrow !== "none", ...to },
+      { id: `${id}:out`, node: e.from, edge: id, end: "out", covered: arrowheads && arrow === "both", ...from, ...(e.fromAnchor ? { anchor: e.fromAnchor } : {}) },
+      { id: `${id}:in`, node: e.to, edge: id, end: "in", covered: arrowheads && arrow !== "none", ...to, ...(e.toAnchor ? { anchor: e.toAnchor } : {}) },
     )
   }
   // Labels after all wires exist, so they can avoid nodes, other labels, wires and group rules.
