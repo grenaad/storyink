@@ -14,14 +14,14 @@ const load = (f: string): Spec => {
   if (!v.spec) throw new Error(`${f}: ${JSON.stringify(v.diagnostics)}`)
   return v.spec
 }
-const NEXT = ["code-mode.architecture.json", "retry-helper.architecture.json", "agent-session.architecture.json", "failover.dataflow.json"]
+const NEXT = ["checkout-recovery.architecture.json", "code-mode.architecture.json", "retry-helper.architecture.json", "agent-session.architecture.json", "failover.dataflow.json"]
 const codeMode = layout(load("code-mode.architecture.json"))
 const edge = (id: string) => codeMode.edges.find((e) => e.id === id)!
 const node = (id: string) => codeMode.nodes.find((n) => n.id === id)!
 const port = (id: string) => codeMode.ports.find((p) => p.id === id)!
 
 describe("0.4 examples", () => {
-  test("all four validate cleanly (no errors, no warnings)", () => {
+  test("all validate cleanly (no errors, no warnings)", () => {
     for (const f of NEXT) {
       const v = validate(fs.readFileSync(path.join(next, f), "utf8"))
       expect({ f, d: v.diagnostics }).toEqual({ f, d: [] })

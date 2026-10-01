@@ -1,0 +1,96 @@
+{
+  "$schema": "../schema/storyink.schema.json",
+  "type": "architecture",
+  "title": "Checkout recovery",
+  "subtitle": "An on-call agent traces a 5xx spike and moves traffic to a healthy pool",
+  "direction": "LR",
+  "groups": [{ "id": "prod", "label": "checkout · prod", "bare": true }],
+  "nodes": [
+    {
+      "id": "oncall", "kind": "panel", "label": "On-call", "icon": "spark", "size": { "cols": 30, "lines": 7 },
+      "rows": [
+        { "id": "page", "tag": "Pager", "text": "checkout 5xx at 4.2% (p1)" },
+        { "id": "triage", "icon": "search", "text": "TRIAGE", "detail": "error rate, healthz" },
+        { "id": "cause", "text": "pool-a 38% 5xx, healthz fail", "indent": 1 },
+        { "id": "shift", "icon": "wrench", "text": "SHIFT", "detail": "pool-a → pool-b" },
+        { "id": "verify", "text": "5xx 0.1% · recovered", "indent": 1 }
+      ]
+    },
+    {
+      "id": "script", "kind": "code", "label": "runbook.ts", "lang": "ts", "size": { "lines": 5 },
+      "code": [
+        "const errs = await metrics.query(\"checkout\", {",
+        "  by: \"pool\", window: \"15m\" })",
+        "const health = await Promise.all(",
+        "  pools.map(p => p.probe(\"/healthz\")))",
+        "return { errs, health }"
+      ]
+    },
+    { "id": "metrics", "kind": "chip", "label": "metrics", "icon": "search", "parent": "prod" },
+    { "id": "pool-a", "kind": "chip", "label": "pool-a", "icon": "bolt", "parent": "prod", "stack": 2 },
+    { "id": "pool-b", "kind": "chip", "label": "pool-b", "icon": "bolt", "parent": "prod", "stack": 2, "muted": true }
+  ],
+  "edges": [
+    { "id": "run1", "from": "oncall#triage", "to": "script#1" },
+    { "id": "run2", "from": "oncall#shift", "to": "script#1" },
+    { "id": "q", "from": "script", "to": "metrics" },
+    { "id": "to-a", "from": "script", "to": "pool-a" },
+    { "id": "to-b", "from": "script", "to": "pool-b" }
+  ],
+  "story": {
+    "autoplay": true,
+    "end": "loop",
+    "pace": 0,
+    "spotlight": true,
+    "rewind": "glitch",
+    "steps": [
+      { "id": "page", "at": 0.4, "type": "oncall#page", "stop": "Page" },
+      { "at": 1.7, "dim": "oncall#page", "reveal": "oncall#triage", "status": { "id": "oncall#triage", "to": "running" } },
+      { "at": 1.9, "wire": { "edge": "run1", "duration": 0.45 } },
+      { "at": 2.5, "type": { "id": "script", "cps": 170 }, "stop": "Diagnose" },
+      { "at": 4.4, "line": "script#1-2", "pulse": { "edge": "q", "duration": 0.35 }, "glow": "metrics" },
+      { "at": 5.2, "pulse": { "edge": "q", "reverse": true, "duration": 0.35 } },
+      {
+        "at": 5.9, "line": "script#3-4", "unglow": "metrics",
+        "pulse": [{ "edge": "to-a", "duration": 0.35 }, { "edge": "to-b", "duration": 0.35 }]
+      },
+      { "at": 6.7, "highlight": { "ids": ["pool-a"], "for": 1.2 }, "pulse": { "edge": "to-b", "reverse": true, "duration": 0.35 } },
+      { "at": 7.5, "line": "script#5", "dim": { "ids": ["pool-a"], "to": 0.35 } },
+      { "at": 7.9, "line": { "id": "script", "off": true }, "pulse": { "edge": "run1", "reverse": true, "duration": 0.45 } },
+      { "at": 8.8, "reveal": "oncall#cause", "status": { "id": "oncall#triage", "to": "error" }, "stop": "Cause" },
+      { "at": 9.6, "dim": ["oncall#triage", "oncall#cause"], "reveal": "oncall#shift", "status": { "id": "oncall#shift", "to": "running" }, "undim": "pool-b", "focus": "oncall#shift" },
+      { "at": 9.9, "clear": "script" },
+      { "at": 10.1, "wire": { "edge": "run2", "duration": 0.4 } },
+      {
+        "at": 10.6,
+        "set": {
+          "id": "script",
+          "code": [
+            "await traffic.shift(\"checkout\", {",
+            "  from: \"pool-a\", to: \"pool-b\", weight: 100 })",
+            "const after = await metrics.query(\"checkout\", {",
+            "  window: \"2m\" })",
+            "return after.rate5xx < 0.01 ? \"ok\" : \"rollback\""
+          ]
+        },
+        "type": { "id": "script", "cps": 170 },
+        "stop": "Shift"
+      },
+      { "at": 12.5, "line": "script#1-2", "unwire": "to-a", "focus": "pool-b" },
+      {
+        "at": 13.2, "glow": "pool-b",
+        "pulse": [
+          { "edge": "to-b", "duration": 0.35 },
+          { "edge": "to-b", "duration": 0.35, "delay": 0.2 },
+          { "edge": "to-b", "duration": 0.35, "delay": 0.4 }
+        ]
+      },
+      { "at": 14.4, "line": "script#3-4", "unglow": "pool-b", "pulse": { "edge": "q", "duration": 0.35 }, "glow": "metrics", "stop": "Verify" },
+      { "at": 15.2, "pulse": { "edge": "q", "reverse": true, "duration": 0.35 } },
+      { "at": 15.9, "line": "script#5", "unglow": "metrics" },
+      { "at": 16.4, "line": { "id": "script", "off": true }, "pulse": { "edge": "run2", "reverse": true, "duration": 0.45 } },
+      { "at": 17.3, "reveal": "oncall#verify", "status": { "id": "oncall#shift", "to": "done" }, "stop": "Recovered" },
+      { "id": "end", "at": 19.4 }
+    ]
+  }
+}

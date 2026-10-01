@@ -127,7 +127,7 @@ function dropX(s: string): string {
 /** `base` for the 0.4 examples: SMIL-only extras (`si-x`) dropped; static `style="opacity:x"` is the animated `opacity` attribute. */
 // (dropX first: base()'s legacy glow-copy pattern is non-greedy across later si-x groups.)
 const richBase = (svg: string) => base(dropX(svg.replace(/<(animate|animateTransform|set)\b[^>]*>(<\/\1>)?/g, "")).replace(/ style="opacity:([^";]+)"/g, ' opacity="$1"'))
-const rich = ["code-mode.architecture.json", "failover.dataflow.json", "retry-helper.architecture.json", "agent-session.architecture.json"]
+const rich = ["checkout-recovery.architecture.json", "code-mode.architecture.json", "failover.dataflow.json", "retry-helper.architecture.json", "agent-session.architecture.json"]
 
 describe("animated svg (SMIL), 0.4 examples", () => {
   test("dropX removes nested si-x subtrees only", () => {
@@ -170,7 +170,7 @@ describe("animated svg (SMIL), 0.4 examples", () => {
   test("size budget (system font; the embedded font adds ≈124 KiB)", () => {
     // Design target was ≤ 90 KiB for code-mode; ≈ 57 KiB of it is the pre-0.4 pulse/ring encoding (dot
     // opacity, ring r, trail dashes for 11 pulses), byte-locked by the compat goldens. Budget = actual + ~5%.
-    const budget: Record<string, number> = { "code-mode.architecture.json": 123, "failover.dataflow.json": 54, "retry-helper.architecture.json": 34, "agent-session.architecture.json": 40 }
+    const budget: Record<string, number> = { "checkout-recovery.architecture.json": 146, "code-mode.architecture.json": 123, "failover.dataflow.json": 54, "retry-helper.architecture.json": 34, "agent-session.architecture.json": 40 }
     for (const f of rich) {
       const sys = animatedSvg(spec(f), { font: "system" }).bytes
       expect(sys / 1024).toBeLessThan(budget[f])

@@ -15,6 +15,7 @@ export const ANIMATED = [
   ["checkout.architecture", "examples/checkout.architecture.json"],
   ["oauth.sequence", "examples/oauth.sequence.json"],
   ["order.state", "examples/mermaid/order.state.mmd"],
+  ["checkout-recovery.architecture", "examples/checkout-recovery.architecture.json"],
   ["code-mode.architecture", "examples/code-mode.architecture.json"],
   ["failover.dataflow", "examples/failover.dataflow.json"],
   ["retry-helper.architecture", "examples/retry-helper.architecture.json"],

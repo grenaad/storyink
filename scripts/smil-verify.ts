@@ -5,10 +5,10 @@
  *  2. <img> mode animates: an <img src=x.svg> page screenshotted at two wall-clock moments differs;
  *     also with prefers-reduced-motion: reduce;
  *  3. embedded font renders in <img> mode (embed vs system final frames differ).
- *  4. (--rich) the four 0.4 examples (code-mode, failover, retry-helper, agent-session), both themes: parity over steps and mid-steps, <img>
+ *  4. (--rich) the 0.4 rich examples (checkout-recovery, code-mode, failover, retry-helper, agent-session), both themes: parity over steps and mid-steps, <img>
  *     animation, loop return (an <img> one cycle later shows the start again, future rows hidden),
  *     and (--browsers) <img> animation in Firefox / Safari via WebDriver when available.
- * Usage: bun scripts/smil-verify.ts [--quick] [--out dir] [--rich [--only-rich]] [--browsers]
+ * Usage: bun scripts/smil-verify.ts [--quick] [--out dir] [--rich [--only-rich] [--only name,…]] [--browsers]
  */
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
@@ -46,15 +46,20 @@ const strip = (s: string) => s.replace(/^<\?xml[^>]*>\n/, "")
 let fail = 0
 const report: string[] = []
 
-const RICH = [
+const RICH_ALL = [
+  ["checkout-recovery.architecture", "examples/checkout-recovery.architecture.json"],
   ["code-mode.architecture", "examples/code-mode.architecture.json"],
   ["failover.dataflow", "examples/failover.dataflow.json"],
   ["retry-helper.architecture", "examples/retry-helper.architecture.json"],
   ["agent-session.architecture", "examples/agent-session.architecture.json"],
 ] as const
+// --only name,name limits the rich set (e.g. one new example).
+const oni = process.argv.indexOf("--only")
+const onlyNames = oni > 0 ? new Set(process.argv[oni + 1].split(",")) : undefined
+const RICH = RICH_ALL.filter(([n]) => !onlyNames || onlyNames.has(n))
 const onlyRich = process.argv.includes("--only-rich")
 const withRich = onlyRich || process.argv.includes("--rich")
-// ANIMATED includes the four 0.4 examples (RICH); --only-rich limits parity to them.
+// ANIMATED includes the 0.4 rich examples (RICH); --only-rich limits parity to them.
 const SETS = onlyRich ? RICH : ANIMATED
 for (const [name, file] of SETS) {
   const l = loadSpec(path.join(root, file))

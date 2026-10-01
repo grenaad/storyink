@@ -1,5 +1,5 @@
 /**
- * Preview the 0.4 examples (code-mode, retry-helper, agent-session, failover): static SVG (light + dark, with and
+ * Preview the 0.4 examples (checkout-recovery, code-mode, retry-helper, agent-session, failover): static SVG (light + dark, with and
  * without the story), standalone HTML, and PNG snapshots with the lint gate. Writes outside the
  * repo (never docs/gallery). Usage: bun scripts/next-preview.ts [outDir] [--no-png]
  */
@@ -23,7 +23,7 @@ let failed = false
 const names: string[] = []
 
 // The 0.4 examples only (not the pre-0.4 ones or their compat baselines).
-const NEXT = ["agent-session.architecture.json", "code-mode.architecture.json", "failover.dataflow.json", "retry-helper.architecture.json"]
+const NEXT = ["agent-session.architecture.json", "checkout-recovery.architecture.json", "code-mode.architecture.json", "failover.dataflow.json", "retry-helper.architecture.json"]
 for (const f of NEXT) {
   const name = f.replace(/\.json$/, "")
   names.push(name)
@@ -55,6 +55,7 @@ for (const f of NEXT) {
     "retry-helper.architecture": [0.9, 4.3, 9.0, 16.0, 18.0],
     "agent-session.architecture": [1.0, 3.6, 6.2, 11.0, 13.6, 21.0],
     "failover.dataflow": [5.0, 9.0, 11.2, 13.8, 16.6],
+    "checkout-recovery.architecture": [0, 1.2, 3.0, 4.7, 6.2, 7.0, 8.3, 9.2, 10.3, 11.3, 12.7, 13.6, 14.7, 16.7, 17.8],
   }
   for (const [html, at] of [[`${name}.html`, undefined], [`${name}.still.html`, undefined], ...(MID[name] ? [[`${name}.html`, MID[name]] as const] : [])] as const) {
     const r = await snapshot(path.join(out, html), { outDir: out, themes: ["light", "dark"], sheet: false, scale: 2, ...(at ? { at: [...at] } : {}) })

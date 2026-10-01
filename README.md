@@ -7,9 +7,15 @@ Mermaid) into **one offline HTML file** (a React + Motion viewer over server-ren
 One package, four ways to use it: library, CLI, OpenCode plugin, and a skill for other agents.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grenaad/storyink/main/docs/gallery/checkout.architecture.animated.dark.svg">
-  <img alt="Checkout platform, animated story" src="https://raw.githubusercontent.com/grenaad/storyink/main/docs/gallery/checkout.architecture.animated.light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/grenaad/storyink/main/docs/gallery/checkout-recovery.architecture.animated.dark.svg">
+  <img alt="Checkout recovery: an on-call agent triages a 5xx spike, runs a diagnosis script and shifts traffic to a healthy pool (animated)" src="https://raw.githubusercontent.com/grenaad/storyink/main/docs/gallery/checkout-recovery.architecture.animated.light.svg">
 </picture>
+
+**Checkout recovery** ([spec](examples/checkout-recovery.architecture.json)): a pager row types in,
+the agent's diagnosis script types out with syntax colours, its active lines light up as it
+queries `metrics` and probes both pools in parallel, the triage row ends in a cross, then the
+program is swapped for a traffic shift: the wire to `pool-a` is retired, staggered requests flow
+to `pool-b`, and a verification query closes the incident with a check. One JSON file, ~20 s.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://cdn.jsdelivr.net/gh/grenaad/storyink@main/docs/gallery/oauth.sequence.animated.dark.svg">
@@ -157,15 +163,27 @@ rows), `code` (a syntax-coloured program) and `chip` nodes, with wires anchored 
 check, cross), `dim` / `hide` / `show`, draw or retract wires (`wire` / `unwire`), keep nodes lit
 (`glow`), follow the action with a `spotlight`, send reverse and staggered pulses, and reset with
 a `glitch` rewind (HTML only). Examples:
-[code-mode](examples/code-mode.architecture.json),
+[checkout-recovery](examples/checkout-recovery.architecture.json) (the hero above),
 [retry-helper](examples/retry-helper.architecture.json),
 [agent-session](examples/agent-session.architecture.json),
 [failover](examples/failover.dataflow.json). Details: [docs/spec.md](docs/spec.md#rich-nodes-panel-code-chip).
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/gallery/code-mode.architecture.animated.dark.svg">
-  <img alt="Code mode: a session runs a program that calls MCP servers (animated)" src="docs/gallery/code-mode.architecture.animated.light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/gallery/failover.dataflow.animated.dark.svg">
+  <img alt="Failover: a router retires its wire to a failing upstream and draws one to the replica (animated)" src="docs/gallery/failover.dataflow.animated.light.svg" width="640">
 </picture>
+
+What the two showcases use:
+
+| feature | checkout-recovery | failover |
+| --- | --- | --- |
+| `type` code (caret, syntax colours) and rows (words) | diagnosis + shift scripts, pager row | |
+| `set` / `clear` content swap, `line` bar | program 1 → program 2, lines 1–2, 3–4, 5 | |
+| row `status` running / done / error | triage ✗, shift ✓ | primary ✗, replica ✓ |
+| row / line wire anchors (`oncall#triage → script#1`) | session rows → code line 1 | client → `router#req` |
+| parallel, reverse and staggered pulses | probes to both pools, replies, 3 requests | multi-hop `route` |
+| `unwire` / `wire` | retire `pool-a`, draw `run2` | retire primary, draw replica |
+| `dim` / `undim`, `highlight`, `glow`, `spotlight` / `focus` | failed pool dims, healthy pool lifts | primary dims, replica lit |
 
 The final frame is the static diagram (with content steps: the story's end state). Every frame is a pure function of time
 (`storyState(scene, timeline, t)`), so `#t=2.5` seeks exactly and
@@ -212,7 +230,7 @@ storyink render examples/checkout.architecture.json --animated-svg docs/checkout
 `bun run gallery` renders every example and Mermaid sample and writes one light and one dark PNG per
 example to `docs/gallery/`. `bun run gallery:animated` writes the animated SVGs of the story
 examples (`*.animated.light.svg` / `*.animated.dark.svg`; `--only name,…` writes just those);
-animated: [code-mode](docs/gallery/code-mode.architecture.animated.light.svg),
+animated: [checkout-recovery](docs/gallery/checkout-recovery.architecture.animated.light.svg),
 [failover](docs/gallery/failover.dataflow.animated.light.svg),
 [retry-helper](docs/gallery/retry-helper.architecture.animated.light.svg),
 [agent-session](docs/gallery/agent-session.architecture.animated.light.svg). `bun run verify:smil` checks them in
