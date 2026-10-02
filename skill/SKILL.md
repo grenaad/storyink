@@ -1,6 +1,6 @@
 ---
 name: storyink
-description: Create polished architecture, workflow, sequence, data-flow and lifecycle diagrams as standalone HTML/SVG with storyink, then snapshot and visually check them. Use when asked to draw, visualise or diagram a system, flow, API sequence, pipeline or state machine, or to convert Mermaid.
+description: Create polished architecture, workflow, sequence, data-flow and lifecycle diagrams as standalone HTML/SVG with storyink, and explainer pages (PR reviews, plan reviews, recaps) that embed them, then snapshot and visually check them. Use when asked to draw, visualise or diagram a system, flow, API sequence, pipeline or state machine, to convert Mermaid, or to write a visual review / plan / recap page.
 ---
 
 # storyink
@@ -214,6 +214,60 @@ Default font is the system mono (small); `font: "embed"` for the exact look (+~1
 in the spec → auto story. Rich content (typing, status, spotlight…) animates in the SVG too
 (checked in Chrome; Firefox plays it; Safari untested); the glitch rewind and the follow camera are
 HTML-only. On GitHub, a changed diagram needs a new file name (camo caches by URL).
+
+## 7. Pages (reviews, plans, recaps)
+
+**Diagram or page?** One picture with one point → a diagram. A reader has to *decide or
+understand something* (review a PR, approve a plan, catch up on a project) → a page
+(`"type": "page"`): a summary first, then sections of prose, data blocks and 1–3 figures.
+
+```json
+{
+  "type": "page", "eyebrow": "Diff review", "title": "Payment retries move off the request path",
+  "summary": "What changed and what you recommend, in 2–4 sentences.",
+  "change": { "base": "main", "head": "payments/retry-queue" },
+  "sections": [
+    { "title": "At a glance", "blocks": [{ "kpis": [{ "label": "Files", "value": 3 }] }] },
+    { "title": "What changed", "blocks": [
+      { "figure": { "spec": "retry.architecture.json", "claim": "Declines now loop through a queue, off the request path." } },
+      { "filemap": "changes" },
+      { "diff": { "file": "src/payments/charge.ts", "lines": [12, 20] } } ] }
+  ]
+}
+```
+
+Blocks (one type key each): `prose` (Markdown subset, no HTML), `figure`, `kpis`, `table`,
+`cards`, `callout`, `filemap`, `diff`, `code`, `risks`, `decisions`, `evidence`, `timeline`,
+`checklist`, `details`, `columns` (2–3, for before / after). Full shapes: docs/spec.md "Pages".
+Render: `storyink_render { path: "review.page.json", output: "review.html", changes? }` (figure
+paths resolve against the page file) or CLI `storyink render review.page.json --changes
+changes.json`. HTML only.
+
+Section orders that work:
+
+- **PR / diff review**: summary with the verdict → At a glance (`kpis`) → What changed (one
+  change figure + `filemap`) → the 1–3 hunks that matter (`diff`, a sentence before each) →
+  Risks → Decisions → Before merging (`checklist`) → recommendation `callout`.
+- **Plan review**: summary → Current vs proposed (`columns` with two figures, then a comparison
+  `table`) → phases (`timeline`) → risks (`risks`, or a likelihood / impact `table`) →
+  acceptance (`checklist`) → open questions (`callout` warn).
+- **Recap**: summary → numbers (`kpis`) → architecture figure → releases (`timeline`) →
+  decisions log → next steps.
+
+Rules:
+
+- **One figure, one claim.** The `claim` caption states the point ("Declines now loop back
+  through a queue"), not the subject ("Architecture"). 1–3 figures per page; give a figure a
+  story only when stepping through it helps the claim.
+- **Summary first.** The first screen should answer "what is this and what should I think":
+  eyebrow, title, subtitle, a short summary with the verdict, then KPIs.
+- **Evidence discipline.** Cite real `file:line` refs (`src/x.ts#L12-20`) in `refs` / `source`;
+  take numbers from `storyink_diff` / git / the files, never estimate them as facts. Mark
+  decisions `sourced` only with a ref, else `inferred` / `unknown`. Never invent refs, numbers or
+  quotes; say "unverifiable" in `evidence` when you can't check a claim.
+- Tones are semantic (`good` sage, `warn` gold, `risk` rose, `note` blue); don't decorate.
+- Put long detail in `details`; a long `filemap` collapses on its own.
+- Then look: `storyink_snapshot` on the page HTML (full page) and fix what reads badly.
 
 ## Images and context
 

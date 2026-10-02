@@ -218,6 +218,29 @@ changed lines with `node#+14`, and play the change with a story step `"apply": "
 version → diff, one hunk at a time with `{ "id", "hunk": 2 }`). See
 [docs/spec.md](docs/spec.md#diff-code-nodes).
 
+### Pages
+
+A page (`"type": "page"`) is an offline explainer document rendered from JSON: a summary, then
+sections of prose, KPIs, tables, cards, callouts, file maps, diffs, code, risks, decisions,
+evidence, timelines, checklists and embedded diagrams (`figure`, with a caption that states its
+point). For PR reviews, plan reviews and recaps.
+
+```sh
+storyink render examples/pages/pr-review.page.json -o pr-review.html
+storyink render review.page.json --changes changes.json   # filemap / diff blocks from a real diff
+```
+
+Figure specs can be paths relative to the page. See [docs/spec.md](docs/spec.md#pages) and
+[`examples/pages/`](examples/pages/).
+
+### Pages: interactive figures
+
+In a page (`type: "page"`), every figure is the full viewer embedded: play, step, pan, open the
+drawer, Expand to fill the window. Keys act on the figure you clicked; `#fig=<id>&t=9` targets one
+figure and `#fig=<id>&solo=1` shows it alone. `storyink snapshot page.html` captures the whole
+page; `--figure <id>` snapshots one figure like a single diagram. See
+[docs/spec.md](docs/spec.md#pages-viewer--page-contract).
+
 ### Narration and drawer
 
 Story steps can carry `narrate: { heading?, body, cites? }`: the HTML viewer shows a narration rail

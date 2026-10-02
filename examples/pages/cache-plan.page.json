@@ -1,0 +1,136 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "page",
+  "eyebrow": "Plan review",
+  "title": "A read-through cache for the catalog",
+  "subtitle": "Proposal: put Redis in front of product reads and invalidate on write.",
+  "change": { "title": "Illustrative plan, not a real system" },
+  "summary": "Product pages read the catalog database on every request, and the read path is most of the database load. The plan adds a **read-through cache**: handlers ask Redis first, fall back to Postgres on a miss, and admin writes delete the affected keys. The risk is stale data; the plan bounds it with a TTL and explicit invalidation.",
+  "sections": [
+    {
+      "id": "before-after",
+      "title": "Current and proposed",
+      "blocks": [
+        {
+          "columns": [
+            [
+              {
+                "figure": {
+                  "id": "current",
+                  "claim": "Today every product read goes to Postgres.",
+                  "spec": {
+                    "type": "architecture",
+                    "title": "Current",
+                    "direction": "TB",
+                    "nodes": [
+                      { "id": "web", "label": "Storefront", "kind": "client" },
+                      { "id": "api", "label": "Catalog API", "kind": "service", "detail": "Go" },
+                      { "id": "db", "label": "catalog", "kind": "database", "detail": "Postgres" },
+                      { "id": "admin", "label": "Admin", "kind": "client" }
+                    ],
+                    "edges": [
+                      { "from": "web", "to": "api", "label": "GET /product" },
+                      { "from": "api", "to": "db", "label": "SELECT" },
+                      { "from": "admin", "to": "db", "label": "UPDATE" }
+                    ]
+                  }
+                }
+              }
+            ],
+            [
+              {
+                "figure": {
+                  "id": "proposed",
+                  "claim": "Proposed: reads hit Redis first; writes invalidate the key.",
+                  "spec": {
+                    "type": "architecture",
+                    "title": "Proposed",
+                    "direction": "TB",
+                    "nodes": [
+                      { "id": "web", "label": "Storefront", "kind": "client", "delta": "unchanged" },
+                      { "id": "api", "label": "Catalog API", "kind": "service", "detail": "Go", "delta": "modified" },
+                      { "id": "cache", "label": "Redis", "kind": "cache", "detail": "TTL 10 min", "delta": "added" },
+                      { "id": "db", "label": "catalog", "kind": "database", "detail": "Postgres", "delta": "unchanged" },
+                      { "id": "admin", "label": "Admin", "kind": "client", "delta": "modified" }
+                    ],
+                    "edges": [
+                      { "from": "web", "to": "api", "label": "GET /product", "delta": "unchanged" },
+                      { "from": "api", "to": "cache", "label": "GET", "delta": "added", "emphasis": "hero" },
+                      { "from": "api", "to": "db", "label": "on miss", "delta": "modified" },
+                      { "from": "admin", "to": "db", "label": "UPDATE", "delta": "unchanged" },
+                      { "from": "admin", "to": "cache", "label": "DEL", "delta": "added" }
+                    ],
+                    "style": { "legend": false }
+                  }
+                }
+              }
+            ]
+          ]
+        },
+        {
+          "table": {
+            "columns": ["Concern", "Current", { "label": "Proposed", "align": "left" }],
+            "rows": [
+              ["Read path", "API \u2192 Postgres", "API \u2192 Redis, Postgres on miss"],
+              ["Staleness", { "text": "none", "tone": "good" }, { "text": "\u2264 10 min, less with invalidation", "tone": "warn" }],
+              ["New infra", "\u2014", { "text": "Redis", "badge": true, "tone": "warn" }],
+              ["Failure mode", "Postgres down = outage", "Redis down = fall through to Postgres"]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "phases",
+      "title": "Implementation phases",
+      "blocks": [
+        {
+          "timeline": [
+            { "when": "Phase 1", "title": "Cache reads behind a flag", "body": "`getProduct` reads through Redis when `catalog.cache` is on; misses populate the key.", "tone": "note" },
+            { "when": "Phase 2", "title": "Invalidate on admin writes", "body": "Admin `UPDATE`s delete `product:{id}` after commit.", "tone": "note" },
+            { "when": "Phase 3", "title": "Shadow traffic and compare", "body": "10% of reads served from cache and compared with Postgres; mismatches logged.", "tone": "warn" },
+            { "when": "Phase 4", "title": "Default on", "body": "Flag on for everyone; keep the fall-through path.", "tone": "good" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "risks",
+      "title": "Risk matrix",
+      "blocks": [
+        {
+          "table": {
+            "columns": ["Risk", { "label": "Likelihood", "align": "center" }, { "label": "Impact", "align": "center" }, "Mitigation"],
+            "rows": [
+              ["Stale price shown after an admin edit", { "text": "medium", "badge": true, "tone": "warn" }, { "text": "high", "badge": true, "tone": "risk" }, "Invalidate after commit; 10 min TTL as a backstop"],
+              ["Cache stampede on a hot product after expiry", { "text": "low", "badge": true, "tone": "neutral" }, { "text": "medium", "badge": true, "tone": "warn" }, "Single-flight per key in the API"],
+              ["Redis outage", { "text": "low", "badge": true, "tone": "neutral" }, { "text": "low", "badge": true, "tone": "neutral" }, "Timeouts of 20 ms, then read Postgres"]
+            ],
+            "caption": "Likelihood and impact are the plan author's estimates, not measurements."
+          }
+        }
+      ]
+    },
+    {
+      "id": "acceptance",
+      "title": "Acceptance",
+      "blocks": [
+        {
+          "checklist": [
+            { "text": "p95 product read latency drops", "note": "measure before phase 1 to have a baseline" },
+            { "text": "No price mismatch in phase 3 shadow comparison for 7 days" },
+            { "text": "Redis outage drill: product pages still load" },
+            { "text": "Runbook entry for flushing the cache" }
+          ]
+        },
+        {
+          "callout": {
+            "tone": "warn",
+            "title": "Open question",
+            "body": "Do any callers need read-your-writes (an admin editing a product and viewing it immediately)? If yes, the admin UI should bypass the cache."
+          }
+        }
+      ]
+    }
+  ]
+}

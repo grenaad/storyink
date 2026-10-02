@@ -1,0 +1,105 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "page",
+  "eyebrow": "Project recap",
+  "title": "storyink, one week in",
+  "subtitle": "From a JSON diagram renderer to change stories and explainer pages, 25 September to 2 October 2026.",
+  "summary": "storyink turns a JSON spec (or Mermaid) into a standalone, offline HTML page and SVG. In a week it grew a storyboard engine, an animated SVG that plays inside a README `<img>`, rich panels and code, and change stories that walk a reviewer through a diff. This page is itself a storyink page.",
+  "sections": [
+    {
+      "id": "numbers",
+      "title": "Where it stands",
+      "blocks": [
+        {
+          "kpis": [
+            { "label": "Releases", "value": 11, "detail": "0.1.0 to 0.4.0, plus Unreleased" },
+            { "label": "Tests", "value": 431, "detail": "`bun test`, 34 files, 2 October", "tone": "good" },
+            { "label": "Viewer bundle", "value": "501 KiB", "detail": "embedded in every HTML page", "tone": "warn" },
+            { "label": "Single diagram", "value": "676 KiB", "detail": "checkout example, font and viewer included" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "architecture",
+      "title": "How it fits together",
+      "blocks": [
+        {
+          "figure": {
+            "id": "arch",
+            "claim": "Everything renders from one **scene**: core is browser-safe and pure, and Node only adds files, git and a headless browser.",
+            "spec": {
+              "type": "architecture",
+              "title": "storyink",
+              "direction": "LR",
+              "groups": [
+                { "id": "core", "label": "storyink/core (browser-safe)" },
+                { "id": "node", "label": "storyink/node" }
+              ],
+              "nodes": [
+                { "id": "spec", "label": "JSON spec", "kind": "client", "detail": "or Mermaid" },
+                { "id": "validate", "label": "validate", "kind": "function", "detail": "JSON-path diagnostics", "group": "core" },
+                { "id": "layout", "label": "layout + story", "kind": "function", "detail": "scene, timeline", "group": "core" },
+                { "id": "render", "label": "render", "kind": "service", "detail": "SVG, HTML, SMIL", "group": "core" },
+                { "id": "viewer", "label": "viewer", "kind": "client", "detail": "React hydration" },
+                { "id": "cli", "label": "CLI + plugin", "kind": "service", "detail": "render, diff, snapshot", "group": "node" },
+                { "id": "chrome", "label": "headless Chrome", "kind": "external" }
+              ],
+              "edges": [
+                { "from": "spec", "to": "validate" },
+                { "from": "validate", "to": "layout" },
+                { "from": "layout", "to": "render" },
+                { "from": "render", "to": "viewer", "label": "HTML" },
+                { "from": "cli", "to": "validate", "style": "dashed" },
+                { "from": "cli", "to": "chrome", "label": "snapshot" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "releases",
+      "title": "Releases",
+      "blocks": [
+        {
+          "timeline": [
+            { "when": "0.1.0 \u00b7 09-25", "title": "First release", "body": "Spec, validation, Mermaid import, layout, SSR and viewer, CLI, OpenCode plugin." },
+            { "when": "0.2.0 \u00b7 09-25", "title": "Storyboard mode", "body": "`story` steps and `\"story\": \"auto\"`, a pure `storyState(t)`, viewer playback.", "tone": "note" },
+            { "when": "0.3.0 \u00b7 09-26", "title": "Animated SVG (SMIL)", "body": "The story plays inside a plain `<img>`, so READMEs and PRs animate without script.", "tone": "note" },
+            { "when": "0.3.1\u20130.3.6", "title": "Playback fixes and reading holds", "body": "Reduced-motion stepped playback, follow camera, step moves, reading holds and the default pace of 0.6." },
+            { "when": "0.4.0 \u00b7 10-01", "title": "Rich panels, code animation, SVG parity", "body": "`panel`, `code` and `chip` nodes, anchors, content steps; the animated SVG covers them.", "tone": "note" },
+            { "when": "Unreleased", "title": "Change stories and pages", "body": "Deltas, diff ingestion, diff code nodes, narration and the drawer; then `type: \"page\"` documents.", "tone": "good" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "decisions",
+      "title": "Decisions that shaped it",
+      "blocks": [
+        {
+          "decisions": [
+            { "decision": "Core stays browser-safe: no Node APIs.", "why": "The same code renders in the CLI, the plugin and the browser.", "confidence": "sourced", "refs": ["src/core/index.ts#L2"] },
+            { "decision": "Validation never throws; it returns diagnostics with JSON paths and hints.", "why": "Agents fix specs from the messages alone.", "confidence": "sourced", "refs": ["src/core/validate.ts#L149"] },
+            { "decision": "New looks are additive: palettes and CSS are emitted only when a scene uses them.", "why": "Old diagrams render byte-identically, pinned by golden tests.", "confidence": "sourced", "refs": ["src/theme/tokens.ts#L168", "test/compat.test.ts"] },
+            { "decision": "The font is embedded, so output works offline.", "why": "Commit Mono is base64 inside every page and static SVG.", "confidence": "sourced", "refs": ["src/core/render/css.ts#L156"] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "next",
+      "title": "Next steps",
+      "blocks": [
+        {
+          "checklist": [
+            { "text": "Pages: interactive figures hydrate in page mode", "note": "viewer half of the pages work, landing alongside this page" },
+            { "text": "Smaller pages: the viewer bundle is the largest part of every file" },
+            { "text": "Safari check of the animated SVG", "note": "0.4.0 notes say \"Safari untested\"" }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+- **Pages** (`"type": "page"`): offline single-file explainer documents (PR / diff reviews, plan
+  reviews, recaps) rendered from JSON: header (eyebrow, title, subtitle, `change` meta, summary,
+  theme toggle), sticky contents sidebar with scroll-spy (auto at ≥ 4 sections; a top list on
+  narrow screens / without JS), sections of blocks: `prose` (safe Markdown subset, no raw HTML),
+  `figure` (an embedded storyink diagram, spec object or path, with a `claim` caption), `kpis`,
+  `table`, `cards`, `callout`, `filemap` (tree with status, +/− and bars; collapses past 16
+  files), `diff` (from `--changes` or hunk text), `code`, `risks`, `decisions`, `evidence`,
+  `timeline`, `checklist`, `details`, `columns`. Serif reading measure, wide figures / tables /
+  diffs, semantic tones on the delta palette (`pagePalettes` / `page` tokens), both themes, print
+  stylesheet. Core: `isPageSpec`, `validatePage` (figure diagnostics prefixed with the figure
+  path), `renderPageHtml`, `resolvePageChanges`, `layoutPage`; Node: `loadPage`, `writePage`.
+  CLI `render` / `validate` and the plugin's `storyink_render` / `storyink_validate` (new `path`
+  param on render) detect pages and resolve figure paths; `--svg` / `--animated-svg` on a page are
+  errors. Schema: root `type: "page"` alternative. The drawer's HTML diff is now a shared
+  `DiffView` (`src/core/render/DiffView.tsx`, same markup). Diagram `validate()` points pages at
+  `validatePage`. Examples in `examples/pages/`. Single-diagram output unchanged.
+- **Pages: viewer** — page figures are the interactive viewer embedded (`renderFigure` →
+  server-rendered App in embedded mode): captions above an aspect-sized stage, compact toolbar (no
+  theme button, Expand), transport, gate, pan / zoom (wheel zoom needs Ctrl / ⌘ unless expanded so
+  the page scrolls), story playback, follow camera, narration rail beside the stage when the figure
+  is wide (container query) else below, drawer as a page overlay, Expand (fills the window; Esc
+  returns). The viewer bundle detects `#storyink-page-data` and hydrates every `[data-si-fig]` root:
+  keys act only on the focused figure (tabindex, click focuses), `#fig=<id>` scopes `t` / `camera`
+  / `motion` / `pace` / `drawer` / `rail` / `autoplay` / `static` to a figure (page-wide: `theme`,
+  `static=1`), unrelated hash changes (TOC anchors) don't refit, exports / counters / lint are
+  per figure, `__storyink = { page: true, figures: { id: api }, ready, whenReady, lint }`.
+  `#fig=<id>&solo=1` shows only that figure with the standalone chrome and contract. `idPrefix`
+  on `Diagram` / `renderSvg` (every def id and `url(#…)`), default empty. Snapshot detects page
+  HTML: full-page PNG per theme (width 1280; figures at their final frame), gates ready / lint
+  (figures + page text overflow) / deterministic, `--preview` split into ≤ 3 parts;
+  `--figure <id>` (tool param `figure`) runs the single-diagram pipeline on one figure.
+  `scripts/page-verify.ts` (`bun run verify:page`). Single-diagram output unchanged.
 - **Change stories**: story step `change` (before look until the step: removed = plain, added =
   absent, modified = plain; then removed edges retract and ghost, removed nodes strike and fade,
   added ones reveal / draw on, modified ones flash and turn gold, diff nodes apply; badges, strikes

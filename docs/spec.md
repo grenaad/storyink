@@ -743,3 +743,149 @@ element nor path-like is an error).
   `steps[i].narrate`.
 - The scene JSON carries `changes` only when the spec embeds it; the rail / drawer CSS (and the code
   + delta palette the drawer uses) is only emitted when used: other specs render byte-identically.
+
+## Pages
+
+A page (`"type": "page"`) is a single-file, offline explainer document: a summary, then sections of
+prose, data blocks and embedded diagrams ("figures"), rendered deterministically from JSON. Use it
+for PR / diff reviews, plan reviews, project recaps and explainers. Examples:
+[`examples/pages/`](../examples/pages/).
+
+```jsonc
+{
+  "type": "page",
+  "title": "PR #142: Batch email sending",
+  "eyebrow": "Diff review",          // small uppercase line above the title (default "Page")
+  "subtitle": "…",                   // italic line under the title
+  "summary": "Lead paragraph …",     // prose (see below), shown large in the header
+  "change": { "base": "main", "head": "feat/batch", "title": "…", "url": "https://…" },
+  "toc": true,                       // default: a contents sidebar when there are ≥ 4 sections
+  "sections": [
+    { "id": "what", "title": "What changed", "eyebrow": "…", "blocks": [ { "prose": "…" } ] }
+  ]
+}
+```
+
+Section `id` defaults to the title's slug (unique). A **block** is an object with exactly one type
+key, plus an optional anchor `id`; an unknown key or two type keys in one block is an error.
+
+| Block | Shape | Renders |
+| --- | --- | --- |
+| `prose` | string | Markdown subset (below) |
+| `figure` | `{ spec, claim?, id?, wide? }` | an embedded diagram; `spec` is a diagram spec object or a path relative to the page file; `claim` is the caption (inline prose); `id` defaults to `fig-1`, `fig-2` … |
+| `kpis` | `[{ label, value, detail?, tone? }]` | a row of number tiles |
+| `table` | `{ columns: (string \| { label, align? })[], rows: Cell[][], caption? }` | a table; Cell = string \| number \| `{ text, tone?, badge?, code? }` |
+| `cards` | `[{ title, body, tag?, tone?, delta? }]` | a card grid (`delta` adds a NEW / CHANGED / REMOVED chip) |
+| `callout` | `{ tone: note\|good\|warn\|risk, title?, body }` | a toned aside |
+| `filemap` | `"changes"` \| `{ from: "changes", notes? }` \| `{ files: [{ path, status, add?, del?, note? }] }` | a directory tree with status letters, +/− and bars; over 16 files it shows the 8 largest and collapses the tree |
+| `diff` | `{ file, lines?, context?, max? }` (from `--changes`) \| `{ text, file?, lang?, max? }` | the drawer's HTML diff view (gutter, tints, syntax colours, intra-line marks); folds after `max` rows (default 120) |
+| `code` | `{ code, lang?, file?, start? }` | syntax-coloured code with line numbers |
+| `risks` | `[{ risk, severity: low\|medium\|high\|critical, area?, mitigation?, refs? }]` | a risk list |
+| `decisions` | `[{ decision, why?, confidence: sourced\|inferred\|unknown, refs? }]` | a decision log (a `sourced` decision without refs warns) |
+| `evidence` | `[{ claim, source, status?: verified\|corrected\|unsupported\|unverifiable }]` | claim / source / status rows |
+| `timeline` | `[{ when, title, body?, tone? }]` | a vertical timeline |
+| `checklist` | `[{ text, done?, note? }]` | a checklist |
+| `details` | `{ summary, blocks }` | a native `<details>` (collapsed; opened for print) |
+| `columns` | `Block[][]` (2–3) | side-by-side columns (before / after); stacked on narrow screens |
+
+Tones (`tone`) are semantic and match the change palette: `good` = sage, `warn` = gold, `risk` =
+rose, `note` = blue, `neutral` = ink. `refs` / `source` strings that look like file refs
+(`src/x.ts#L12-20`, `src/x.ts:12`) render as mono refs.
+
+**Prose** is a safe Markdown subset: paragraphs, `-` / `*` and `1.` lists, `###` / `####`
+headings, `>` quotes, `**bold**`, `*italic*`, `` `code` ``, `[text](url)` (http(s), mailto,
+`#anchor` or a relative path; anything else renders as plain text), `\` escapes. There is no raw
+HTML: every character is escaped.
+
+**Validation** (`validatePage`, `storyink validate page.json`): JSON paths and hints as for
+diagrams; each figure spec goes through the diagram `validate()` and its diagnostics are prefixed
+with the figure's path (`sections[1].blocks[0].figure.spec.nodes[3].kind`). Section, figure and
+block ids are unique. Warnings: long prose, more than 6 KPIs, more than 4 figures, `filemap` /
+`diff` from changes without `--changes`. The diagram `validate()` given a page returns an error
+pointing at `validatePage`.
+
+**Changes** (`render page.json --changes changes.json`, `resolvePageChanges(page, diffset)`): every
+figure spec is resolved with `resolveChanges` (stat, diff nodes, embedded hunks for its drawer;
+diagnostics prefixed with the figure path); the page embeds `changes` with every file's status and
+counts (when a `filemap` reads them) and the whole hunks `diff: { file, lines? }` blocks select,
+capped at 400 lines per file. `lines` + `context` (default 3) trim at render time.
+
+**HTML**: one file, like single diagrams: font, theme (both palettes, plus the rich + delta
+palettes and the `--sp-*` page palette), diagram CSS (union of what the figures need), viewer CSS
+(narration rail / drawer rules when any figure uses them, rolling counters when any has counters),
+`#storyink-page-css`, the BOOT script; then
+
+```html
+<html class="si-noscript si-page">…
+<div id="storyink-page" class="sp-has-toc?">
+  <header class="sp-head">eyebrow, title, subtitle, change meta, summary, theme toggle</header>
+  <nav class="sp-toc">…</nav>
+  <main class="sp-main">
+    <section class="sp-sec" id="<section id>">…blocks…
+      <figure class="sp-b sp-wide sp-fig[ sp-fig-wide]" id="fig-<figId>" data-fig="<figId>">
+        <div class="sp-fig-root" data-si-fig="<figId>">…renderFigure(scene, { id })…</div>
+        <figcaption class="sp-cap">claim</figcaption>
+      </figure>
+    </section>
+  </main>
+</div>
+<script id="storyink-page-js">theme toggle, TOC scroll-spy, details open for print</script>
+<script type="application/json" id="storyink-page-data">{"version","figures":{"<figId>":{"scene"}},"changes"?}</script>
+<script id="storyink-viewer">…</script>
+```
+
+The page reads without JavaScript (figures at their final frame, native `<details>`, the TOC as a
+list). The theme toggle uses the viewer's `localStorage["storyink-theme"]` and
+`documentElement.dataset.theme`. Print hides the chrome and opens every `<details>`.
+
+**CLI / plugin**: `storyink render page.json -o page.html [--theme light|dark] [--changes …]`
+detects pages; figure `spec` paths (JSON, or `.mmd` Mermaid) resolve relative to the page file.
+`--svg` / `--animated-svg` are errors for a page (render a figure's own spec for its SVG);
+`--story` / `--motion` / `--camera` / `--pace` are ignored with a warning (set them in each
+figure's spec). `storyink validate page.json` validates the page and every figure. The plugin's
+`storyink_render` and `storyink_validate` accept a page as `spec` (object or JSON; figure paths
+resolve against the project directory) or `path` (resolved against the page file's directory).
+Core API: `isPageSpec`, `validatePage`, `renderPageHtml(page, { theme?, viewer? })`,
+`resolvePageChanges`, `layoutPage`, `pageFigures`; Node: `loadPage(input, dir, diffset?)`,
+`writePage`.
+
+## Pages: viewer & page contract
+
+A page (`type: "page"`) embeds each figure as the interactive viewer (`renderFigure(scene, { id })`
+in `src/core/render/figure.tsx`, server-rendered so it reads without JavaScript at the final frame).
+
+- **Embedded figure**: no title header (the page owns it); the caption line above the stage; the
+  stage spans the column and its height follows the diagram's aspect at that width (plus the
+  toolbar strip), at least 260 px, at most a 1.25× fit and 90vh (snapshots pin `#figmax=`); before
+  hydration and at `#static=1` the diagram is fitted by CSS (no camera transform), so the server
+  markup and static captures lay out the same with or without JavaScript. Diagrams whose labels
+  would draw under ~9 px at the column width (when width, not height, limits the fit) break out of
+  the column (`sp-fig-wide`, unless the figure sets `wide`). Narrow screens: the drawer is a bottom
+  sheet; toolbar separators collapse when a control is hidden; compact toolbar (−, +, Fit,
+  Motion, Follow, Narration, Expand; no theme button: the page header toggles the theme for every
+  figure); transport and gate; pan by drag; the wheel scrolls the page, Ctrl / ⌘ + wheel (or a
+  pinch) zooms. The narration rail sits beside the stage when the figure is ≥ 860 px wide, else
+  below it. The drawer opens as a page-level overlay. **Expand** fills the window (full toolbar);
+  Esc or the button returns; the stage re-fits.
+- **Keys**: act only on the figure that has focus (each figure root is focusable; clicking it
+  focuses it). With no figure focused, Space / arrows scroll the page as usual. Esc closes the
+  drawer, then leaves Expand.
+- **Hash**: `#theme=` and `#static=1` are page-wide; `#fig=<id>` scopes `t`, `camera`, `motion`,
+  `pace`, `drawer`, `rail`, `autoplay`, `static` to that figure (e.g. `#fig=fig-2&t=9`). Hash
+  changes that don't change a figure's view (TOC anchors) leave it alone (no refit).
+  `#fig=<id>&solo=1` shows only that figure, full window, with the standalone chrome and the
+  single-diagram `__storyink` contract (plus `page: true`, `solo: id`); reload to leave it.
+- **Page contract**: `window.__storyink = { ready, whenReady, version, page: true, figures: { [id]:
+  { duration, steps, setTime, play, pause, replay, step, stepAnimated, state, camera, pace,
+  setPace, openDrawer, closeDrawer, drawer } }, lint }`; `lint = { ok, figures: { [id]: report },
+  page: { ok, issues } }` (page issues: `.sp-*` blocks whose text is clipped);
+  `documentElement.dataset.ready = "1"` once every figure hydrated and fonts are ready. Toggles
+  stored in localStorage (motion, follow, pace, rail) are shared page-wide.
+- **SVG ids**: each figure's SVG defs carry the prefix `f-<id>-` (`Diagram` prop / `renderSvg`
+  option `idPrefix`, default empty), so figures never collide.
+- **Snapshot**: `storyink snapshot page.html` captures the full page per theme (width `--width`,
+  default 1280; height measured; figures at their final frame via `#static=1` and a fixed figure
+  height via `#figmax=`; 6 s virtual-time budget), with gates `ready`, `lint` (figures + page text) and `deterministic`;
+  `--preview` gives a compact JPEG, split into up to 3 parts for tall pages (`#scroll=<px>`).
+  `--figure <id>` (plugin `figure`) runs the single-diagram pipeline on that figure through
+  `#fig=<id>&solo=1`: beat sheets, `--at`, `--rail`, `--drawer`, `--camera follow` and every gate.

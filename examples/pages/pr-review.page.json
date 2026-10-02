@@ -1,0 +1,115 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "page",
+  "eyebrow": "Diff review",
+  "title": "Payment retries move off the request path",
+  "subtitle": "A soft card decline now queues a retry instead of failing the checkout.",
+  "change": { "base": "main", "head": "payments/retry-queue", "title": "Illustrative example" },
+  "summary": "Checkout used to throw on **every** declined charge. This change splits declines in two: hard declines still fail fast, while *soft* declines (`insufficient_funds`, `processing_error`) are queued and retried by a new worker with backoff. The order stays `pending` until the worker marks it paid or failed.\n\nRecommendation: **approve with two follow-ups** (idempotency key, retry metrics).",
+  "sections": [
+    {
+      "id": "at-a-glance",
+      "title": "At a glance",
+      "blocks": [
+        {
+          "kpis": [
+            { "label": "Files", "value": 3, "detail": "1 modified, 2 added" },
+            { "label": "Lines", "value": "+23 \u22122", "detail": "half of it the new worker", "tone": "good" },
+            { "label": "New infra", "value": 1, "detail": "SQS queue `payment-retries`", "tone": "warn" },
+            { "label": "Max attempts", "value": 3, "detail": "then the order fails", "tone": "note" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "what-changed",
+      "title": "What changed",
+      "blocks": [
+        {
+          "figure": {
+            "id": "retry-flow",
+            "spec": "../changes/payment-retry.architecture.json",
+            "claim": "Declines now loop back through Payments via a queue and a worker, **off** the checkout request path.",
+            "wide": true
+          }
+        },
+        {
+          "filemap": {
+            "files": [
+              { "path": "src/payments/charge.ts", "status": "modified", "add": 7, "del": 2, "note": "soft declines enqueue a retry and return `pending`" },
+              { "path": "src/workers/retry.ts", "status": "added", "add": 9, "note": "consumes the queue, retries with backoff" },
+              { "path": "infra/queues.tf", "status": "added", "add": 7, "note": "the `payment-retries` SQS queue" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "the-diff",
+      "title": "The two hunks that matter",
+      "blocks": [
+        { "prose": "The behaviour change is one branch in `charge()`. Hard declines keep throwing; soft ones enqueue attempt 1 and return early." },
+        {
+          "diff": {
+            "file": "src/payments/charge.ts",
+            "text": "@@ -12,7 +12,12 @@ export async function charge(order: Order)\n   const res = await stripe.charges.create(order.payment)\n-  if (!res.paid) throw new PaymentError(res.failure_code)\n+  if (!res.paid) {\n+    if (!SOFT.has(res.failure_code)) throw new PaymentError(res.failure_code)\n+    await retries.enqueue({ order: order.id, attempt: 1 })\n+    return { status: \"pending\" }\n+  }\n   await db.orders.update(order.id, { status: \"paid\" })\n   return { status: \"paid\" }"
+          }
+        },
+        { "prose": "The worker re-runs `charge()` and re-enqueues with backoff until the third attempt." },
+        {
+          "diff": {
+            "file": "src/workers/retry.ts",
+            "text": "@@ -0,0 +1,9 @@\n+export const onMessage = async (m: Retry) => {\n+  const order = await orders.get(m.order)\n+  const res = await charge(order)\n+  if (res.status === \"pending\" && m.attempt < 3)\n+    await retries.enqueue({ ...m, attempt: m.attempt + 1 }, backoff(m))\n+  else if (res.status === \"pending\")\n+    await orders.update(m.order, { status: \"failed\" })\n+}\n+const backoff = (m: Retry) => ({ delaySeconds: 30 * 2 ** m.attempt })"
+          }
+        }
+      ]
+    },
+    {
+      "id": "risks",
+      "title": "Risks",
+      "blocks": [
+        {
+          "risks": [
+            { "risk": "A retried charge can double-bill if Stripe succeeded but the response was lost.", "severity": "high", "area": "payments", "mitigation": "Pass an idempotency key derived from `order.id` + attempt.", "refs": ["src/payments/charge.ts#L13"] },
+            { "risk": "Orders can sit in `pending` for up to ~3 minutes; the UI shows nothing.", "severity": "medium", "area": "UX", "mitigation": "Show \"payment processing\" for pending orders." },
+            { "risk": "No metric for retry outcomes, so a stuck queue is invisible.", "severity": "low", "area": "ops", "mitigation": "Count attempts and final outcomes per failure code." }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "decisions",
+      "title": "Decisions",
+      "blocks": [
+        {
+          "decisions": [
+            { "decision": "Only soft decline codes are retried.", "why": "Retrying hard declines (stolen card, closed account) never succeeds and risks fraud flags.", "confidence": "sourced", "refs": ["src/payments/charge.ts#L14"] },
+            { "decision": "Three attempts, backing off 60 s then 120 s.", "why": "Chosen to stay inside the checkout session; no data behind the number yet.", "confidence": "inferred" },
+            { "decision": "SQS rather than a database-backed job table.", "confidence": "unknown" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "verdict",
+      "title": "Before merging",
+      "blocks": [
+        {
+          "checklist": [
+            { "text": "Hard declines still throw synchronously", "done": true },
+            { "text": "Worker caps attempts at 3", "done": true },
+            { "text": "Idempotency key on the retried charge", "note": "blocking: see the high risk above" },
+            { "text": "Retry outcome metric and alert" }
+          ]
+        },
+        {
+          "callout": {
+            "tone": "good",
+            "title": "Recommendation",
+            "body": "Approve once the idempotency key lands. The design is sound: the request path gets simpler and the retry policy is isolated in one worker."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "page",
+  "eyebrow": "Commit review",
+  "title": "storyink 0.4.0: rich panels, code animation and SVG parity",
+  "subtitle": "Commit b526d50, reviewed with its own diff. Render with --changes ../changes/storyink-0.4.0.changes.json",
+  "change": { "base": "b526d50~1", "head": "b526d50", "title": "feat: rich panels, code animation and SVG parity (0.4.0)" },
+  "summary": "0.4.0 adds three rich node shapes (`panel`, `code`, `chip`), row and line anchors, and a content pass in the story engine (typing, line bars, status, levels, glows), with the animated SVG covering all of it. The change is large but **additive by construction**: the new palette and CSS are emitted only when a scene uses rich nodes, and a golden test pins pre-0.4 output byte for byte.",
+  "sections": [
+    {
+      "id": "numbers",
+      "title": "The change in numbers",
+      "blocks": [
+        {
+          "kpis": [
+            { "label": "Files", "value": 50, "detail": "21 added, 29 modified" },
+            { "label": "Lines", "value": "+5,556 \u2212174", "detail": "additive: 32 added per deleted", "tone": "good" },
+            { "label": "Source", "value": "+3,140", "detail": "23 files under `src/`, \u221297" },
+            { "label": "Tests", "value": "+1,108", "detail": "13 test files, 6 new suites", "tone": "note" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "where",
+      "title": "Where the spec flows now",
+      "blocks": [
+        {
+          "figure": {
+            "id": "pr",
+            "spec": "../changes/storyink-0.4.0.pr.json",
+            "claim": "The new content pass sits beside the existing layout and story stages: every renderer reads the same scene, so HTML and animated SVG stay in step.",
+            "wide": true
+          }
+        },
+        { "filemap": { "from": "changes", "notes": { "src/core/story/content.ts": "the content pass: type / set / line / status / levels", "src/core/layout/panels.ts": "panel, code and chip sizing", "test/compat.test.ts": "pre-0.4 goldens" } } }
+      ]
+    },
+    {
+      "id": "gating",
+      "title": "How old diagrams stay identical",
+      "blocks": [
+        { "prose": "Rich CSS and the rich palette are switched on per scene. `isRichScene` is the single gate both renderers consult:" },
+        { "diff": { "file": "src/core/render/index.tsx", "lines": [38, 41], "context": 2 } },
+        { "prose": "The palette additions live in their own record, so the base `Palette` (and every pre-0.4 SVG) is untouched:" },
+        { "diff": { "file": "src/theme/tokens.ts", "lines": [167, 186], "context": 1, "max": 24 } }
+      ]
+    },
+    {
+      "id": "evidence",
+      "title": "Claims checked against the diff",
+      "blocks": [
+        {
+          "evidence": [
+            { "claim": "Rich CSS / palette are only emitted for scenes that use rich nodes.", "source": "src/core/render/index.tsx#L38-41", "status": "verified" },
+            { "claim": "Rich palette is kept apart from `Palette` so pre-0.4 diagrams render byte-identically.", "source": "src/theme/tokens.ts#L167-170", "status": "verified" },
+            { "claim": "A golden test pins pre-0.4 output.", "source": "test/compat.test.ts#L6", "status": "verified" },
+            { "claim": "The animated SVG plays in Safari.", "source": "CHANGELOG.md (0.4.0: \"Safari untested\")", "status": "unverifiable" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "verdict",
+      "title": "Verdict",
+      "blocks": [
+        {
+          "callout": {
+            "tone": "good",
+            "title": "Sound, additive release",
+            "body": "The gating is explicit and tested. The one open item is Safari playback of the animated SVG, which the changelog itself marks as untested."
+          }
+        }
+      ]
+    }
+  ]
+}
