@@ -1,5 +1,72 @@
 # Changelog
 
+## Unreleased
+
+- **Change stories**: story step `change` (before look until the step: removed = plain, added =
+  absent, modified = plain; then removed edges retract and ghost, removed nodes strike and fade,
+  added ones reveal / draw on, modified ones flash and turn gold, diff nodes apply; badges, strikes
+  and legend items follow); `story: "changes"` / `{ steps: "changes" }` / `--story changes` /
+  tool `story: "changes"` derive the walkthrough (data-flow order, edges and attached diff nodes
+  per beat, hero pulse trains, overview, `narrate` from `summary`); `focus` takes a list (union
+  box); `spotlight: "veil"` (soft rounded cutout around the step's focus, gliding, gone at the
+  end; HTML and animated SVG). Animated SVG: diff rows settle exactly (tighter keyframe tolerance).
+- **Narration rail and change drawer** (HTML viewer): story step `narrate: { heading?, body,
+  cites? }` (cites link body text to element ids, `node#row` or `path#L12-20`; validated in order,
+  refs must resolve). A narrated step without a caption captions with its heading (or the body's
+  first sentence) at compile time, so the animated SVG and beat tiles agree; narrated beats hold
+  for their body. The viewer shows a rail ("02 / 06", heading, body with cites) that tracks the
+  header caption's beat through playback, the scrubber, → / ← and the gate; side column on wide
+  screens, bottom sheet below 760 px; toolbar toggle and `N`. Clicking (not dragging) an element
+  with `summary` / `files` / a delta opens a drawer with its badge, stat, summary and file refs,
+  and with `--changes` the selected hunks as an HTML diff (gutter, tints, syntax colours,
+  intra-line marks); Esc / × close it. `#drawer=<id|path>`, `#rail=0|1`,
+  `__storyink.openDrawer(id)` / `closeDrawer()` / `drawer()`, `steps[i].narrate`. The scene carries
+  embedded `changes` for the drawer. `storyink snapshot --rail --drawer <id>` (tool params `rail`,
+  `drawer`; captures the 16:9 page viewport, gates compare the same configuration). The drawer
+  takes the rail's column while open. `scripts/narrate-verify.ts` (`bun run verify:narrate`). Example:
+  `examples/changes/storyink-0.4.0.pr.json` (commit b526d50). Specs without these fields render
+  byte-identically.
+- **Diff code nodes**: `code` nodes take `diff` (unified hunk text, `{ file, lines?, context?,
+  max? }` resolved by `--changes`, or resolved `{ file, hunks }`): gutter with old | new numbers,
+  `+` / `−` markers, sage / rose row tints (`diffAddBg` / `diffDelBg` tokens) with stronger
+  intra-line marks (token-level LCS), muted `@@` hunk headers with their section, per-language
+  syntax colours, a `… N more lines` fold (`max`, default 24) and long lines cut at 72 columns.
+  Anchors `node#+14` (head line) / `node#-13` (base line); `line` takes them and `{ id, hunk }`.
+  Story step `apply` (`"id"` or `{ id, hunk?, cps? }`): the node shows the base version until
+  then, removed rows tint and strike, added rows open (rows below slide) and type in, gutter
+  numbers fade in; HTML and animated SVG. Validation for diff shapes (an unresolved `{ file }`
+  without `--changes` is an error with a hint), anchors, `apply` and set / clear / type on diff
+  nodes. `diffRows(hunks, lang, { max?, headers? })` row model in `storyink/core`. Animated SVG:
+  wired dashed edges and the labels of wired edges now fade with their draw (as in the HTML).
+  Change scenes: `unchanged` nodes use the neutral accent. Examples: `payment-retry`,
+  `etl-dedupe` (Python + SQL), `storyink-core` (rendered with `--changes`).
+- **Change diagrams**: `delta` (`added` / `modified` / `removed` / `unchanged`) on nodes, groups,
+  edges, participants and messages; `emphasis` (`hero` / `muted`) on edges and messages; `stat`
+  (`+38 −12`), `summary` and `files` (paths or `{ path, lines, revision }`); root `change`
+  (`base → head` shown above the diagram) and `style.legend`. Added = sage + `NEW` badge,
+  modified = gold + `CHANGED`, removed = rose dashed ghost with a struck label + `REMOVED`,
+  unchanged = receded context; hero edges are thicker with a soft glow. Layout reserves badge room
+  (header strip, top strip, right slot or a centred row by shape) and a legend band listing the
+  deltas present. Static SVG, HTML and animated SVG (change scenes use the union SMIL mode; removed
+  edges draw on by opacity so they keep their dash); composes with story levels and rich nodes.
+  Validation with JSON paths and hints (enums, file refs, negative stats, added edges to removed
+  nodes, more than 2 hero edges). New palette `deltaPalettes` and `delta` geometry tokens, emitted
+  only when a scene uses them: specs without the new fields render byte-identically. Examples in
+  `examples/changes/` (`batch-email` ported from PR Lens, `auth-session-to-jwt` sequence,
+  `rate-limit-plugin` with panel / code / chip deltas).
+- **Diff ingestion**: `storyink diff [<range>|<base> [<head>]] [--staged] [--patch file|-] [-o
+  changes.json] [--json] [-- <pathspec>…]` parses `git diff` (default: working tree vs the merge
+  base with main/master) into a `DiffSet` and prints a per-file summary; `render --changes
+  <changes.json|.diff|.patch>` resolves the spec first. Core (browser-safe): `parseUnifiedDiff`,
+  `parseHunks`, `selectHunks`, `statFor`, `langForPath`, `normalizeLang`, `coverage`,
+  `resolveChanges` (fills `stat` from `files`, resolves `diff: { file, lines }` code nodes,
+  embeds the referenced hunks as `changes`, capped at 400 lines per file, and warns about
+  uncovered files / hunks and refs that miss the diff). Node: `gitDiff`, `diffSetFrom`.
+  Plugin: `storyink_diff` tool and `changes` on `storyink_render`.
+- **Code languages**: `py`, `go`, `rust`, `sql`, `yaml`, `sh` lexers; `lang` aliases (`python`,
+  `golang`, `rs`, `yml`, `bash`/`shell`/`zsh`, `typescript`/`tsx`, `javascript`/`jsx`) are
+  accepted and normalized. TS / JS / JSON colouring is unchanged.
+
 ## 0.4.0
 
 - **Rich nodes** (architecture, dataflow, workflow): `panel` (window with rows: `tag`, `icon`,

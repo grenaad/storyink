@@ -1,0 +1,83 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "dataflow",
+  "title": "Batch broadcast sending through Postmark (auto walkthrough)",
+  "subtitle": "One Postmark request per recipient becomes batches of 500, with suppressions filtered first",
+  "change": { "base": "main", "head": "batch-broadcast-send", "title": "Send broadcasts in batches of 500" },
+  "groups": [
+    { "id": "web", "label": "Next.js", "kind": "vercel" },
+    { "id": "functions", "label": "Cloud Functions", "kind": "firebase" },
+    { "id": "lib", "label": "broadcast-lib", "kind": "package", "parent": "functions", "delta": "added" }
+  ],
+  "nodes": [
+    {
+      "id": "broadcast-composer", "label": "Broadcast composer", "kind": "client", "parent": "web", "detail": "app/broadcasts/new",
+      "delta": "unchanged",
+      "summary": "Where an author writes a broadcast and hits send. Untouched by this change.",
+      "files": ["app/broadcasts/new/page.tsx"]
+    },
+    {
+      "id": "queue-route", "label": "POST /api/broadcasts/queue", "kind": "function", "parent": "web",
+      "delta": "modified", "stat": { "add": 38, "del": 12 },
+      "summary": "Stamps the recipient count and batch size on the queue document instead of leaving batching to the worker.",
+      "files": [{ "path": "app/api/broadcasts/queue/route.ts", "lines": [24, 96] }]
+    },
+    {
+      "id": "broadcast-queue", "label": "broadcastQueue", "kind": "database", "parent": "functions", "detail": "Firestore collection",
+      "delta": "modified", "stat": { "add": 21, "del": 4 },
+      "summary": "Queue documents gained batchSize and suppressedCount; results are written back per batch.",
+      "files": [{ "path": "functions/src/broadcast/schema.ts", "lines": [12, 48] }]
+    },
+    {
+      "id": "process-broadcast", "label": "processBroadcast", "kind": "function", "parent": "functions", "detail": "onWrite trigger",
+      "delta": "removed", "stat": { "del": 118 },
+      "summary": "The per-recipient loop this change replaces.",
+      "files": [{ "path": "functions/src/broadcast/processBroadcast.ts", "lines": [1, 118], "revision": "base" }]
+    },
+    {
+      "id": "send-single-email", "label": "sendSingleEmail", "kind": "function", "parent": "functions",
+      "delta": "removed", "stat": { "del": 46 },
+      "summary": "One Postmark request per recipient. Gone with the loop that called it.",
+      "files": [{ "path": "functions/src/broadcast/sendSingleEmail.ts", "lines": [1, 46], "revision": "base" }]
+    },
+    {
+      "id": "send-broadcast-bulk", "label": "sendBroadcastBulk", "kind": "function", "parent": "functions", "detail": "onWrite trigger",
+      "delta": "added", "stat": { "add": 142 },
+      "summary": "Fetches suppressions once, builds batched payloads and posts them to Postmark in chunks of 500.",
+      "files": [{ "path": "functions/src/broadcast/sendBroadcastBulk.ts", "lines": [1, 142] }]
+    },
+    {
+      "id": "build-bulk-payload", "label": "buildBulkPayload", "kind": "function", "parent": "lib",
+      "delta": "added", "stat": { "add": 74 },
+      "summary": "Turns a broadcast and its recipient slice into a Postmark batch request body.",
+      "files": [{ "path": "packages/broadcast-lib/src/buildBulkPayload.ts", "lines": [1, 74] }]
+    },
+    {
+      "id": "get-suppressed-emails", "label": "getSuppressedEmails", "kind": "function", "parent": "lib",
+      "delta": "added", "stat": { "add": 58 },
+      "summary": "Pulls the Postmark suppression dump once per broadcast, before any batch is sent.",
+      "files": [{ "path": "packages/broadcast-lib/src/getSuppressedEmails.ts", "lines": [1, 58] }]
+    },
+    {
+      "id": "postmark", "label": "Postmark", "kind": "external", "detail": "Email API",
+      "delta": "modified",
+      "summary": "Same provider, different endpoints: the batch endpoint and the suppression dump replace repeated single sends."
+    }
+  ],
+  "edges": [
+    { "id": "composer-to-queue", "from": "broadcast-composer", "to": "queue-route", "label": "send broadcast", "delta": "unchanged" },
+    { "id": "queue-to-firestore", "from": "queue-route", "to": "broadcast-queue", "label": "enqueue job", "delta": "modified" },
+    { "id": "firestore-to-process", "from": "broadcast-queue", "to": "process-broadcast", "label": "onWrite", "delta": "removed" },
+    { "id": "process-to-single", "from": "process-broadcast", "to": "send-single-email", "label": "per recipient", "delta": "removed" },
+    { "id": "single-to-postmark", "from": "send-single-email", "to": "postmark", "label": "1 msg/call", "delta": "removed" },
+    { "id": "firestore-to-bulk", "from": "broadcast-queue", "to": "send-broadcast-bulk", "label": "onWrite", "delta": "added" },
+    { "id": "bulk-to-suppressions", "from": "send-broadcast-bulk", "to": "get-suppressed-emails", "delta": "added" },
+    { "id": "bulk-to-payload", "from": "send-broadcast-bulk", "to": "build-bulk-payload", "delta": "added" },
+    { "id": "suppressions-to-postmark", "from": "get-suppressed-emails", "to": "postmark", "label": "suppression dump", "delta": "added" },
+    {
+      "id": "bulk-to-postmark", "from": "send-broadcast-bulk", "to": "postmark", "label": "500 msgs/call", "delta": "added", "emphasis": "hero",
+      "summary": "The change in one edge: a broadcast to 10,000 recipients drops from 10,000 requests to 20."
+    }
+  ],
+  "story": "changes"
+}

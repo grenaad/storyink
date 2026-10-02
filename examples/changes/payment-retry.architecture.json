@@ -1,0 +1,52 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "architecture",
+  "title": "Payment retries move off the request path",
+  "subtitle": "Declined charges are queued for a retry worker instead of failing the checkout",
+  "change": { "base": "main", "head": "payments/retry-queue" },
+  "nodes": [
+    { "id": "checkout", "label": "Checkout API", "kind": "service", "detail": "Node", "delta": "unchanged" },
+    {
+      "id": "payments", "label": "Payments", "kind": "service", "detail": "charge()", "delta": "modified", "stat": { "add": 7, "del": 2 },
+      "summary": "A soft decline is queued for retry instead of thrown back to checkout."
+    },
+    {
+      "id": "pay-ts", "kind": "code", "label": "payments/charge.ts", "lang": "ts", "delta": "modified",
+      "diff": "@@ -12,7 +12,12 @@ export async function charge(order: Order)\n   const res = await stripe.charges.create(order.payment)\n-  if (!res.paid) throw new PaymentError(res.failure_code)\n+  if (!res.paid) {\n+    if (!SOFT.has(res.failure_code)) throw new PaymentError(res.failure_code)\n+    await retries.enqueue({ order: order.id, attempt: 1 })\n+    return { status: \"pending\" }\n+  }\n   await db.orders.update(order.id, { status: \"paid\" })\n   return { status: \"paid\" }"
+    },
+    { "id": "stripe", "label": "Stripe", "kind": "external", "delta": "unchanged" },
+    { "id": "orders-db", "label": "orders", "kind": "database", "detail": "Postgres", "delta": "unchanged" },
+    { "id": "retries", "label": "payment-retries", "kind": "queue", "detail": "SQS", "delta": "added", "summary": "Soft declines wait here for the worker." },
+    {
+      "id": "worker", "label": "Retry worker", "kind": "function", "delta": "added", "stat": { "add": 41 },
+      "summary": "Retries with backoff and marks the order paid or failed."
+    },
+    {
+      "id": "worker-ts", "kind": "code", "label": "workers/retry.ts", "lang": "ts", "delta": "added",
+      "diff": "@@ -0,0 +1,5 @@\n+export const onMessage = async (m: Retry) => {\n+  const res = await charge(await orders.get(m.order))\n+  if (res.status === \"pending\" && m.attempt < 3)\n+    await retries.enqueue({ ...m, attempt: m.attempt + 1 }, backoff(m))\n+}"
+    }
+  ],
+  "edges": [
+    { "id": "c-p", "from": "checkout", "to": "payments", "label": "charge", "delta": "unchanged" },
+    { "id": "p-s", "from": "payments", "to": "stripe", "delta": "unchanged" },
+    { "id": "p-code", "from": "payments", "to": "pay-ts", "style": "dashed", "arrow": "none" },
+    { "id": "enqueue", "from": "pay-ts#+14", "to": "retries", "label": "enqueue", "delta": "added", "emphasis": "hero" },
+    { "id": "paid", "from": "pay-ts#+17", "to": "orders-db", "label": "status", "delta": "unchanged" },
+    { "id": "consume", "from": "retries", "to": "worker", "delta": "added" },
+    { "id": "w-code", "from": "worker", "to": "worker-ts", "style": "dashed", "arrow": "none", "delta": "added" },
+    { "id": "w-p", "from": "worker", "to": "payments", "label": "retry", "delta": "added" }
+  ],
+  "story": {
+    "pace": 0.8,
+    "spotlight": "veil",
+    "steps": [
+      { "at": 0.3, "pulse": { "route": ["c-p", "p-s"] }, "caption": "Checkout charges the card through Payments", "stop": "Before" },
+      { "line": "pay-ts#-13", "focus": ["payments", "pay-ts"], "caption": "Before: any decline threw straight back to checkout" },
+      { "change": ["payments", "pay-ts"], "line": { "id": "pay-ts", "off": true }, "focus": ["payments", "pay-ts"], "caption": "Now a soft decline is queued and the order stays pending", "stop": "Change" },
+      { "change": ["retries", "enqueue"], "line": "pay-ts#+14", "focus": ["pay-ts", "retries"], "caption": "The new branch enqueues a retry" },
+      { "change": ["worker", "consume"], "line": { "id": "pay-ts", "off": true }, "focus": ["retries", "worker"], "caption": "A worker consumes the queue", "stop": "Worker" },
+      { "change": ["worker-ts", "w-code"], "focus": ["worker", "worker-ts"], "caption": "It retries up to three times with backoff" },
+      { "change": "w-p", "pulse": { "route": ["enqueue", "consume", "w-p"] }, "focus": ["retries", "worker", "payments"], "caption": "Declines now loop back through Payments, off the request path" }
+    ]
+  }
+}

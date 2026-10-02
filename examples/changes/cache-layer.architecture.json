@@ -1,0 +1,47 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "architecture",
+  "title": "A read-through cache in front of the catalog",
+  "subtitle": "Product reads hit Redis first; writes invalidate. Auto walkthrough with the veil",
+  "change": { "base": "main", "head": "catalog/read-cache", "title": "Cache product reads" },
+  "groups": [{ "id": "svc", "label": "catalog service", "kind": "go" }],
+  "nodes": [
+    { "id": "web", "label": "Storefront", "kind": "client", "delta": "unchanged" },
+    {
+      "id": "handler", "label": "GET /products/:id", "kind": "service", "parent": "svc", "delta": "modified", "stat": { "add": 9, "del": 3 },
+      "summary": "The handler asks the cache before the database and fills it on a miss.",
+      "files": [{ "path": "catalog/handler.go", "lines": [21, 38] }]
+    },
+    {
+      "id": "handler-go", "kind": "code", "label": "catalog/handler.go", "lang": "go", "parent": "svc", "delta": "modified",
+      "diff": "@@ -21,6 +21,12 @@ func (h *Handler) Product(w http.ResponseWriter, r *http.Request) {\n \tid := chi.URLParam(r, \"id\")\n-\tp, err := h.db.Product(r.Context(), id)\n+\tp, err := h.cache.Get(r.Context(), id)\n+\tif errors.Is(err, cache.Miss) {\n+\t\tp, err = h.db.Product(r.Context(), id)\n+\t\tif err == nil {\n+\t\t\th.cache.Set(r.Context(), id, p, 5*time.Minute)\n+\t\t}\n+\t}\n \tif err != nil {\n \t\thttp.Error(w, err.Error(), 500)"
+    },
+    {
+      "id": "redis", "label": "Redis", "kind": "cache", "detail": "5 min TTL", "delta": "added",
+      "summary": "A new Redis cluster holds product JSON for five minutes.",
+      "files": ["deploy/redis.yaml"]
+    },
+    { "id": "db", "label": "catalog", "kind": "database", "detail": "Postgres", "delta": "unchanged" },
+    {
+      "id": "admin", "label": "Admin writes", "kind": "service", "parent": "svc", "delta": "modified", "stat": { "add": 4 },
+      "summary": "Product writes now invalidate the cached entry.",
+      "files": [{ "path": "catalog/admin.go", "lines": [55, 61] }]
+    },
+    {
+      "id": "admin-go", "kind": "code", "label": "catalog/admin.go", "lang": "go", "parent": "svc", "delta": "modified",
+      "diff": "@@ -55,3 +55,7 @@ func (h *Handler) Update(ctx context.Context, p Product) error {\n \tif err := h.db.Update(ctx, p); err != nil {\n \t\treturn err\n \t}\n+\tif err := h.cache.Del(ctx, p.ID); err != nil {\n+\t\tlog.Warn(\"cache invalidate\", \"id\", p.ID, \"err\", err)\n+\t}\n+\treturn nil"
+    },
+    { "id": "poller", "label": "stale poller", "kind": "function", "parent": "svc", "delta": "removed", "summary": "The minute-by-minute stale-price poller is no longer needed." }
+  ],
+  "edges": [
+    { "id": "w-h", "from": "web", "to": "handler", "delta": "unchanged" },
+    { "id": "h-code", "from": "handler", "to": "handler-go", "style": "dashed", "arrow": "none" },
+    { "id": "get", "from": "handler-go#+23", "to": "redis", "label": "GET", "delta": "added", "emphasis": "hero" },
+    { "id": "h-db", "from": "handler-go#+25", "to": "db", "label": "on miss", "delta": "modified" },
+    { "id": "a-code", "from": "admin", "to": "admin-go", "style": "dashed", "arrow": "none" },
+    { "id": "a-db", "from": "admin", "to": "db", "label": "UPDATE", "delta": "unchanged" },
+    { "id": "del", "from": "admin-go#+58", "to": "redis", "label": "DEL", "delta": "added" },
+    { "id": "poll", "from": "poller", "to": "db", "label": "every minute", "delta": "removed" }
+  ],
+  "story": { "steps": "changes", "spotlight": "veil", "pace": 0.8 }
+}

@@ -1,0 +1,79 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "architecture",
+  "title": "Rate limiting moves into a gateway plugin",
+  "subtitle": "Deltas on panel, code and chip nodes, groups, and a story that types the new code",
+  "change": { "base": "v2.3.0", "head": "feat/gateway-ratelimit" },
+  "groups": [
+    { "id": "edge", "label": "Edge", "kind": "gateway", "delta": "modified" },
+    { "id": "plugins", "label": "Plugins", "parent": "edge", "delta": "added" },
+    { "id": "app", "label": "App tier", "kind": "cluster" }
+  ],
+  "nodes": [
+    { "id": "client", "label": "Mobile client", "kind": "client", "delta": "unchanged" },
+    {
+      "id": "gateway", "kind": "panel", "label": "Gateway", "icon": "plug", "parent": "edge", "size": { "cols": 30 },
+      "delta": "modified", "stat": { "add": 12, "del": 3 },
+      "summary": "Loads plugins from config and runs them before routing.",
+      "files": [{ "path": "gateway/src/pipeline.ts", "lines": [40, 71] }],
+      "rows": [
+        { "id": "auth", "icon": "bolt", "text": "auth", "detail": "jwt" },
+        { "id": "limit", "icon": "wrench", "text": "plugins", "detail": "ratelimit" },
+        { "id": "route", "icon": "globe", "text": "route", "detail": "/orders/*" }
+      ]
+    },
+    { "id": "rl-chip", "kind": "chip", "label": "ratelimit", "icon": "spark", "parent": "plugins", "delta": "added", "stat": { "add": 64 } },
+    { "id": "cors-chip", "kind": "chip", "label": "cors", "icon": "globe", "parent": "plugins", "delta": "unchanged" },
+    {
+      "id": "limiter", "kind": "code", "label": "ratelimit.ts", "lang": "ts", "parent": "plugins", "delta": "added", "stat": { "add": 64 },
+      "files": [{ "path": "gateway/plugins/ratelimit.ts", "lines": [1, 64] }],
+      "code": [
+        "export const ratelimit = (rps = 50) => ({",
+        "  async before(req) {",
+        "    const n = await redis.incr(key(req))",
+        "    if (n > rps) return tooMany()",
+        "  },",
+        "})"
+      ]
+    },
+    { "id": "redis", "label": "Redis", "kind": "cache", "detail": "token buckets", "delta": "added" },
+    {
+      "id": "orders", "label": "Orders service", "kind": "service", "parent": "app", "detail": "Go",
+      "delta": "modified", "stat": { "add": 2, "del": 41 },
+      "summary": "The in-process limiter middleware is deleted."
+    },
+    {
+      "id": "mw", "kind": "code", "label": "middleware/limit.go", "lang": "text", "parent": "app", "delta": "removed", "stat": { "del": 39 },
+      "code": [
+        "func Limit(next http.Handler) http.Handler {",
+        "  return http.HandlerFunc(func(w, r) {",
+        "    if !bucket.Take() { w.WriteHeader(429); return }",
+        "    next.ServeHTTP(w, r)",
+        "  })",
+        "}"
+      ]
+    }
+  ],
+  "edges": [
+    { "id": "c-g", "from": "client", "to": "gateway#auth", "label": "HTTPS", "delta": "unchanged" },
+    { "id": "g-rl", "from": "gateway#limit", "to": "rl-chip", "delta": "added" },
+    { "id": "rl-code", "from": "rl-chip", "to": "limiter", "delta": "added" },
+    { "id": "rl-redis", "from": "limiter#3", "to": "redis", "label": "INCR", "delta": "added", "emphasis": "hero" },
+    { "id": "g-o", "from": "gateway#route", "to": "orders", "label": "proxy", "delta": "modified" },
+    { "id": "o-mw", "from": "orders", "to": "mw", "label": "in-process", "delta": "removed" },
+    { "id": "g-cors", "from": "gateway#limit", "to": "cors-chip", "emphasis": "muted" }
+  ],
+  "story": {
+    "pace": 0.8,
+    "steps": [
+      { "at": 0.3, "pulse": ["c-g", { "edge": "g-o", "delay": 0.6 }, { "edge": "o-mw", "delay": 1.2 }], "caption": "Before: every service limited its own traffic", "stop": "Before" },
+      { "highlight": "mw", "line": "mw#3", "caption": "Orders ran a token bucket in process" },
+      { "line": { "id": "mw", "off": true }, "dim": "mw", "caption": "That middleware is deleted (−39)" },
+      { "reveal": ["plugins", "rl-chip"], "wire": "g-rl", "status": { "id": "gateway#limit", "to": "running" }, "caption": "The gateway gains a plugin stage", "stop": "Plugin" },
+      { "reveal": "limiter", "wire": "rl-code", "type": "limiter", "caption": "ratelimit.ts: a shared limiter for every route" },
+      { "reveal": "redis", "wire": "rl-redis", "line": "limiter#3", "caption": "Counts live in Redis, so every gateway replica agrees" },
+      { "pulse": ["c-g", { "route": ["g-rl", "rl-code", "rl-redis"], "delay": 0.5 }], "status": { "id": "gateway#limit", "to": "done" }, "caption": "Requests are counted at the edge", "stop": "Hero" },
+      { "line": { "id": "limiter", "off": true }, "undim": "mw", "caption": "One plugin added, one middleware removed" }
+    ]
+  }
+}

@@ -1,0 +1,417 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "dataflow",
+  "title": "storyink 0.4.0: rich panels, code animation and SVG parity",
+  "subtitle": "Commit b526d50, walked through where the spec flows. Click a changed box for its hunks.",
+  "direction": "TB",
+  "change": {
+    "base": "b526d50~1",
+    "head": "b526d50",
+    "title": "storyink 0.4.0"
+  },
+  "groups": [
+    {
+      "id": "input-g",
+      "label": "spec in",
+      "direction": "LR"
+    },
+    {
+      "id": "layout-g",
+      "label": "layout",
+      "direction": "LR"
+    },
+    {
+      "id": "story-g",
+      "label": "story",
+      "direction": "LR"
+    },
+    {
+      "id": "render-g",
+      "label": "renderers",
+      "direction": "LR"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "spec",
+      "label": "Spec",
+      "kind": "client",
+      "detail": "spec.ts",
+      "delta": "modified",
+      "files": [
+        {
+          "path": "src/core/spec.ts",
+          "lines": [
+            91,
+            195
+          ]
+        }
+      ],
+      "summary": "GraphNode gains panel / code shapes, rows and code; StoryStep gains type, line, status, dim, set, wire and friends.",
+      "parent": "input-g"
+    },
+    {
+      "id": "validate",
+      "label": "validate",
+      "kind": "service",
+      "detail": "validate.ts",
+      "delta": "modified",
+      "files": [
+        {
+          "path": "src/core/validate.ts",
+          "lines": [
+            205,
+            281
+          ]
+        }
+      ],
+      "summary": "Shape checks for the new node fields and the 0.4 content steps, with JSON-path diagnostics.",
+      "parent": "input-g"
+    },
+    {
+      "id": "graph",
+      "label": "layoutGraph",
+      "kind": "service",
+      "detail": "layout/graph.ts",
+      "parent": "layout-g",
+      "delta": "modified",
+      "files": [
+        {
+          "path": "src/core/layout/graph.ts",
+          "lines": [
+            402,
+            440
+          ]
+        }
+      ],
+      "summary": "Sizes rich nodes through panels.ts before placement."
+    },
+    {
+      "id": "panels",
+      "label": "panels.ts",
+      "kind": "function",
+      "detail": "panel / code / chip boxes",
+      "parent": "layout-g",
+      "delta": "added",
+      "files": [
+        "src/core/layout/panels.ts"
+      ],
+      "summary": "New: measures window headers, rows and code bodies so a box fits its largest state."
+    },
+    {
+      "id": "tokenize",
+      "label": "tokenize.ts",
+      "kind": "function",
+      "detail": "syntax tokens",
+      "parent": "layout-g",
+      "delta": "added",
+      "files": [
+        "src/core/layout/tokenize.ts"
+      ],
+      "summary": "New: a small deterministic TS / JSON lexer for code-node colouring."
+    },
+    {
+      "id": "compile",
+      "label": "compileStory",
+      "kind": "service",
+      "detail": "story/compile.ts",
+      "parent": "story-g",
+      "delta": "modified",
+      "files": [
+        {
+          "path": "src/core/story/compile.ts",
+          "lines": [
+            259,
+            314
+          ]
+        }
+      ],
+      "summary": "A content pass turns the new steps into timeline events."
+    },
+    {
+      "id": "content",
+      "label": "content.ts",
+      "kind": "function",
+      "detail": "content steps → events",
+      "parent": "story-g",
+      "delta": "added",
+      "files": [
+        "src/core/story/content.ts"
+      ],
+      "summary": "New: typing, versions, line bars, dim levels and wire cycles, in step order."
+    },
+    {
+      "id": "cstate",
+      "label": "content-state.ts",
+      "kind": "function",
+      "detail": "events → frame at t",
+      "parent": "story-g",
+      "delta": "added",
+      "files": [
+        "src/core/story/content-state.ts"
+      ],
+      "summary": "New: samples the content events at any time t, so every frame is a pure function of t."
+    },
+    {
+      "id": "diagram",
+      "label": "Diagram.tsx",
+      "kind": "service",
+      "detail": "static SVG + HTML",
+      "parent": "render-g",
+      "delta": "modified",
+      "files": [
+        {
+          "path": "src/core/render/Diagram.tsx",
+          "lines": [
+            225,
+            260
+          ]
+        }
+      ],
+      "summary": "Draws windows, rows, code lines, carets and chips from the frame."
+    },
+    {
+      "id": "smil",
+      "label": "smil.tsx",
+      "kind": "service",
+      "detail": "animated SVG",
+      "parent": "render-g",
+      "delta": "modified",
+      "files": [
+        {
+          "path": "src/core/render/smil.tsx",
+          "lines": [
+            204,
+            240
+          ]
+        }
+      ],
+      "summary": "The same content animations as SMIL tracks: SVG parity with the viewer."
+    },
+    {
+      "id": "viewer",
+      "label": "viewer",
+      "kind": "client",
+      "detail": "App.tsx",
+      "delta": "modified",
+      "files": [
+        {
+          "path": "src/core/render/App.tsx",
+          "lines": [
+            727,
+            752
+          ]
+        }
+      ],
+      "summary": "Small change: the glitch rewind filter.",
+      "parent": "render-g"
+    }
+  ],
+  "edges": [
+    {
+      "from": "spec",
+      "to": "validate"
+    },
+    {
+      "from": "validate",
+      "to": "graph"
+    },
+    {
+      "from": "graph",
+      "to": "panels",
+      "delta": "added"
+    },
+    {
+      "from": "panels",
+      "to": "tokenize",
+      "delta": "added"
+    },
+    {
+      "from": "graph",
+      "to": "compile"
+    },
+    {
+      "from": "compile",
+      "to": "content",
+      "delta": "added"
+    },
+    {
+      "from": "content",
+      "to": "cstate",
+      "delta": "added",
+      "emphasis": "hero"
+    },
+    {
+      "from": "cstate",
+      "to": "diagram",
+      "delta": "added",
+      "label": "frame(t)"
+    },
+    {
+      "from": "cstate",
+      "to": "smil",
+      "delta": "added",
+      "emphasis": "hero"
+    },
+    {
+      "from": "diagram",
+      "to": "viewer"
+    }
+  ],
+  "story": {
+    "steps": [
+      {
+        "reveal": [
+          "spec",
+          "validate"
+        ],
+        "stop": "Spec",
+        "narrate": {
+          "heading": "Specs learn panels, code and content steps",
+          "body": "The headline change starts in the spec. Nodes can now be panels with rows or code windows, and story steps gain type, line, status, dim, set and wire. validate checks every new field with JSON-path diagnostics.",
+          "cites": [
+            {
+              "text": "the spec",
+              "ref": "spec"
+            },
+            {
+              "text": "story steps gain type, line, status, dim, set and wire",
+              "ref": "src/core/spec.ts#L165-195"
+            },
+            {
+              "text": "validate",
+              "ref": "validate"
+            }
+          ]
+        }
+      },
+      {
+        "reveal": [
+          "graph",
+          "panels"
+        ],
+        "pulse": "validate->graph",
+        "narrate": {
+          "heading": "Layout sizes rich boxes",
+          "body": "layoutGraph hands rich nodes to the new panels.ts, which measures headers, rows and code so a box fits its largest state and never resizes mid-story.",
+          "cites": [
+            {
+              "text": "layoutGraph",
+              "ref": "graph"
+            },
+            {
+              "text": "panels.ts",
+              "ref": "src/core/layout/panels.ts"
+            }
+          ]
+        }
+      },
+      {
+        "reveal": "tokenize",
+        "wire": "panels->tokenize",
+        "narrate": {
+          "heading": "Code gets colour",
+          "body": "Code nodes are tokenized by a new, deterministic lexer, so the same code always gets the same colours.",
+          "cites": [
+            {
+              "text": "a new, deterministic lexer",
+              "ref": "src/core/layout/tokenize.ts#L1-60"
+            }
+          ]
+        }
+      },
+      {
+        "reveal": [
+          "compile",
+          "content"
+        ],
+        "pulse": "graph->compile",
+        "stop": "Story",
+        "narrate": {
+          "heading": "The compiler gets a content pass",
+          "body": "compileStory now runs a content pass: content.ts turns typing, versions, line bars, dim levels and wire cycles into timeline events, in step order.",
+          "cites": [
+            {
+              "text": "compileStory",
+              "ref": "compile"
+            },
+            {
+              "text": "content.ts",
+              "ref": "src/core/story/content.ts"
+            }
+          ]
+        }
+      },
+      {
+        "reveal": "cstate",
+        "wire": "content->cstate",
+        "narrate": {
+          "heading": "Frames stay a function of t",
+          "body": "content-state.ts samples those events at any time t. That keeps every frame deterministic, which the viewer and the SVG both rely on.",
+          "cites": [
+            {
+              "text": "content-state.ts",
+              "ref": "src/core/story/content-state.ts"
+            }
+          ]
+        }
+      },
+      {
+        "reveal": [
+          "diagram",
+          "smil",
+          "viewer"
+        ],
+        "pulse": [
+          "cstate->diagram",
+          "cstate->smil"
+        ],
+        "stop": "Render",
+        "narrate": {
+          "heading": "Both renderers draw the same frames",
+          "body": "Diagram.tsx draws windows, rows, code and carets from the frame; smil.tsx turns the same animations into SMIL tracks, so the animated SVG matches the viewer.",
+          "cites": [
+            {
+              "text": "Diagram.tsx",
+              "ref": "src/core/render/Diagram.tsx#L225-260"
+            },
+            {
+              "text": "smil.tsx",
+              "ref": "smil"
+            },
+            {
+              "text": "SMIL tracks",
+              "ref": "src/core/render/smil.tsx#L204-240"
+            }
+          ]
+        }
+      },
+      {
+        "highlight": [
+          "panels",
+          "content",
+          "cstate"
+        ],
+        "stop": "Overview",
+        "narrate": {
+          "heading": "Overview",
+          "body": "Three new modules carry the release: panels.ts for layout, content.ts and content-state.ts for the story. Everything else is wiring.",
+          "cites": [
+            {
+              "text": "panels.ts",
+              "ref": "panels"
+            },
+            {
+              "text": "content.ts",
+              "ref": "content"
+            },
+            {
+              "text": "content-state.ts",
+              "ref": "cstate"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

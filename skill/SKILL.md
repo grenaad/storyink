@@ -69,7 +69,7 @@ join`; any graph may add `note` nodes. Architecture/dataflow/workflow also have 
 
 - Rows: `id` (starts with a letter), `tag`, `icon`, `text`, `detail` (muted), `status`
   none|running|done|error, `indent` 0–4, `muted`. Icons: wrench plug file terminal search globe
-  bolt user spark. `lang`: ts js json text.
+  bolt user spark. `lang`: ts js json py go rust sql yaml sh text.
 - `size: { cols, lines }` reserves space so later `set`/typing never resizes the window.
 - Anchors: `node#rowId` / `node#3` (1-based code line) attach wires at that row/line and target
   story steps. `muted: true` dims a node at rest; chip `stack: 1..3` draws extra sheets;
@@ -87,6 +87,50 @@ add `kind`, `detail`, `groups`, a real `title`/`subtitle`.
   optional `svg`. Invalid specs write nothing and return path + message + hint for each error.
 - Elsewhere: `npx storyink render spec.json -o x.html --svg x.svg` (`storyink validate spec.json`
   first if unsure). Exit code 1 means invalid input.
+
+### Code changes
+
+Use deltas when the diagram explains a change (PR review, migration, refactor), not for a plain
+system map. On each element the change touches set `"delta": "added" | "modified" | "removed"`;
+keep the untouched neighbours a reader needs for orientation as `"unchanged"` context instead of
+dropping them (don't draw the whole system). Keep removed parts visible (they ghost and strike
+through) so reviewers see what went away. `stat` gives `+N −M`, `summary` one line of why.
+Mark at most 1–2 edges `"emphasis": "hero"`: the path the change is about (more is a warning);
+`"muted"` pushes side traffic back. Add `"change": { "base", "head" }` for the header line. An
+`added` edge can't touch a `removed` node (error); an edge to a removed node is itself `removed`.
+In a story, pulse the old path, `dim` the removed parts, `reveal` / `wire` the new ones, then
+pulse the hero edge. Look at both themes: badges must not crowd labels.
+
+Diff code nodes show the actual change next to the box it changes: a `code` node with `"diff"`
+(inline hunk text, or `{ "file", "lines": [a, b] }` resolved by `changes`), attached to its
+service with a dashed `"arrow": "none"` edge. Keep each diff short (a tight `lines` range,
+`"max": 12`–`24`, one function); one or two diff nodes per diagram. Wire from the changed line
+(`"from": "pay#+14"`, head line; `#-13` = base line) to the store or queue it now hits. In the
+story, `apply` the diff in the beat where its service changes (`{ "id", "hunk": n }` for one hunk
+per beat), then `line: "pay#+14"` to point at the key line. Don't `type` / `set` diff nodes.
+
+To play a change: `"story": "changes"` (tool `story: "changes"`) derives it from the deltas
+(write a one-line `summary` on each changed element: it becomes the caption and the narration);
+or hand-write steps with `"change": [ids]` (the before look until then; don't also `reveal` an
+added element you `change`). Add `"spotlight": "veil"` and `"focus": [ids]` to keep attention on
+the part that changes. Check the beat sheet: each beat should show one change.
+
+To diagram a change (PR, branch, working tree): run `storyink_diff` (CLI `storyink diff`; default
+working tree vs the merge base with main; or `range: "main...HEAD"`) with `output:
+"changes.json"`; it returns per-file status, +/− and hunk headers. Put the paths on elements as
+`files` (`"src/x.ts"` or `{ "path": "src/x.ts", "lines": [40, 62] }`, head-side numbers; base-side
+for removed elements), and give a `code` node `"diff": { "file": "src/x.ts", "lines": [40, 62] }`
+to show the real hunk. Render with `changes: "changes.json"` (CLI `--changes`): `stat` is filled
+and warnings name changed files nothing references and ranges that miss every hunk.
+
+PR walkthroughs: give story steps `"narrate": { "heading", "body", "cites": [{ "text", "ref" }] }`
+(HTML rail; the heading doubles as the caption elsewhere). Rules: each step is one change; the
+headline change first, the overview last; reveal / focus 2–3 elements per step; keep consecutive
+steps on the same area of the diagram; write plainly (what changed and why, 1–3 sentences); cite
+the elements you mention and the files that prove it (`"ref": "src/x.ts#L40-62"`; cite `text` is
+copied exactly from the body, in order). Give changed elements `summary` + `files` and render with
+`changes`: clicking a box opens a drawer with its real hunks. Check with
+`storyink_snapshot` `at` + `rail: true` (and `drawer: "<id>"`).
 
 ## 4. Render -> look -> fix (required, max 3 passes)
 

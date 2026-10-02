@@ -90,7 +90,9 @@ Not available in lifecycle or sequence diagrams. Examples:
   (`none` `running` `done` `error`), `indent` 0–4 (2 columns each), `muted` dims the row at rest.
   Row ids start with a letter or `_`. Text wraps at `size.cols` (default 40).
 - **`code`**: a window showing `code` (string split on newlines, or an array of lines; tabs become
-  2 spaces), syntax-coloured by `lang`: `ts` (default), `js`, `json`, `text`.
+  2 spaces), syntax-coloured by `lang`: `ts` (default), `js`, `json`, `py`, `go`, `rust`, `sql`, `yaml`, `sh`, `text`
+  (aliases `python`, `golang`, `rs`, `yml`, `bash`/`shell`/`zsh`, `typescript`/`tsx`,
+  `javascript`/`jsx` are accepted and normalized).
 - **`size`** (`panel`, `code`): `{ cols?, lines? }` reserves body space. The box is also sized to fit
   every version a story `set`s, so content swaps and typing never resize the node.
 - **`chip`**: a small tile with `icon` + `label`; `stack: 1..3` draws sheets peeking below it
@@ -193,7 +195,8 @@ stay. The compiler warns when the end state still shows a spinner (`running`) or
 | `id`        | step id (beat sheets, `__storyink.steps`) |
 
 Story options beside `steps`: `spotlight: true` (a soft light follows the action; `focus` steers
-it) and `rewind: "tape"` (default) or `"glitch"` (the loop / R replay reset effect in the HTML
+it), `spotlight: "veil"` (dims everything outside the step's focus box, see
+[Change stories](#change-stories)) and `rewind: "tape"` (default) or `"glitch"` (the loop / R replay reset effect in the HTML
 viewer). A pulse may also be `{ "edge", "reverse": true }` (travels to → from) and take
 `"delay": s` (starts that long after its step; a list of delayed pulses staggers).
 
@@ -226,7 +229,8 @@ viewer). A pulse may also be `{ "edge", "reverse": true }` (travels to → from)
 | `hide` / `show` | take a visible thing away / bring it back (fade). Unlike `reveal`, which marks something as *new* (absent until its step, with a rise), `hide`/`show` act on things already in the diagram and can repeat. |
 | `wire` / `unwire` | draw an edge on at wire speed (hidden before the step) / retract it source end first; `"edge"` or `{ edge, duration }`. |
 | `glow` / `unglow` | persistent glow on a node until `unglow` (a pulse's arrival glow is separate and brief). |
-| `focus`    | an id the follow camera and the spotlight aim at for this step. |
+| `focus`    | an id, or a list of ids (their union box), the follow camera, the spotlight and the veil aim at for this step. |
+| `change`   | change diagrams: apply these elements' delta look with motion (see [Change stories](#change-stories)). |
 
 Mistakes are diagnostics with a hint, never crashes: typing a cleared target, a line past the
 program's last line, `undim` on something not dimmed, a status that doesn't change, and so on.
@@ -357,7 +361,7 @@ animated SVG (SMIL) has no follow camera.
 **Page contract:** `#t=<seconds|end>` seeks (paused), `#autoplay=0|1`, `#motion=full|reduced`,
 `#camera=follow|fit` (with `#t=`, `follow` shows the followed view),
 `#static=1` (runtime off, final frame), `#sheet=beats` (one tile per step + final frame).
-`window.__storyink = { ready, duration, steps: [{ id, label, t0, t1, stop? }], setTime(t), play(), pause(), replay(), step(dir, chapter?), stepAnimated(), state(), camera(), pace(), setPace(n) }`;
+`window.__storyink = { ready, duration, steps: [{ id, label, t0, t1, stop?, narrate? }], setTime(t), play(), pause(), replay(), step(dir, chapter?), stepAnimated(), state(), camera(), pace(), setPace(n) }`;
 `duration` and `steps` follow the timeline in effect (the reader's pace); `pace()` / `setPace(n)`
 read and set it (`setPace` is the reader's choice, stored like the toolbar's);
 `step(1 | -1, chapter?)` is the animated step move below and returns a Promise that resolves when
@@ -466,3 +470,276 @@ when the diagram changes.
   <img alt="…" src="x.light.svg">
 </picture>
 ```
+
+## Change diagrams
+
+Show a code change where the data flows (after [pr-lens](https://github.com/coldteadotai/pr-lens)):
+mark what each element's change did and storyink colours it, in static SVG, HTML and animated SVG,
+in both themes. All fields are optional; a spec without them renders byte-identically.
+
+| field                      | on                                              | meaning |
+| -------------------------- | ----------------------------------------------- | ------- |
+| `delta`                    | nodes, groups, edges, participants, messages    | `added` · `modified` · `removed` · `unchanged` |
+| `emphasis`                 | edges, messages                                 | `hero` (thicker + soft glow; keep to 1–2) · `muted` (0.35) |
+| `stat`                     | nodes                                           | `{ "add": 38, "del": 12 }`, shown as `+38 −12`; filled from `--changes` when absent |
+| `summary`                  | nodes, edges, messages                          | one line: what changed and why (auto captions, drawer) |
+| `files`                    | nodes, edges, messages                          | `"src/x.ts"` or `{ "path", "lines"?: n \| [a, b], "revision"?: "head" \| "base" }` (1-based, inclusive; head side, base side for removed elements) |
+| `change` (root)            | spec                                            | `{ "base", "head", "title"?, "url"? }`: `base → head` (else `title`) shown above the diagram |
+| `style.legend` (root)      | spec                                            | default: a legend when any element has a delta other than `unchanged`; `false` hides it |
+
+Encoding (tokens `deltaAdded` / `deltaModified` / `deltaRemoved` + `…Fill`, `deltaHero`, and the
+`delta` geometry block in `src/theme/tokens.ts`):
+
+- **added**: sage outline and accent, a `NEW` badge in the node's top-right corner.
+- **modified**: gold outline and accent, `CHANGED` badge.
+- **removed**: a ghost: rose dashed outline, 0.55 opacity, label struck through, `REMOVED` badge.
+  Removed edges are rose, dashed and faded, their label struck.
+- **unchanged**: context, receded to 0.82, no badge.
+- `stat` sits left of the badge (`+N` sage, `−M` rose). Badge room is reserved by the layout
+  (corner shapes get a strip above the text, windows use the header strip, chips and pills a slot
+  on the right, diamonds a row under the text); tiny shapes (dots, bars, choice) get colour only.
+- **Groups**: the label is tinted and gets ` · NEW` / ` · CHANGED` / ` · REMOVED`; boxes are not
+  flooded (a removed group's rule is dashed).
+- **Sequence**: participants carry the badge on their head box, a removed participant's lifeline
+  is rose; messages are tinted, added ones a little heavier, removed ones dashed with a struck label.
+- **Legend**: a row above the diagram listing only the deltas present, with the `change` meta on the
+  right. The viewBox grows by 26 px for it.
+
+Delta looks are static and compose with everything else: story levels multiply (a `dim`med removed
+node is 0.42 × 0.55), `reveal` / `wire` / `hide` / `highlight` / `pulse` work as usual, and rich
+nodes (`panel`, `code`, `chip`) take the outline, badge and strike. The animated SVG renders them
+identically (change scenes use the same union mode as rich scenes).
+
+Validation: unknown `delta` / `emphasis` values (with did-you-mean), empty file paths, line numbers
+< 1 or reversed ranges, and negative or fractional `stat` counts are errors; an `added` edge or
+message touching a `removed` node / participant is an error; any other edge touching a removed
+endpoint without being `removed` itself is a warning, as are more than 2 hero edges and
+`style.legend: true` with nothing to show.
+
+```json
+{
+  "type": "dataflow",
+  "title": "Batch sending",
+  "change": { "base": "main", "head": "feat/batch" },
+  "nodes": [
+    { "id": "queue", "kind": "database", "delta": "modified", "stat": { "add": 21, "del": 4 } },
+    { "id": "loop", "label": "processBroadcast", "kind": "function", "delta": "removed" },
+    { "id": "bulk", "label": "sendBroadcastBulk", "kind": "function", "delta": "added",
+      "files": [{ "path": "functions/src/sendBroadcastBulk.ts", "lines": [1, 142] }] },
+    { "id": "postmark", "kind": "external", "delta": "unchanged" }
+  ],
+  "edges": [
+    { "from": "queue", "to": "loop", "delta": "removed" },
+    { "from": "queue", "to": "bulk", "delta": "added" },
+    { "from": "bulk", "to": "postmark", "label": "500 msgs/call", "delta": "added", "emphasis": "hero" }
+  ]
+}
+```
+
+Examples: [`examples/changes/`](../examples/changes/) (`batch-email.dataflow.json`,
+`auth-session-to-jwt.sequence.json`, `rate-limit-plugin.architecture.json`).
+
+## Change stories
+
+A story can play a change instead of showing it all at once.
+
+**`change` step** (`"change": "id"` or a list). Elements whose delta a step `change`s show their
+**before** look until that step, then move to their **after** (delta) look:
+
+| delta | before | the `change` step |
+| ----- | ------ | ----------------- |
+| `added` node / group | absent | reveals it (sage accent, `NEW` badge) |
+| `added` edge / message | absent | draws it on (like `wire`) |
+| `removed` node | plain (kind accent, full strength) | rose dashed face, badge and strike fade in, the node fades to the 0.55 ghost |
+| `removed` edge / message | a plain wire | retracts (like `unwire`), then the rose dashed ghost fades in and stays; its label strikes |
+| `modified` node / edge | plain | a flash (highlight), then the gold face / wire and `CHANGED` badge fade in |
+| diff code node | the base version | `apply` (and its badge) |
+
+Elements with a delta that no step `change`s are in their after look from the start; the final
+frame is the static diagram. Legend items whose every element is changed by a step appear with the
+first of them. HTML and animated SVG alike (the after look is a layer over the neutral one whose
+opacity the SMIL animates). Diagnostics: `change` on an element with no delta (or `unchanged`)
+and changing it twice are warnings; `reveal` + `change` of the same added element is a warning
+(pick one).
+
+**`story: "changes"`** (or `{ "steps": "changes", ...options }`, CLI `--story changes`, tool
+`storyink_render` `story: "changes"`) derives the walkthrough:
+
+1. an opening beat on the before state, captioned with `change.title` (else the title);
+2. one beat per changed node in data-flow order (breadth-first from the sources): the node, its
+   changed edges (an edge joins the later of its endpoints' beats; edges between unchanged nodes
+   get their own beat after their source) and its attached diff node (a diff code node connected
+   to it by an edge, applied in the same beat). Each beat: `change` (+ `apply`), `focus` on the
+   node and its diff, caption = the element's `summary` or "<label>: added | changed | removed",
+   `stop` = the label, and `narrate` when there is a summary (heading "<label> <delta>", body = the
+   summary, cites = the element and its first file ref) so the narration rail works;
+3. a pulse train along each hero edge after its beat (only edges that exist after the change);
+4. a closing overview beat ("3 added · 2 changed · 1 removed", focus on everything).
+
+Sequences: one beat per changed message in order (with the changed participants it brings in).
+
+**Veil** (`"spotlight": "veil"`): the page colour over everything outside a soft rounded cutout
+around the step's focus box (step `focus`, else what the step animates), with a thin rim; the
+cutout glides between steps and the veil is gone in the final frame. Drawn inside the SVG (mask +
+Gaussian-blurred cutout), so HTML, snapshots and the animated SVG share it (SMIL animates the
+cutout rect and the veil opacity).
+
+## Diff code nodes
+
+A `code` node with `diff` shows a unified diff instead of plain code: a gutter with old | new line
+numbers, a `+` / `−` marker column, sage rows for added lines and rose struck rows for removed
+ones (stronger tint on the changed words of paired −/+ lines, from a token-level LCS), muted
+`@@ … @@ section` hunk headers, syntax colours per `lang` (ts, js, json, py, go, rust, sql,
+yaml, sh, text; default from the file extension, else ts) and a `… N more lines` fold row.
+
+| `diff` value | meaning |
+| ------------ | ------- |
+| `"@@ -12,3 +12,4 @@\n ctx\n-old\n+new"` | unified hunk text (a snippet with no `@@` header is one hunk numbered from 1; its header row is hidden) |
+| `{ "file": "src/x.ts", "lines"?: [a, b], "context"?: 3, "max"?: 24 }` | the hunks of that file range from `--changes` (CLI `render --changes`, tool `storyink_render` `changes`); without them validation fails with a hint |
+| `{ "file"?: "src/x.ts", "hunks": [...] }` | resolved hunks (what `--changes` writes) |
+
+`max` (4–200, default 24) folds after that many diff lines; long lines are cut at 72 columns
+with `…` (a larger `size.cols` widens the node); `size.lines` reserves rows. The box is sized for
+the diff (the largest state) and never resizes. `code` next to `diff` is ignored (warning). The
+node is a window like any code node, so `delta`, badges and story levels apply.
+
+**Anchors.** `node#3` stays the 1-based display row. Diff nodes add `node#+14` (head line 14) and
+`node#-13` (base line 13); edges can leave from the changed line (`"from": "pay#+14"`). Lines
+that the diff does not show are errors.
+
+**`line`** accepts `"pay#+14"`, `"pay#-13"` and `{ "id": "pay", "hunk": 2 }` (all rows of hunk 2).
+`set` / `clear` / `type` do not apply to diff nodes (error with a hint to use `apply`).
+
+**Story `apply`.** `"apply": "pay"`, `{ "id": "pay", "hunk": 1, "cps": 60 }` or a list. Before the
+apply the node shows the **base** version: context and removed lines as plain code, no tints,
+no added rows, no gutter numbers. During it (per hunk): removed rows tint rose and strike, the
+gutter numbers and hunk header fade in (first quarter), added rows open (rows below slide down)
+and type in with a sage tint (`cps`, default 60 chars/s; duration = typing / 0.6, at least
+0.9 s). After it: the static diff. Hunks no step applies show the diff from the start; applying a
+hunk twice is a warning. `apply` without `hunk` applies all remaining hunks. HTML and animated
+SVG alike (the SVG animates row translate, tint / gutter opacity, the open height and the typing
+clip; reduced motion snaps at the end of the apply). Anchored wires and the line bar sit at the
+diff's (final) row positions.
+
+```json
+{ "id": "pay", "kind": "code", "label": "payments/charge.ts",
+  "diff": "@@ -12,3 +12,6 @@ export async function charge(order)\n   const res = await stripe.charge(order)\n-  if (!res.paid) throw new PaymentError(res)\n+  if (!res.paid) {\n+    await retries.enqueue(order.id)\n+  }" }
+```
+
+`diffRows(hunks, lang, { max?, headers? })` (in `storyink/core`) is the renderer-agnostic row
+model behind it: `{ kind: "context" | "add" | "del" | "hunk" | "fold", old?, new?, text, tokens,
+marks?, hunk }[]`.
+
+Examples: `examples/changes/payment-retry.architecture.json`, `etl-dedupe.dataflow.json` (Python
+and SQL, hunks applied one at a time), `storyink-core.architecture.json` (render with
+`--changes examples/changes/storyink-0.4.0.changes.json`).
+
+## Diffs and `--changes`
+
+storyink can read a unified diff so change diagrams point at real code. Nothing reads git at view
+time: everything needed is embedded in the spec when you render.
+
+**Parsing** (`parseUnifiedDiff(text) → { ok, diffset?, diagnostics }`, `storyink/core`): git
+format (`diff --git`, `rename from/to`, `copy from/to`, `new/deleted file mode`, mode changes,
+`Binary files … differ`, `\ No newline at end of file`, C-quoted paths, `/dev/null`), plain
+`diff -u` output (`---`/`+++` without a git header, timestamps dropped), CRLF. Hunk bodies are
+read by their `@@` counts, so content lines that look like `--- x` are content. A preamble (commit
+message) is skipped. A `DiffSet` is `{ version: 1, base?, head?, title?, files, stats }`; each
+file has `path` (base path for removed files), `oldPath` (renames / copies), `status`
+(`added | modified | removed | renamed | copied`), `binary?`, `add`, `del`, `lang` (from the
+path) and `hunks` (`header`, `section`, `oldStart/oldLines/newStart/newLines`, `lines` of
+`{ kind: context|add|del, text, old?, new?, noNewline? }`). `parseHunks(text)` reads a bare hunk
+snippet (`@@` blocks; with no header, one hunk numbered from 1; counts are recomputed).
+
+**CLI**
+
+```
+storyink diff [<range>|<base> [<head>]] [--staged] [--patch file|-] [-o changes.json] [--json] [-- <pathspec>…]
+storyink render spec.json -o out.html --changes changes.json   # or a .diff / .patch file
+```
+
+`diff` runs `git diff --no-color --find-renames --unified=3` (no args: the working tree vs the
+merge base with `origin/HEAD` / `main` / `master`; `a..b`; `a...b` from the merge base; one
+revision vs the working tree; `--staged` = the index vs `HEAD`), or parses `--patch`. It prints a
+compact summary (status, +/−, path per file) and with `-o` writes the DiffSet JSON. `base` /
+`head` are the refs given (`working tree` / `index` when uncommitted); `title` is the head
+commit's subject. Untracked files are not included (`git add -N` them). Library:
+`gitDiff({ cwd, range?, base?, head?, staged?, paths?, patch? })` in `storyink/node`.
+
+**Referencing code**: elements carry `files` (`"src/x.ts"` or
+`{ "path", "lines"?: n | [a, b], "revision"?: "head" | "base" }`). Line numbers are head-side;
+base-side for `delta: "removed"` elements or `revision: "base"`. A `code` node may carry
+`"diff": { "file", "lines"?, "context"?, "max"? }`.
+
+**Resolving** (`resolveChanges(spec, diffset) → { spec, diagnostics }`, pure; the input is not
+mutated; `--changes` and the plugin's `changes` run it before validation):
+
+- fills `stat: { add, del }` on nodes / edges / messages that have `files` but no `stat` (lines
+  inside the refs' ranges, each diff line counted once);
+- resolves `diff: { file, lines? }` code nodes to `{ file, hunks, … }`: hunks intersecting the
+  range, trimmed to the range ± `context` (default 3); the whole file without `lines`; `lang`
+  defaults from the path;
+- embeds `changes: { base, head, files }` with only the hunks any element references (whole hunks,
+  at most 400 lines per file; a cut ends with a `… N more lines` context row that has no line
+  numbers);
+- returns coverage warnings (`coverage(diffset, spec)`): refs whose path is not in the diff,
+  ranges that touch no hunk, changed files no element references, and unreferenced hunks in
+  referenced files.
+
+Helpers: `selectHunks(diffset, ref, side?, { context? })`, `statFor(diffset, refs)`,
+`langForPath(path)`, `normalizeLang(lang)`, `capHunks(hunks, max)`.
+
+## Narration and drawer
+
+HTML viewer only (the static and animated SVG have neither).
+
+**Step `narrate`**: `{ "heading"?: string, "body": string, "cites"?: [{ "text", "ref" }] }`.
+`heading` defaults to the step's `stop`. Each cite's `text` must occur in the body, in order
+(validation error otherwise, with the JSON path); `ref` is an element id (node / edge / group, or a
+unique `from->to`), `node#row`, or a file `path`, `path#L12`, `path#L12-20` (a ref that is neither an
+element nor path-like is an error).
+
+```json
+{ "reveal": "cache", "stop": "Cache",
+  "narrate": { "heading": "Reads hit the cache first",
+    "body": "The API now asks the cache before Postgres. See src/cache.ts for the TTL.",
+    "cites": [{ "text": "the cache", "ref": "cache" }, { "text": "src/cache.ts", "ref": "src/cache.ts#L10-24" }] } }
+```
+
+- **Fallback caption**: a narrated step without `caption` captions with its heading, else the body's
+  first sentence. This happens at compile time, so the header caption, beat tiles, snapshots and
+  the animated SVG all show it. A narrated beat's reading hold is computed from the heading + body
+  (capped like any hold), not from the short fallback caption.
+- **Narration rail**: present when any step has `narrate`. Shows "02 / 06" (narrated steps only),
+  the heading and the body with cite spans. It tracks the beat the header caption belongs to: the
+  last narrated step up to that beat's last step (→ / ← moves pin it like the caption; the
+  full-motion gate shows the first narrated step, the reduced-motion gate, which shows the final
+  frame, the last). The rail and drawer render client-side only (not in the SSR markup), so the
+  stage size is final when the viewer signals ready. Hovering / focusing a cite outlines its element on the diagram;
+  clicking a file cite opens the drawer on that file (an element cite opens the element's drawer
+  when it has one). Wide screens: a right column beside the stage (the camera re-fits to the
+  smaller stage); below 760 px: a bottom sheet, its height clamped so the stage keeps 160 px. Toolbar "Narration" toggle and key `N` (stored in
+  `localStorage["storyink-rail"]`).
+- **Drawer**: clicking (not dragging) a node, edge, edge label, message or group that has
+  `summary`, `files` or a delta other than `unchanged` opens a side drawer: kind, label, delta
+  badge, stat, summary, then each file ref (path + range). With embedded `changes` (`render
+  --changes`) each ref shows the hunks it selects (`selectHunks`; removed elements read the base
+  side) as a diff: old | new gutter, `+` / `−`, sage / rose rows, syntax colours, intra-line marks,
+  `@@` headers and fold rows (`diffRows`). Without embedded hunks it lists the paths. The drawer
+  takes the side column (it replaces the rail while open; the rail returns on close; bottom sheet
+  when narrow). One drawer at a time; × or Esc closes it; it scrolls on its own (the stage wheel zoom does not reach it).
+  Elements with drawer content get a pointer cursor and a soft hover shadow.
+- Rail and drawer are off in sheets (`#sheet=`), `#static=1` and `#chrome=0`, except that
+  `#rail=1` and `#drawer=<id>` turn them on explicitly (snapshots: `storyink snapshot --at … --rail
+  --drawer <id|path>`, tool params `rail` / `drawer`). `#rail=0` hides the rail. With `#static=1`
+  only the explicit hash turns them on.
+- Snapshots with `--rail` / `--drawer` capture the page viewport (stage + side column) at 16:9 of
+  the follow width (`--width`, default 1280 → 1280×720), with the fit camera unless `--camera
+  follow`; their determinism, `end=static` and `reduced=static` gates capture with the same rail /
+  drawer configuration and size. Plain captures are unchanged.
+- Page contract: `#drawer=<id|path>` opens on load (does not write the hash on open / close);
+  `__storyink.openDrawer(id)` (returns false when the id has nothing to show),
+  `closeDrawer()`, `drawer()` (the open target `{ id }` | `{ file }` or undefined);
+  `steps[i].narrate`.
+- The scene JSON carries `changes` only when the spec embeds it; the rail / drawer CSS (and the code
+  + delta palette the drawer uses) is only emitted when used: other specs render byte-identically.

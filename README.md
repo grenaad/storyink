@@ -60,8 +60,17 @@ storyink mermaid <in.mmd> [-o out.json]
 storyink validate <in> [--json]
 storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats]|--no-sheet] [--at 0.5,1.2,end] [--scale 2] [-o dir] [--json]
                   [--preview out.jpg [--preview-size 1024]] [--motion reduced] [--camera follow]
+storyink diff [<range>|<base> [<head>]] [--staged] [--patch file|-] [-o changes.json] [--json] [-- <pathspec>…]
 storyink skill
 ```
+
+**Code changes.** `storyink diff main...HEAD -o changes.json` parses the git diff (default: working
+tree vs the merge base with main/master) and prints a per-file summary. Point elements at code
+with `files` (`"src/x.ts"` or `{ "path", "lines": [a, b] }`) and render with
+`--changes changes.json` (or a `.diff`/`.patch`): `stat` (+/−) is filled in, code nodes with
+`"diff": { "file", "lines" }` get real hunks, the referenced hunks are embedded in the page, and
+coverage warnings list changed files nothing points at. The plugin has the same as `storyink_diff`
+and `storyink_render`'s `changes`. See [docs/spec.md](docs/spec.md#diffs-and---changes).
 
 `snapshot` finds a browser in this order: `$STORYINK_CHROME`, then the newest Playwright
 `chrome-headless-shell`, then system Chrome (`--headless=new`). It writes one PNG per theme and
@@ -192,6 +201,37 @@ receipt gates check that the end frame and the reduced-motion page match the sta
 [docs/spec.md](docs/spec.md#storyboard-story-opt-in).
 
 ![Checkout beats](docs/gallery/checkout.architecture.beats.light.png)
+
+### Change diagrams
+
+Mark what a change did to each element and storyink colours it: `"delta": "added"` (sage, `NEW`),
+`"modified"` (gold, `CHANGED`), `"removed"` (rose ghost, struck label), `"unchanged"` (receded
+context); `"stat": { "add": 38, "del": 12 }` shows `+38 −12`; edges and messages take
+`"emphasis": "hero"` (thick + glow) or `"muted"`; `"change": { "base": "main", "head": "feat/x" }`
+adds `main → feat/x` next to an automatic legend. Works with stories, rich nodes, sequences and
+the animated SVG. See [docs/spec.md](docs/spec.md#change-diagrams) and
+[`examples/changes/`](examples/changes/).
+
+**Diff code nodes.** Give a `code` node `"diff": "@@ … @@\n-old\n+new"` (or `{ "file", "lines" }`
+with `--changes`) for a gutter, +/− rows, intra-line marks and syntax colours; anchor wires to
+changed lines with `node#+14`, and play the change with a story step `"apply": "node"` (base
+version → diff, one hunk at a time with `{ "id", "hunk": 2 }`). See
+[docs/spec.md](docs/spec.md#diff-code-nodes).
+
+### Narration and drawer
+
+Story steps can carry `narrate: { heading?, body, cites? }`: the HTML viewer shows a narration rail
+("02 / 06", heading, body; cites highlight elements or open files) that follows playback and → / ←
+(`N` toggles it). Clicking a changed element opens a drawer with its summary, stat and file refs;
+rendered with `--changes`, it shows the real hunks. The animated SVG uses the heading as the caption.
+See [docs/spec.md](docs/spec.md#narration-and-drawer) and
+`examples/changes/storyink-0.4.0.pr.json`.
+
+**Change stories.** A step `"change": ["old", "new"]` plays a delta (removed parts retract and
+ghost, added ones appear, modified ones flash gold); `"story": "changes"` (or `--story changes`)
+derives the whole walkthrough from the deltas, with narration from `summary`, and
+`"spotlight": "veil"` dims everything outside each step's focus. See
+[docs/spec.md](docs/spec.md#change-stories).
 
 ## Animated SVG (READMEs and PRs)
 

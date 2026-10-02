@@ -1,0 +1,48 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "sequence",
+  "title": "Server sessions to signed JWTs",
+  "subtitle": "The API stops looking up a session row on every request and verifies a token instead",
+  "change": { "base": "main", "head": "auth/jwt-sessions" },
+  "participants": [
+    { "id": "browser", "label": "Browser", "kind": "actor", "delta": "unchanged" },
+    { "id": "api", "label": "API", "kind": "service", "delta": "modified" },
+    { "id": "signer", "label": "Token signer", "kind": "service", "delta": "added" },
+    { "id": "sessions", "label": "Session store", "kind": "database", "delta": "removed" },
+    { "id": "users", "label": "Users DB", "kind": "database", "delta": "unchanged" }
+  ],
+  "messages": [
+    { "id": "login", "from": "browser", "to": "api", "label": "POST /login", "delta": "unchanged" },
+    { "id": "check", "from": "api", "to": "users", "label": "check password", "delta": "unchanged" },
+    { "id": "ok", "from": "users", "to": "api", "label": "user row", "kind": "return", "delta": "unchanged" },
+    { "id": "create", "from": "api", "to": "sessions", "label": "INSERT session", "delta": "removed", "summary": "No session row is written any more." },
+    { "id": "sign", "from": "api", "to": "signer", "label": "sign { sub, exp: 15m }", "delta": "added", "files": [{ "path": "src/auth/sign.ts", "lines": [1, 40] }] },
+    { "id": "token", "from": "signer", "to": "api", "label": "JWT", "kind": "return", "delta": "added" },
+    { "id": "cookie", "from": "api", "to": "browser", "label": "Set-Cookie: token (was sid)", "kind": "return", "delta": "modified", "emphasis": "hero" },
+    { "id": "req", "from": "browser", "to": "api", "label": "GET /orders + cookie", "delta": "unchanged" },
+    { "id": "lookup", "from": "api", "to": "sessions", "label": "SELECT session by sid", "delta": "removed" },
+    { "id": "verify", "from": "api", "to": "api", "label": "verify signature + exp", "kind": "self", "delta": "added", "emphasis": "hero", "summary": "Every request is authenticated locally: no store round trip." },
+    { "id": "orders", "from": "api", "to": "browser", "label": "200 orders", "kind": "return", "delta": "unchanged" }
+  ],
+  "activations": [
+    { "participant": "api", "start": "login", "end": "cookie" },
+    { "participant": "api", "start": "req", "end": "orders" }
+  ],
+  "frames": [
+    { "kind": "loop", "label": "every request", "start": "req", "end": "orders" }
+  ],
+  "story": {
+    "pace": 0.8,
+    "steps": [
+      { "at": 0.3, "pulse": ["login", { "edge": "check", "delay": 0.5 }, { "edge": "ok", "delay": 1 }], "caption": "Login is unchanged: check the password against Users DB", "stop": "Login" },
+      { "pulse": "create", "highlight": "sessions", "caption": "Before: the API wrote a session row and handed back its id" },
+      { "dim": ["sessions"], "caption": "The session store is removed" },
+      { "reveal": ["signer"], "caption": "A token signer is added", "stop": "Sign" },
+      { "pulse": ["sign", { "edge": "token", "delay": 0.6 }], "caption": "The API signs a 15-minute token instead" },
+      { "pulse": "cookie", "highlight": "browser", "caption": "The cookie now carries the token, not a session id" },
+      { "pulse": "req", "caption": "On every request…", "stop": "Request" },
+      { "pulse": "verify", "caption": "…the API verifies the signature locally, no lookup round trip" },
+      { "pulse": "orders", "undim": ["sessions"], "caption": "Two messages removed, three added, one participant gone" }
+    ]
+  }
+}

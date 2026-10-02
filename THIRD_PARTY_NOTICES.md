@@ -55,3 +55,10 @@ The animated SVG export follows the constraints and SMIL patterns of PR Lens's G
 renderer (<https://github.com/coldteadotai/pr-lens>, MIT License, Copyright (c) 2026 Coldtea AI):
 self-contained files, no script or custom properties, animation as SMIL so it plays inside an
 `<img>` behind GitHub's image proxy. No PR Lens code is included.
+
+Change diagrams (`delta`, `emphasis`, `stat`, `summary`, `files`, the legend) follow PR Lens's
+graph schema ideas (element deltas added / modified / removed / unchanged, hero edges, file
+refs). `examples/changes/batch-email.dataflow.json` is a port of PR Lens's reference example
+(`packages/agent-skill/references/example.graph.json`, MIT, Copyright (c) 2026 Coldtea AI): its
+node / edge names and several summary sentences are copied or adapted from that file. No PR Lens
+code is included.

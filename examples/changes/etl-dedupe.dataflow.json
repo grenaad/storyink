@@ -1,0 +1,41 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "dataflow",
+  "title": "Deduplicate events before they reach the warehouse",
+  "subtitle": "The loader keys rows by event id and the warehouse merges instead of appending",
+  "change": { "base": "main", "head": "etl/dedupe" },
+  "nodes": [
+    { "id": "kafka", "label": "events", "kind": "queue", "detail": "Kafka", "delta": "unchanged" },
+    { "id": "loader", "label": "Loader", "kind": "function", "detail": "Python", "delta": "modified", "stat": { "add": 5, "del": 2 } },
+    {
+      "id": "load-py", "kind": "code", "label": "etl/load.py", "lang": "python", "delta": "modified",
+      "diff": "@@ -8,4 +8,5 @@ def batch(rows):\n     out = []\n-    for r in rows:\n+    seen = set()\n+    for r in sorted(rows, key=lambda r: r.ts):\n         out.append(r.to_row())\n@@ -21,3 +22,4 @@ def flush(out):\n-    db.execute(\"COPY events FROM STDIN\", out)\n+    db.execute(\"COPY staging FROM STDIN\", out)\n+    db.execute(open(\"merge.sql\").read())\n     log.info(\"flushed %d\", len(out))"
+    },
+    { "id": "staging", "label": "staging", "kind": "store", "detail": "temp table", "delta": "added" },
+    {
+      "id": "merge-sql", "kind": "code", "label": "etl/merge.sql", "lang": "sql", "delta": "added",
+      "diff": "@@ -0,0 +1,5 @@\n+MERGE INTO events e\n+USING staging s ON e.event_id = s.event_id\n+WHEN NOT MATCHED THEN\n+  INSERT VALUES (s.event_id, s.ts, s.payload);\n+TRUNCATE staging;"
+    },
+    { "id": "warehouse", "label": "events", "kind": "database", "detail": "warehouse", "delta": "modified" }
+  ],
+  "edges": [
+    { "id": "k-l", "from": "kafka", "to": "loader", "delta": "unchanged" },
+    { "id": "l-code", "from": "loader", "to": "load-py", "style": "dashed", "arrow": "none" },
+    { "id": "copy-old", "from": "loader", "to": "warehouse", "label": "COPY (append)", "delta": "removed" },
+    { "id": "copy-new", "from": "load-py#+22", "to": "staging", "label": "COPY", "delta": "added" },
+    { "id": "merge", "from": "staging", "to": "merge-sql", "delta": "added", "style": "dashed", "arrow": "none" },
+    { "id": "upsert", "from": "merge-sql#+1", "to": "warehouse", "label": "MERGE on event_id", "delta": "added", "emphasis": "hero" }
+  ],
+  "story": {
+    "pace": 0.8,
+    "steps": [
+      { "at": 0.3, "pulse": { "route": ["k-l", "copy-old"] }, "caption": "Before: every batch was appended, duplicates and all", "stop": "Before" },
+      { "apply": { "id": "load-py", "hunk": 1 }, "caption": "Hunk 1: batches are sorted by timestamp", "stop": "Batch" },
+      { "line": { "id": "load-py", "hunk": 1 }, "caption": "…so the newest copy of an event wins" },
+      { "line": { "id": "load-py", "off": true }, "apply": { "id": "load-py", "hunk": 2 }, "caption": "Hunk 2: COPY into a staging table, then run merge.sql", "stop": "Flush" },
+      { "reveal": "staging", "wire": "copy-new", "dim": "copy-old", "caption": "Rows land in staging first" },
+      { "reveal": "merge-sql", "wire": "merge", "apply": "merge-sql", "caption": "merge.sql inserts only unseen event ids", "stop": "Merge" },
+      { "wire": "upsert", "pulse": { "route": ["copy-new", "merge", "upsert"] }, "caption": "The warehouse sees each event once" }
+    ]
+  }
+}

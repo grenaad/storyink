@@ -1,0 +1,57 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "architecture",
+  "title": "storyink 0.4.0: content steps in the story engine",
+  "subtitle": "The compiler grows a content pass; storyState and the camera learn about it. Render with --changes storyink-0.4.0.changes.json",
+  "change": { "base": "b526d50~1", "head": "b526d50", "title": "storyink 0.4.0" },
+  "nodes": [
+    { "id": "spec", "label": "story steps", "kind": "client", "detail": "type · set · line · dim · wire", "delta": "modified" },
+    {
+      "id": "compile", "label": "compileStory", "kind": "service", "detail": "story/compile.ts", "delta": "modified",
+      "files": ["src/core/story/compile.ts"], "summary": "A content pass turns the 0.4 steps into timeline events."
+    },
+    {
+      "id": "content", "label": "Content", "kind": "function", "detail": "story/content.ts", "delta": "added",
+      "files": ["src/core/story/content.ts"], "summary": "Typing, versions, bars, levels and wire cycles, in step order."
+    },
+    { "id": "timeline", "label": "Timeline", "kind": "store", "detail": "JSON in the page", "delta": "modified", "files": ["src/core/story/types.ts"] },
+    {
+      "id": "state", "label": "storyState(t)", "kind": "service", "detail": "story/state.ts", "delta": "modified",
+      "files": [{ "path": "src/core/story/state.ts", "lines": [211, 216] }]
+    },
+    { "id": "state-diff", "kind": "code", "label": "story/state.ts", "delta": "modified", "diff": { "file": "src/core/story/state.ts", "lines": [213, 216], "context": 2 } },
+    {
+      "id": "content-state", "label": "contentFrame", "kind": "function", "detail": "story/content-state.ts", "delta": "added",
+      "files": ["src/core/story/content-state.ts"]
+    },
+    {
+      "id": "camera", "label": "stepFocus", "kind": "service", "detail": "story/camera.ts", "delta": "modified",
+      "files": [{ "path": "src/core/story/camera.ts", "lines": [100, 133] }]
+    },
+    { "id": "camera-diff", "kind": "code", "label": "story/camera.ts", "delta": "modified", "diff": { "file": "src/core/story/camera.ts", "lines": [120, 130], "context": 1, "max": 14 } },
+    { "id": "viewer", "label": "Viewer", "kind": "client", "detail": "HTML · animated SVG", "delta": "unchanged" }
+  ],
+  "edges": [
+    { "id": "s-c", "from": "spec", "to": "compile", "delta": "unchanged" },
+    { "id": "c-ct", "from": "compile", "to": "content", "delta": "added" },
+    { "id": "c-tl", "from": "compile", "to": "timeline", "delta": "modified", "label": "typing · versions · bars" },
+    { "id": "tl-st", "from": "timeline", "to": "state", "delta": "unchanged" },
+    { "id": "st-d", "from": "state", "to": "state-diff", "style": "dashed", "arrow": "none" },
+    { "id": "cf", "from": "state-diff#+215", "to": "content-state", "delta": "added", "emphasis": "hero", "label": "contentFrame()" },
+    { "id": "tl-cam", "from": "timeline", "to": "camera", "delta": "unchanged" },
+    { "id": "cam-d", "from": "camera", "to": "camera-diff", "style": "dashed", "arrow": "none" },
+    { "id": "st-v", "from": "state", "to": "viewer", "delta": "unchanged", "label": "frame" },
+    { "id": "cam-v", "from": "camera", "to": "viewer", "delta": "unchanged", "label": "follow" }
+  ],
+  "story": {
+    "pace": 0.8,
+    "steps": [
+      { "at": 0.3, "pulse": { "route": ["s-c", "c-tl", "tl-st", "st-v"] }, "caption": "Steps compile to a timeline; storyState(t) draws any frame from it", "stop": "Before" },
+      { "reveal": "content", "wire": "c-ct", "caption": "0.4 adds a content pass to the compiler", "stop": "Compile" },
+      { "apply": "state-diff", "highlight": "state", "caption": "storyState hands content events to a new contentFrame", "stop": "State" },
+      { "reveal": "content-state", "wire": "cf", "line": "state-diff#+215", "caption": "contentFrame applies typing, versions, bars, levels and wires" },
+      { "line": { "id": "state-diff", "off": true }, "apply": "camera-diff", "highlight": "camera", "caption": "The follow camera frames content events too", "stop": "Camera" },
+      { "pulse": [{ "route": ["tl-st", "st-v"] }, { "route": ["tl-cam", "cam-v"], "delay": 0.3 }], "caption": "Same timeline, one more pass" }
+    ]
+  }
+}
