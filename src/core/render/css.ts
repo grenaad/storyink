@@ -161,8 +161,8 @@ export function fontFaceCss(b400: string, b700: string): string {
 }
 
 /** Viewer page rules (chrome, header, stage); narration rail / drawer rules only when used. */
-export function viewerCss(ui: { narrate?: boolean; drawer?: boolean } = {}): string {
-  return baseViewerCss() + (ui.narrate || ui.drawer ? `\n${sideCss()}` : "") + (ui.narrate ? `\n${railCss()}` : "") + (ui.drawer ? `\n${drawerCss()}` : "")
+export function viewerCss(ui: { narrate?: boolean; drawer?: boolean; page?: boolean } = {}): string {
+  return baseViewerCss() + (ui.page ? `\n${figureCss()}` : "") + (ui.narrate || ui.drawer ? `\n${sideCss()}` : "") + (ui.narrate ? `\n${railCss()}` : "") + (ui.drawer ? `\n${drawerCss()}` : "")
 }
 
 /**
@@ -174,6 +174,37 @@ function sideCss(): string {
 .si-main{flex:1;display:flex;min-height:0;}
 .si-main>.si-stage{flex:1;min-width:0;min-height:160px;}
 @media (max-width:760px){.si-main{flex-direction:column;}.si-main>.si-rail,.si-main>.si-drawer{width:auto;flex:0 1 auto;min-height:96px;max-height:min(50vh,max(96px,calc(100vh - 380px)));border-left:0;border-top:1px solid ${v("chromeLine")};}}
+`.trim()
+}
+
+/**
+ * Page figures (embedded viewers): bordered, aspect-sized stage, captions above, rail beside the
+ * stage when the figure is wide (container query) else below, drawer as a page overlay, Expand.
+ */
+function figureCss(): string {
+  return `
+.si-embedded{height:auto;position:relative;display:flex;flex-direction:column;overflow:hidden;border:1px solid ${v("chromeLine")};border-radius:4px;background:${v("bg")};container-type:inline-size;outline:none;}
+.si-embedded:focus-visible,.si-embedded:focus-within{border-color:${v("inkFaint")};}
+.si-embedded .si-stage{flex:none;width:100%;min-height:260px;}
+.si-canvas.si-canvas-fluid{right:0;padding:32px;}
+.si-canvas-fluid>.si-figure,.si-canvas-fluid svg.storyink{width:100%;height:100%;}
+.si-embedded .si-main{flex:none;align-items:stretch;}
+.si-embedded .si-main>.si-stage{flex:1 1 auto;}
+.si-embedded .si-main>.si-rail{max-height:var(--si-fig-max,90vh);}
+.si-fig-caps{padding:10px 16px 0;}
+.si-fig-caps .si-captions{margin:0;min-height:22px;}
+.si-embedded.si-expanded{position:fixed;inset:0;z-index:40;border:0;border-radius:0;height:100vh;}
+.si-embedded.si-expanded .si-stage,.si-embedded.si-expanded .si-main{flex:1;max-height:none;min-height:0;}
+.si-embedded.si-expanded .si-main>.si-rail{max-height:none;}
+html.si-fig-expanded{overflow:hidden;}
+.si-embedded .si-stage{container-type:inline-size;}
+@container (max-width:860px){.si-embedded .si-main{flex-direction:column;}.si-embedded .si-main>.si-rail{width:auto;max-height:none;border-left:0;border-top:1px solid ${v("chromeLine")};}}
+@container (max-width:900px){.si-embedded .si-stage .si-scrub{width:120px;}}
+@container (max-width:720px){.si-embedded .si-stage .si-time{display:none;}.si-embedded .si-stage .si-scrub{width:72px;margin:0 4px;}.si-embedded .si-stage .si-tick-label{display:none;}}
+.si-drawer-layer .si-drawer{position:fixed;top:0;right:0;bottom:0;z-index:60;width:min(600px,94vw);box-shadow:-12px 0 32px -18px rgba(0,0,0,.35);}
+@media (max-width:760px){.si-drawer-layer .si-drawer{top:auto;left:0;width:auto;height:min(72vh,calc(100vh - 48px));border-left:0;border-top:1px solid ${v("chromeLine")};border-radius:8px 8px 0 0;box-shadow:0 -12px 32px -18px rgba(0,0,0,.35);}}
+html.si-solo #storyink-page{display:none;}
+@media print{.si-embedded .si-tools,.si-embedded .si-transport{display:none!important}.si-drawer-layer{display:none!important}}
 `.trim()
 }
 
@@ -257,6 +288,7 @@ body{background:${v("bg")};color:${v("ink")};font-family:${fonts.mono};-webkit-f
 .si-btn:hover{color:${v("ink")};border-color:${v("chromeLine")};}
 .si-btn:focus-visible{outline:1px solid ${v("inkMuted")};outline-offset:1px;}
 .si-sep{width:1px;background:${v("chromeLine")};margin:3px 2px;}
+.si-sep+.si-sep,.si-sep:first-child,.si-sep:last-child{display:none;}
 .si-sheet{display:grid;grid-template-columns:1fr 1fr;gap:0;flex:1;min-height:0;}
 .si-sheet>div{padding:18px 24px 24px;background:${v("bg")};color:${v("ink")};display:flex;flex-direction:column;min-width:0;}
 .si-sheet .si-sheet-cap{font-size:${T.tag}px;letter-spacing:${T.tagTracking * 1.5}em;text-transform:uppercase;color:${v("inkFaint")};margin:0 0 10px;}

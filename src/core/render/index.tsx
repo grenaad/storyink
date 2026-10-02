@@ -67,6 +67,8 @@ export interface SvgOptions {
   font?: boolean
   /** Story time to render (seconds or "end", default "end" = the static diagram). */
   t?: number | "end"
+  /** Prefix for every DOM id in the SVG (several inline SVGs in one document). Default "". */
+  idPrefix?: string
 }
 
 /** Static, self-contained SVG (React SSR). */
@@ -77,7 +79,7 @@ export function renderSvg(spec: Spec | Scene | unknown, opts: SvgOptions = {}): 
   const style = [opts.font === false ? "" : fontCss(), themeCss("svg.storyink", opts.theme, rich, changes), diagramCss(rich, changes)].filter(Boolean).join("\n")
   const tl = scene.timeline
   const t = !tl || opts.t === undefined || opts.t === "end" ? (tl?.duration ?? 0) : opts.t
-  const markup = renderToStaticMarkup(<Diagram scene={scene} style={style} frame={storyState(scene, tl, t)} />)
+  const markup = renderToStaticMarkup(<Diagram scene={scene} style={style} frame={storyState(scene, tl, t)} {...(opts.idPrefix ? { idPrefix: opts.idPrefix } : {})} />)
   return `<?xml version="1.0" encoding="UTF-8"?>\n${markup}\n`
 }
 

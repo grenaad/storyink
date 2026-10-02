@@ -265,6 +265,42 @@ export const deltaPalettes: Record<ThemeName, DeltaPalette> = {
   },
 }
 
+/**
+ * Page additions (`type: "page"`): the note / context tone (the delta palette carries good = sage,
+ * warn = gold, risk = rose) and page surfaces. Emitted only by page HTML as `--sp-*` variables.
+ */
+export interface PagePalette {
+  note: string
+  noteFill: string
+  /** Raised surface (cards, KPI tiles, callouts). */
+  raised: string
+  /** Figure / table / code surface. */
+  sunken: string
+  /** Link ink. */
+  link: string
+}
+
+export const pagePalettes: Record<ThemeName, PagePalette> = {
+  light: { note: "#4a6a86", noteFill: "#d7dcdf", raised: "#eeede9", sunken: "#e4e3df", link: "#3f5f7c" },
+  dark: { note: "#aec8df", noteFill: "#18202a", raised: "#10100f", sunken: "#0c0c0b", link: "#aec8df" },
+}
+
+/** Page layout and type (px unless noted). */
+export const page = {
+  /** Prose measure (ch of the serif body). */
+  measure: 68,
+  /** Content column max width (figures / tables / diffs break out to it). */
+  wide: 1080,
+  /** TOC column width and the viewport it appears at. */
+  tocW: 196,
+  tocMin: 1180,
+  body: 17,
+  lead: 20,
+  h1: 40,
+  h2: 26,
+  h3: 19,
+}
+
 /** Change-diagram geometry and levels. */
 export const delta = {
   /** Removed elements: ghost level. */

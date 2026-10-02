@@ -8,8 +8,9 @@ import { resolveChanges } from "./core/diff/resolve.ts"
 import { changesStoryOf } from "./core/story/changes.ts"
 import type { Spec } from "./core/spec.ts"
 import { diffSetFrom, diffSetJson, diffSummary, gitDiff } from "./node/git.ts"
-import { loadSpec, parseSource, setStoryCamera, setStoryMotion, setStoryPace, snapshot, writeAnimatedSvg, writeDiagram } from "./node/index.ts"
+import { parseSource, setStoryCamera, setStoryMotion, setStoryPace, snapshot, writeAnimatedSvg, writeDiagram } from "./node/index.ts"
 import type { ThemeName } from "./theme/tokens.ts"
+import { loadPage, looksLikePage, writePage } from "./node/page.ts"
 
 const COLOR = !!process.stdout.isTTY && !process.env.NO_COLOR
 const ECOLOR = !!process.stderr.isTTY && !process.env.NO_COLOR
@@ -31,13 +32,17 @@ ${bold("Usage")}
                  [--animated-svg out.svg [--theme light|dark|both] [--once] [--font system|embed]]
                    animated SVG (SMIL) for READMEs / PRs: plays inside <img>, no script
                  [--changes changes.json|x.diff|x.patch]   resolve files / stat / diff nodes from a diff
+  storyink render <page.json> [-o page.html] [--theme light|dark] [--changes changes.json]
+                   a page ("type": "page"): prose, data blocks and figures; figure spec paths are
+                   relative to the page file; HTML only (--svg / --animated-svg are errors)
   storyink diff [<range>|<base> [<head>]] [--staged] [--patch file|-] [-o changes.json] [--json] [-- <pathspec>…]
                    parse git diff (default: working tree vs merge base with main/master)
   storyink mermaid <in.mmd> [-o out.json]
-  storyink validate <in> [--json]
+  storyink validate <in|page.json> [--json]
   storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats]|--no-sheet]
                    [--at 0.5,1.2,end] [--motion reduced] [--camera follow] [--pace N] [--scale 2] [-o dir] [--json]
                    [--rail] [--drawer <id|path>]   narration rail / change drawer in the --at captures
+                   [--figure <id>]   page HTML: snapshot one figure (default: full-page captures)
                    [--preview out.jpg [--preview-size 1024]]   compact one-image preview for agents
   storyink skill            print the SKILL.md path and content
   storyink --help | --version
@@ -63,7 +68,7 @@ function parseArgs(argv: string[]): Args {
   const _: string[] = []
   const flags = new Map<string, string | true>()
   const rest: string[] = []
-  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size", "--animated-svg", "--font", "--motion", "--camera", "--pace", "--patch", "--changes", "--drawer"])
+  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size", "--animated-svg", "--font", "--motion", "--camera", "--pace", "--patch", "--changes", "--drawer", "--figure"])
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "--") {
@@ -127,6 +132,19 @@ async function main(argv: string[]): Promise<number> {
     if (!file) throw new Error("render needs an input file (or - for stdin)")
     const input = readInput(file)
     const changesFile = str(a, "--changes")
+    if (looksLikePage(input.text)) {
+      for (const f of ["--svg", "--animated-svg"]) if (a.flags.has(f)) throw new Error(`${f} renders one diagram; a page is HTML only (render a figure's spec file for its SVG)`)
+      for (const f of ["--story", "--motion", "--camera", "--pace"]) if (a.flags.has(f)) process.stderr.write(`${yellow("warn ")} ${f} ignored for pages: set it in each figure's spec\n`)
+      const ds = changesFile ? diffSetFrom(fs.readFileSync(changesFile, "utf8"), changesFile) : undefined
+      const loaded = loadPage(input.text, input.name ? path.dirname(path.resolve(input.name)) : process.cwd(), ds)
+      printDiagnostics(loaded.diagnostics)
+      if (!loaded.ok || !loaded.page) return 1
+      const out = str(a, "-o", "--out") ?? (input.name ? input.name.replace(/\.json$/i, "") + ".html" : "page.html")
+      const pinned = theme(a)
+      const res = writePage(loaded.page, out, pinned ? { theme: pinned } : {})
+      console.log(`${green("wrote")} ${res.path} ${dim(kb(res.bytes))}`)
+      return 0
+    }
     if (changesFile) {
       const ds = diffSetFrom(fs.readFileSync(changesFile, "utf8"), changesFile)
       let raw: unknown
@@ -239,7 +257,18 @@ async function main(argv: string[]): Promise<number> {
   if (cmd === "validate") {
     const file = a._[1]
     if (!file) throw new Error("validate needs an input file")
-    const loaded = file === "-" ? parseSource(fs.readFileSync(0, "utf8")) : loadSpec(file)
+    const text = fs.readFileSync(file === "-" ? 0 : file, "utf8")
+    if (looksLikePage(text)) {
+      const p = loadPage(text, file === "-" ? process.cwd() : path.dirname(path.resolve(file)))
+      if (a.flags.has("--json")) console.log(JSON.stringify({ ok: p.ok, source: "page", diagnostics: p.diagnostics }, null, 2))
+      else {
+        printDiagnostics(p.diagnostics)
+        if (p.ok) console.log(`${green("ok")} ${file} ${dim("(page)")}`)
+        else process.stderr.write(red(`invalid: ${p.diagnostics.filter((d) => d.severity === "error").length} error(s)\n`))
+      }
+      return p.ok ? 0 : 1
+    }
+    const loaded = file === "-" ? parseSource(text) : parseSource(text, file)
     if (a.flags.has("--json")) console.log(JSON.stringify({ ok: loaded.ok, source: loaded.source, diagnostics: loaded.diagnostics }, null, 2))
     else {
       printDiagnostics(loaded.diagnostics)
@@ -270,6 +299,7 @@ async function main(argv: string[]): Promise<number> {
       ...(str(a, "--pace") !== undefined ? { pace: Number(str(a, "--pace")) } : {}),
       ...(a.flags.has("--rail") ? { rail: true } : {}),
       ...(str(a, "--drawer") ? { drawer: str(a, "--drawer") } : {}),
+      ...(str(a, "--figure") ? { figure: str(a, "--figure") } : {}),
       ...(str(a, "-o", "--out") ? { outDir: str(a, "-o", "--out") } : {}),
       ...(str(a, "--t") ? { t: str(a, "--t") } : {}),
     })

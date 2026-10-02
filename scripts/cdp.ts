@@ -139,13 +139,16 @@ export async function session(flags: string[], size = { width: 1600, height: 900
   }
   let id = 0
   const pending = new Map<number, (v: any) => void>()
-  ws.onmessage = (e) => { const m = JSON.parse(String(e.data)); if (m.id && pending.has(m.id)) { pending.get(m.id)!(m); pending.delete(m.id) } }
+  const listeners = new Map<string, ((p: any) => void)[]>()
+  ws.onmessage = (e) => { const m = JSON.parse(String(e.data)); if (m.id && pending.has(m.id)) { pending.get(m.id)!(m); pending.delete(m.id) } else if (m.method) for (const f of listeners.get(m.method) ?? []) f(m.params) }
   const send = (method: string, params: any = {}) => rpc(ws, pending, ++id, method, params)
   await send("Page.enable")
   await send("Emulation.setDeviceMetricsOverride", { width: size.width, height: size.height, deviceScaleFactor: 1, mobile: false })
   const ev = async (expr: string) => (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true })).result?.result?.value
   return {
     send, ev,
+    /** CDP event listener (e.g. "Runtime.exceptionThrown"). */
+    on(method: string, f: (p: any) => void) { listeners.set(method, [...(listeners.get(method) ?? []), f]) },
     async go(url: string) { await send("Page.navigate", { url }); await Bun.sleep(1200) },
     async shot(file: string) { const s = await send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(file, Buffer.from(s.result.data, "base64")) },
     /** On-screen centre of the first element matching `selector` (null if absent or zero-size). */

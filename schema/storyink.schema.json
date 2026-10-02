@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://unpkg.com/storyink/schema/storyink.schema.json",
   "title": "storyink diagram spec",
-  "description": "One spec shape for architecture, workflow, sequence, dataflow and lifecycle diagrams. See docs/spec.md.",
+  "description": "One spec shape for architecture, workflow, sequence, dataflow and lifecycle diagrams, and pages (\"type\": \"page\") that embed them. See docs/spec.md.",
   "type": "object",
   "required": [
     "type",
@@ -18,7 +18,8 @@
         "workflow",
         "sequence",
         "dataflow",
-        "lifecycle"
+        "lifecycle",
+        "page"
       ]
     },
     "title": {
@@ -479,18 +480,22 @@
   },
   "allOf": [
     {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "sequence"
-          }
-        }
-      },
-      "then": {
-        "$ref": "#/$defs/sequence"
-      },
+      "if": { "properties": { "type": { "const": "page" } }, "required": ["type"] },
+      "then": { "$ref": "#/$defs/page" },
       "else": {
-        "$ref": "#/$defs/graph"
+        "if": {
+          "properties": {
+            "type": {
+              "const": "sequence"
+            }
+          }
+        },
+        "then": {
+          "$ref": "#/$defs/sequence"
+        },
+        "else": {
+          "$ref": "#/$defs/graph"
+        }
       }
     },
     {
@@ -564,6 +569,776 @@
     }
   ],
   "$defs": {
+    "page": {
+      "description": "A page (\"type\": \"page\"): an explainer document of prose, data blocks and embedded diagrams. See docs/spec.md \"Pages\".",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "title",
+        "sections"
+      ],
+      "properties": {
+        "$schema": {
+          "type": "string"
+        },
+        "type": {
+          "const": "page"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "eyebrow": {
+          "type": "string"
+        },
+        "subtitle": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "change": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "base": {
+              "type": "string"
+            },
+            "head": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          }
+        },
+        "toc": {
+          "type": "boolean",
+          "description": "Table of contents (default: shown with 4 or more sections)."
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "title",
+              "blocks"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_\\-]*$"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "eyebrow": {
+                "type": "string"
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/pageBlock"
+                }
+              }
+            }
+          }
+        },
+        "changes": {
+          "type": "object",
+          "required": [
+            "files"
+          ],
+          "description": "Written by --changes (not hand-written)."
+        }
+      }
+    },
+    "pageBlock": {
+      "description": "A page block: exactly one type key, plus an optional anchor id.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_\\-]*$"
+        },
+        "prose": {
+          "type": "string",
+          "description": "Safe Markdown subset: paragraphs, - / 1. lists, ### / #### headings, > quotes, **bold**, *italic*, `code`, [text](url). No raw HTML."
+        },
+        "figure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "spec"
+          ],
+          "properties": {
+            "spec": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "$ref": "#"
+                }
+              ],
+              "description": "A diagram spec, or a path relative to the page file (resolved by the CLI / plugin)."
+            },
+            "claim": {
+              "type": "string",
+              "description": "Caption stating the figure's point."
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_\\-]*$"
+            },
+            "wide": {
+              "type": "boolean"
+            }
+          }
+        },
+        "kpis": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "label",
+              "value"
+            ],
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "detail": {
+                "type": "string"
+              },
+              "tone": {
+                "enum": [
+                  "neutral",
+                  "note",
+                  "good",
+                  "warn",
+                  "risk"
+                ]
+              }
+            }
+          }
+        },
+        "table": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "columns",
+            "rows"
+          ],
+          "properties": {
+            "columns": {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "label"
+                    ],
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "align": {
+                        "enum": [
+                          "left",
+                          "right",
+                          "center"
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "text"
+                      ],
+                      "properties": {
+                        "text": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "tone": {
+                          "enum": [
+                            "neutral",
+                            "note",
+                            "good",
+                            "warn",
+                            "risk"
+                          ]
+                        },
+                        "badge": {
+                          "type": "boolean"
+                        },
+                        "code": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "caption": {
+              "type": "string"
+            }
+          }
+        },
+        "cards": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "title",
+              "body"
+            ],
+            "properties": {
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "body": {
+                "type": "string",
+                "minLength": 1
+              },
+              "tag": {
+                "type": "string"
+              },
+              "tone": {
+                "enum": [
+                  "neutral",
+                  "note",
+                  "good",
+                  "warn",
+                  "risk"
+                ]
+              },
+              "delta": {
+                "$ref": "#/$defs/delta"
+              }
+            }
+          }
+        },
+        "callout": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tone",
+            "body"
+          ],
+          "properties": {
+            "tone": {
+              "enum": [
+                "note",
+                "good",
+                "warn",
+                "risk"
+              ]
+            },
+            "title": {
+              "type": "string"
+            },
+            "body": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "filemap": {
+          "anyOf": [
+            {
+              "const": "changes"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "files"
+              ],
+              "properties": {
+                "files": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "path",
+                      "status"
+                    ],
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "status": {
+                        "enum": [
+                          "added",
+                          "modified",
+                          "removed",
+                          "renamed",
+                          "copied"
+                        ]
+                      },
+                      "add": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "del": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "note": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "from"
+              ],
+              "properties": {
+                "from": {
+                  "const": "changes"
+                },
+                "notes": {
+                  "type": "object"
+                }
+              }
+            }
+          ]
+        },
+        "diff": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "file"
+              ],
+              "properties": {
+                "file": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "lines": {
+                  "oneOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "minItems": 2,
+                      "maxItems": 2
+                    }
+                  ]
+                },
+                "context": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "max": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "text"
+              ],
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "file": {
+                  "type": "string"
+                },
+                "lang": {
+                  "enum": [
+                    "ts",
+                    "js",
+                    "json",
+                    "text",
+                    "py",
+                    "go",
+                    "rust",
+                    "sql",
+                    "yaml",
+                    "sh"
+                  ]
+                },
+                "max": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          ]
+        },
+        "code": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/codeText"
+            },
+            "lang": {
+              "enum": [
+                "ts",
+                "js",
+                "json",
+                "text",
+                "py",
+                "go",
+                "rust",
+                "sql",
+                "yaml",
+                "sh"
+              ]
+            },
+            "file": {
+              "type": "string"
+            },
+            "start": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "risks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "risk",
+              "severity"
+            ],
+            "properties": {
+              "risk": {
+                "type": "string",
+                "minLength": 1
+              },
+              "severity": {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "critical"
+                ]
+              },
+              "area": {
+                "type": "string"
+              },
+              "mitigation": {
+                "type": "string"
+              },
+              "refs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "File refs like \"src/x.ts#L12-20\" (rendered mono)."
+              }
+            }
+          }
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "decision",
+              "confidence"
+            ],
+            "properties": {
+              "decision": {
+                "type": "string",
+                "minLength": 1
+              },
+              "why": {
+                "type": "string"
+              },
+              "confidence": {
+                "enum": [
+                  "sourced",
+                  "inferred",
+                  "unknown"
+                ]
+              },
+              "refs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "File refs like \"src/x.ts#L12-20\" (rendered mono)."
+              }
+            }
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "claim",
+              "source"
+            ],
+            "properties": {
+              "claim": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "enum": [
+                  "verified",
+                  "corrected",
+                  "unsupported",
+                  "unverifiable"
+                ]
+              }
+            }
+          }
+        },
+        "timeline": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "when",
+              "title"
+            ],
+            "properties": {
+              "when": {
+                "type": "string",
+                "minLength": 1
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "body": {
+                "type": "string"
+              },
+              "tone": {
+                "enum": [
+                  "neutral",
+                  "note",
+                  "good",
+                  "warn",
+                  "risk"
+                ]
+              }
+            }
+          }
+        },
+        "checklist": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "text"
+            ],
+            "properties": {
+              "text": {
+                "type": "string",
+                "minLength": 1
+              },
+              "done": {
+                "type": "boolean"
+              },
+              "note": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "details": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "summary",
+            "blocks"
+          ],
+          "properties": {
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "blocks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/pageBlock"
+              }
+            }
+          }
+        },
+        "columns": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3,
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/pageBlock"
+            }
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "prose"
+          ]
+        },
+        {
+          "required": [
+            "figure"
+          ]
+        },
+        {
+          "required": [
+            "kpis"
+          ]
+        },
+        {
+          "required": [
+            "table"
+          ]
+        },
+        {
+          "required": [
+            "cards"
+          ]
+        },
+        {
+          "required": [
+            "callout"
+          ]
+        },
+        {
+          "required": [
+            "filemap"
+          ]
+        },
+        {
+          "required": [
+            "diff"
+          ]
+        },
+        {
+          "required": [
+            "code"
+          ]
+        },
+        {
+          "required": [
+            "risks"
+          ]
+        },
+        {
+          "required": [
+            "decisions"
+          ]
+        },
+        {
+          "required": [
+            "evidence"
+          ]
+        },
+        {
+          "required": [
+            "timeline"
+          ]
+        },
+        {
+          "required": [
+            "checklist"
+          ]
+        },
+        {
+          "required": [
+            "details"
+          ]
+        },
+        {
+          "required": [
+            "columns"
+          ]
+        }
+      ]
+    },
     "narrate": {
       "type": "object",
       "description": "Step narration for the HTML viewer's rail. heading defaults to the step's stop; a narrated step without a caption captions with its heading (or the body's first sentence).",

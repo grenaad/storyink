@@ -3,7 +3,8 @@
  * the spec embeds `changes` (`render --changes`), the hunks each ref selects as an HTML diff.
  */
 import type { ReactElement } from "react"
-import { diffRows, findFile, langForPath, selectHunks, sideOf, type DiffRow, type DiffSet } from "../diff/index.ts"
+import { diffRows, findFile, langForPath, selectHunks, sideOf, type DiffSet } from "../diff/index.ts"
+import { DiffRowsView } from "./DiffView.tsx"
 import type { CodeLang, ChangeStat, Delta, FileRef } from "../spec.ts"
 import type { Scene } from "../scene.ts"
 import { CODE_LANGS } from "../spec.ts"
@@ -80,32 +81,6 @@ const langOf = (l: string | undefined, path: string): CodeLang => ((CODE_LANGS a
 
 export const fmtLines = (r: FileRef): string => (r.lines === undefined ? "" : typeof r.lines === "number" ? `#L${r.lines}` : `#L${r.lines[0]}-${r.lines[1]}`)
 
-/** Row text as spans: syntax token classes, intra-line marks. */
-function RowCode({ row }: { row: DiffRow }): ReactElement {
-  const text = row.text
-  const cuts = new Set<number>([0, text.length])
-  for (const t of row.tokens) {
-    cuts.add(t.c)
-    cuts.add(Math.min(text.length, t.c + t.t.length))
-  }
-  for (const [a, b] of row.marks ?? []) {
-    cuts.add(Math.max(0, Math.min(text.length, a)))
-    cuts.add(Math.max(0, Math.min(text.length, b)))
-  }
-  const xs = [...cuts].sort((a, b) => a - b)
-  const out: ReactElement[] = []
-  for (let i = 0; i + 1 < xs.length; i++) {
-    const a = xs[i]
-    const b = xs[i + 1]
-    if (b <= a) continue
-    const tok = row.tokens.find((t) => t.c <= a && a < t.c + t.t.length)
-    const mark = (row.marks ?? []).some(([m0, m1]) => m0 <= a && a < m1)
-    const cls = [tok?.k ? `si-dk-${tok.k}` : "", mark ? "si-dmark" : ""].filter(Boolean).join(" ")
-    out.push(cls ? <span key={a} className={cls}>{text.slice(a, b)}</span> : <span key={a}>{text.slice(a, b)}</span>)
-  }
-  return <>{out}</>
-}
-
 /** One file ref: path (+ range) and, with embedded changes, its hunks as a diff table. */
 export function FileDiff({ scene, fileRef, removed }: { scene: Scene; fileRef: FileRef; removed?: boolean }): ReactElement {
   const ds = asDiffSet(scene)
@@ -120,24 +95,7 @@ export function FileDiff({ scene, fileRef, removed }: { scene: Scene; fileRef: F
         {f ? <span className={`si-dstatus si-dstatus-${f.status}`}>{f.status}</span> : null}
       </p>
       {rows.length ? (
-        <div className="si-diff" role="table">
-          {rows.map((r, i) =>
-            r.kind === "hunk" || r.kind === "fold" ? (
-              <div key={i} className={`si-drow si-drow-${r.kind}`} role="row">
-                <span className="si-dtext">{r.text}</span>
-              </div>
-            ) : (
-              <div key={i} className={`si-drow si-drow-${r.kind}`} role="row">
-                <span className="si-dno">{r.old ?? ""}</span>
-                <span className="si-dno">{r.new ?? ""}</span>
-                <span className="si-dsign">{r.kind === "add" ? "+" : r.kind === "del" ? "\u2212" : " "}</span>
-                <span className="si-dtext">
-                  <RowCode row={r} />
-                </span>
-              </div>
-            ),
-          )}
-        </div>
+        <DiffRowsView rows={rows} />
       ) : ds && !f ? (
         <p className="si-dnote">Not in the embedded diff.</p>
       ) : null}

@@ -4,3 +4,4 @@ src/generated
 *.tgz
 .DS_Store
 examples/changes/out
+examples/pages/out

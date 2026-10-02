@@ -35,6 +35,11 @@ export interface SnapshotOptions {
   rail?: boolean
   /** `at` captures: open the change drawer on this element id or file path (`#drawer=`). */
   drawer?: string
+  /**
+   * Page HTML: run the single-diagram pipeline on this figure (`#fig=<id>&solo=1`). Without it a
+   * page gets full-page captures per theme.
+   */
+  figure?: string
   /** Reading-hold pace for every capture (`#pace=`; default: the HTML's author pace). */
   pace?: number
   /** Output directory (default: next to the HTML file). */
@@ -95,6 +100,8 @@ export interface SnapshotReceipt {
   /** Compact previews (JPEG, longest side ≤ maxSize) for inline image results. */
   previews?: Preview[]
   story?: { duration: number; steps: number }
+  /** Page HTML (full-page captures): its figure ids and the captured page size. */
+  page?: { figures: string[]; width: number; height: number }
   lint?: unknown
   gates: Gate[]
   ok: boolean
@@ -111,7 +118,24 @@ export interface SnapshotResult {
 
 const HARD_TIMEOUT = 15_000
 
-function readScene(html: string): { viewBox: Box; title: string; subtitle?: string; timeline?: { duration: number; steps: unknown[] } } {
+type SnapScene = { viewBox: Box; title: string; subtitle?: string; timeline?: { duration: number; steps: unknown[] } }
+
+/** Page HTML (`type: "page"`): its figures' scenes, or undefined for a single-diagram page. */
+export function readPageFigures(html: string): Record<string, { scene: SnapScene }> | undefined {
+  const m = /<script type="application\/json" id="storyink-page-data">([\s\S]*?)<\/script>/.exec(html)
+  return m ? (JSON.parse(m[1]).figures as Record<string, { scene: SnapScene }>) : undefined
+}
+
+function readScene(html: string, figure?: string): SnapScene {
+  const figs = readPageFigures(html)
+  if (figs) {
+    const ids = Object.keys(figs)
+    if (figure && !figs[figure]) throw new Error(`no figure "${figure}" in this page (figures: ${ids.join(", ") || "none"})`)
+    const f = figs[figure ?? ids[0]]
+    if (!f) throw new Error("page has no figures")
+    return f.scene
+  }
+  if (figure) throw new Error("--figure needs a page HTML (type: page)")
   const m = /<script type="application\/json" id="storyink-data">([\s\S]*?)<\/script>/.exec(html)
   if (!m) throw new Error("not a storyink HTML file (no #storyink-data)")
   const data = JSON.parse(m[1])
@@ -220,15 +244,19 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   if (!browser) return { code: 2, error: "no Chrome/Chromium found (set STORYINK_CHROME)" }
   const abs = path.resolve(htmlPath)
   const html = fs.readFileSync(abs, "utf8")
-  const scene = readScene(html)
+  const pageFigs = readPageFigures(html)
+  const scene = readScene(html, opts.figure)
   const vb = scene.viewBox
   const themes = opts.themes?.length ? opts.themes : (["light", "dark"] as ThemeName[])
   const outDir = path.resolve(opts.outDir ?? path.dirname(abs))
   fs.mkdirSync(outDir, { recursive: true })
-  const base = path.basename(abs).replace(/\.html?$/i, "")
+  const base = path.basename(abs).replace(/\.html?$/i, "") + (pageFigs && opts.figure ? `.${opts.figure.replace(/[^\w-]/g, "_")}` : "")
+  /** `--figure`: every capture shows that figure alone, with the standalone chrome. */
+  const solo = pageFigs && opts.figure ? `fig=${encodeURIComponent(opts.figure)}&solo=1&` : ""
   const scale = opts.scale ?? 1
   const timeoutMs = opts.timeoutMs ?? HARD_TIMEOUT
-  const budget = opts.budgetMs ?? 3000
+  // Pages hydrate several figures: a longer virtual-time budget before the capture.
+  const budget = opts.budgetMs ?? (pageFigs && !opts.figure ? 6000 : 3000)
   // Viewer header (kind line, serif title, optional subtitle, caption slot for stories).
   // `pace`: pinned on every page (#pace=) and recompiled here for this module's own times.
   const pinPace = opts.pace !== undefined && Number.isFinite(opts.pace) && opts.pace >= 0 && opts.pace <= 10 ? opts.pace : undefined
@@ -248,7 +276,7 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   const s = Math.min(1, (W - 64) / vb.w)
   const H = Math.round(headerH + vb.h * s + 64 + 8)
   const FW = Math.round(Math.max(500, opts.width ?? 1280))
-  const url = (hash: string) => `${pathToFileURL(abs).href}#${hash}${pinPace !== undefined && tl ? `&pace=${pinPace}` : ""}`
+  const url = (hash: string) => `${pathToFileURL(abs).href}#${solo}${hash}${pinPace !== undefined && tl ? `&pace=${pinPace}` : ""}`
 
   const baseFlags = [
     ...(browser.flavor === "chrome" ? ["--headless=new"] : []),
@@ -369,6 +397,7 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
     }
     return out
   }
+  if (pageFigs && !opts.figure) return snapshotPage()
   let lint: unknown
   try {
     for (const theme of themes)
@@ -500,6 +529,80 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   const receiptPath = path.join(outDir, `${base}.receipt.json`)
   fs.writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`)
   return { code: receipt.ok ? 0 : 1, receipt, receiptPath }
+
+  /**
+   * Page HTML without `--figure`: one full-page PNG per theme (width default 1280, height measured
+   * in-page), gates ready / lint (figures + page text) / deterministic, optional compact preview
+   * (tall pages split into ≤ 3 parts). Figures are capped at a fixed height (`#figmax=`) so the
+   * page lays out the same whatever the window height.
+   */
+  async function snapshotPage(): Promise<SnapshotResult> {
+    const PW = Math.round(Math.max(500, opts.width ?? 1280))
+    // Figures at their final frame (deterministic, no gate), capped at a fixed height.
+    const fq = `&static=1&figmax=${Math.round(0.9 * 900)}`
+    const pgates: Gate[] = []
+    const pcaps: Capture[] = []
+    const pprev: Preview[] = []
+    let plint: unknown
+    let PH = 0
+    try {
+      for (const theme of themes) {
+        const h = Math.min(16000, (await measure(`theme=${theme}${fq}`, PW)) ?? 2400)
+        PH = PH || h
+        const png = path.join(outDir, `${base}.${theme}.png`)
+        const ms = await shoot(`theme=${theme}${fq}`, png, PW, h)
+        pcaps.push({ theme, png, sha256: sha256(png), bytes: fs.statSync(png).size, width: PW * scale, height: h * scale, ms })
+      }
+      const first = pcaps[0]
+      const again = path.join(tmpRoot, "page-again.png")
+      await shoot(`theme=${first.theme}${fq}`, again, PW, first.height / scale)
+      const same = sha256(again) === first.sha256
+      pgates.push({ name: "deterministic", pass: same, detail: same ? `${first.theme} page captured twice: identical` : `${first.theme} page differs between runs` })
+      if (opts.preview) {
+        const p = opts.preview
+        const maxSize = Math.max(256, Math.min(4096, p.maxSize ?? 1024))
+        const maxBytes = p.maxBytes ?? 300 * 1024
+        const file0 = p.path ? path.resolve(p.path) : path.join(outDir, `${base}.preview.jpg`)
+        fs.mkdirSync(path.dirname(file0), { recursive: true })
+        const n = Math.max(1, Math.min(3, Math.ceil(PH / (PW * 1.5))))
+        const ph = Math.ceil(PH / n)
+        for (let k = 0; k < n; k++) {
+          const file = n === 1 ? file0 : file0.replace(/(\.[a-z]+)?$/i, (ext) => `-${k + 1}${ext || ".jpg"}`)
+          const r = await shootSmall(`theme=${themes[0]}${fq}&scroll=${k * ph}`, PW, ph, file, maxSize, maxBytes)
+          pprev.push({ path: file, ...r, shows: n === 1 ? `the whole page, ${themes[0]}` : `page part ${k + 1}/${n} (from y=${k * ph}), ${themes[0]}` })
+        }
+      }
+      const dom = await run(browser!.path, [...baseFlags, fresh(), `--window-size=${PW},900`, "--dump-dom", url(`theme=${themes[0]}${fq}`)], { timeoutMs, untilStdout: /<\/html>\s*$/, signal: opts.signal })
+      const ready = /<html[^>]*data-ready="1"/.test(dom.stdout)
+      pgates.push({ name: "ready", pass: ready, detail: ready ? `${Object.keys(pageFigs!).length} figure(s) hydrated, fonts ready` : "page never signalled ready" })
+      const lm = /<script type="application\/json" id="storyink-lint">([\s\S]*?)<\/script>/.exec(dom.stdout)
+      if (lm) {
+        plint = JSON.parse(lm[1])
+        const l = plint as { ok: boolean; figures?: Record<string, { ok: boolean; issues: unknown[] }>; page?: { issues: unknown[] } }
+        const n = Object.values(l.figures ?? {}).reduce((a, f) => a + (f.issues?.length ?? 0), 0) + (l.page?.issues.length ?? 0)
+        pgates.push({ name: "lint", pass: l.ok, detail: l.ok ? "figures and page text: no overflow or overlap" : `${n} issue(s)` })
+      } else pgates.push({ name: "lint", pass: false, detail: "no lint output in DOM" })
+    } catch (e) {
+      pgates.push({ name: "capture", pass: false, detail: (e as Error).message })
+    } finally {
+      fs.rmSync(tmpRoot, { recursive: true, force: true })
+    }
+    const rc: SnapshotReceipt = {
+      html: abs,
+      browser: { path: browser!.path, version: browser!.version ?? browserVersion(browser!.path), flavor: browser!.flavor, source: browser!.source },
+      flags: [...baseFlags, "--user-data-dir=<fresh tmp>", `--window-size=${PW},<page height>`],
+      captures: pcaps,
+      ...(pprev.length ? { previews: pprev } : {}),
+      page: { figures: Object.keys(pageFigs!), width: PW, height: PH },
+      ...(plint ? { lint: plint } : {}),
+      gates: pgates,
+      ok: pgates.every((g) => g.pass),
+      createdAt: new Date().toISOString(),
+    }
+    const rp = path.join(outDir, `${base}.receipt.json`)
+    fs.writeFileSync(rp, `${JSON.stringify(rc, null, 2)}\n`)
+    return { code: rc.ok ? 0 : 1, receipt: rc, receiptPath: rp }
+  }
 }
 
 /**

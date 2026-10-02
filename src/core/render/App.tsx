@@ -1,6 +1,6 @@
 import { animate, domAnimation, LazyMotion, m, useMotionValue } from "motion/react"
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react"
-import { flushSync } from "react-dom"
+import { createPortal, flushSync } from "react-dom"
 import type { Frame, Timeline } from "../story/types.ts"
 import { BeatSheet, Captions, Gate, Transport, useStory } from "./Story.tsx"
 import { motion as M, palettes, cssVar, type Palette, type ThemeName } from "../../theme/tokens.ts"
@@ -56,7 +56,31 @@ export interface HashParams {
   drawer?: string
   /** `#rail=0|1`: hide / show the narration rail (`rail=1` also shows it under `#chrome=0`). */
   rail?: boolean
+  /** Pages: `#fig=<id>` scopes the other params to that figure; `#solo=1` shows only it. */
+  fig?: string
+  solo?: boolean
 }
+
+/**
+ * A page figure's view of the hash: `theme` always (page-wide); everything else only when
+ * `#fig=<id>` names this figure. Other hashes (TOC anchors…) parse to the defaults.
+ */
+export function figureHash(hash: string, id: string): HashParams {
+  const all = parseHash(hash)
+  const { fig, solo: _solo, ...rest } = all
+  // Page-wide: `theme`, and `static=1` (every figure at its final frame; snapshots, print).
+  if (fig !== id) return { chrome: true, ...(all.theme ? { theme: all.theme } : {}), ...(all.still ? { still: true } : {}) }
+  return rest
+}
+
+/** Embedded (page figure) mode. */
+export interface Embedded {
+  /** Figure id (unique in the page). */
+  id: string
+}
+
+/** DOM id prefix for a page figure's SVG defs (and the viewer's own filters). */
+export const figurePrefix = (id: string): string => `f-${id.replace(/[^\w-]/g, "_")}-`
 
 export function parseHash(hash: string): HashParams {
   const p = new URLSearchParams(hash.replace(/^#/, ""))
@@ -82,6 +106,8 @@ export function parseHash(hash: string): HashParams {
     ...(/^\d+-\d+$/.test(p.get("range") ?? "") ? { range: p.get("range")!.split("-").map(Number) as [number, number] } : {}),
     ...(p.get("drawer") ? { drawer: p.get("drawer")! } : {}),
     ...(p.get("rail") === "1" || p.get("rail") === "0" ? { rail: p.get("rail") === "1" } : {}),
+    ...(p.get("fig") ? { fig: p.get("fig")! } : {}),
+    ...(p.get("solo") === "1" ? { solo: true } : {}),
   }
 }
 
@@ -218,7 +244,22 @@ function applyTheme(next: ThemeName, animated: boolean) {
 }
 
 /** Viewer shell. Server-rendered with defaults, then hydrated; hash state applies after hydration. */
-export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): ReactElement {
+export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks; embedded?: Embedded }): ReactElement {
+  /** Embedded figure: root element (focus scope), expanded state, drawer layer. */
+  const root = useRef<HTMLDivElement>(null)
+  const layer = useRef<HTMLDivElement>(null)
+  const [expanded, setExpanded] = useState(false)
+  const expandedRef = useRef(expanded)
+  expandedRef.current = expanded
+  const pfx = embedded ? figurePrefix(embedded.id) : ""
+  /** Keys act on this viewer: always standalone; in a page only when the figure has focus. */
+  const owns = () => {
+    if (!embedded) return true
+    const a = document.activeElement
+    return !!a && (!!root.current?.contains(a) || !!layer.current?.contains(a))
+  }
+  const ownsRef = useRef(owns)
+  ownsRef.current = owns
   const stage = useRef<HTMLDivElement>(null)
   /** Called when a manual pan starts (the follow camera suspends on it). */
   const onPanStart = useRef<() => void>(() => {})
@@ -298,7 +339,8 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
       const el = stage.current
       if (!el) return
       // Snap to whole pixels / 1/64 scale steps so repeated captures rasterize identically.
-      const c = fitCamera(vb, { w: el.clientWidth, h: el.clientHeight })
+      // Page figures keep the diagram clear of the transport / toolbar strip.
+      const c = fitCamera(vb, { w: el.clientWidth, h: el.clientHeight - (embedded && hash.chrome && !expandedRef.current ? 56 : 0) })
       engaged.current = false
       goal.current = c
       if (anim) {
@@ -311,7 +353,7 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
         y.set(c.y)
       }
     },
-    [vb, k, x, y],
+    [vb, k, x, y, hash.chrome],
   )
 
   const zoomAt = useCallback(
@@ -341,7 +383,9 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
 
   // Hash + theme bootstrap (after hydration so server and client markup match).
   useEffect(() => {
-    const h = parseHash(location.hash)
+    const read = () => (embedded ? figureHash(location.hash, embedded.id) : parseHash(location.hash))
+    const h = read()
+    let last = JSON.stringify(h)
     setHash(h)
     if (typeof matchMedia === "function") setSysReduced(matchMedia("(prefers-reduced-motion: reduce)").matches)
     try {
@@ -357,16 +401,29 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
       const s = localStorage.getItem(THEME_KEY)
       if (s === "light" || s === "dark") stored = s
     } catch {}
-    const initial = h.theme ?? stored ?? (document.documentElement.dataset.theme as ThemeName | undefined)
+    // A page owns the theme (its header toggle); figures only follow it.
+    const initial = embedded ? (document.documentElement.dataset.theme as ThemeName | undefined) : h.theme ?? stored ?? (document.documentElement.dataset.theme as ThemeName | undefined)
     setTheme(initial ?? systemTheme())
-    if (initial) applyTheme(initial, false)
+    if (initial && !embedded) applyTheme(initial, false)
+    let mo: MutationObserver | undefined
+    if (embedded && typeof MutationObserver !== "undefined") {
+      mo = new MutationObserver(() => setTheme((document.documentElement.dataset.theme as ThemeName | undefined) ?? systemTheme()))
+      mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] })
+    }
     const onHash = () => {
-      const nh = parseHash(location.hash)
+      const nh = read()
+      // Figures ignore hash changes that don't change their view (TOC anchors): no refit.
+      const sig = JSON.stringify(nh)
+      if (embedded && sig === last) return
+      last = sig
       setHash(nh)
       if (nh.drawer) setDrawer(drawerTarget(scene, nh.drawer))
     }
     addEventListener("hashchange", onHash)
-    return () => removeEventListener("hashchange", onHash)
+    return () => {
+      removeEventListener("hashchange", onHash)
+      mo?.disconnect()
+    }
   }, [])
 
   useEffect(() => {
@@ -382,26 +439,30 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
   useEffect(() => {
     const w = window as unknown as { __storyink?: Record<string, unknown> }
     if (!w.__storyink) return
-    w.__storyink.duration = tl?.duration ?? 0
-    w.__storyink.steps = tl ? tl.steps.map((st) => ({ id: st.id, label: st.label, t0: st.t0, t1: st.t1, ...(st.stop ? { stop: st.stop } : {}), ...(st.narrate ? { narrate: st.narrate } : {}) })) : []
+    // Page figures: the same API under `__storyink.figures[id]`.
+    const api: Record<string, unknown> = embedded
+      ? (((w.__storyink.figures ??= {}) as Record<string, Record<string, unknown>>)[embedded.id] ??= {})
+      : w.__storyink
+    api.duration = tl?.duration ?? 0
+    api.steps = tl ? tl.steps.map((st) => ({ id: st.id, label: st.label, t0: st.t0, t1: st.t1, ...(st.stop ? { stop: st.stop } : {}), ...(st.narrate ? { narrate: st.narrate } : {}) })) : []
     /** Change drawer: open on an element id (or a file path), close, and the open target. */
-    w.__storyink.openDrawer = (id: string) => drawerRef.current.open(String(id))
-    w.__storyink.closeDrawer = () => drawerRef.current.close()
-    w.__storyink.drawer = () => drawerRef.current.get()
-    w.__storyink.setTime = (x: number | "end") => storyRef.current?.seek(x === "end" ? (tl?.duration ?? 0) : Number(x))
-    w.__storyink.play = () => storyRef.current?.play()
-    w.__storyink.pause = () => storyRef.current?.pause()
-    w.__storyink.replay = () => storyRef.current?.replay()
+    api.openDrawer = (id: string) => drawerRef.current.open(String(id))
+    api.closeDrawer = () => drawerRef.current.close()
+    api.drawer = () => drawerRef.current.get()
+    api.setTime = (x: number | "end") => storyRef.current?.seek(x === "end" ? (tl?.duration ?? 0) : Number(x))
+    api.play = () => storyRef.current?.play()
+    api.pause = () => storyRef.current?.pause()
+    api.replay = () => storyRef.current?.replay()
     /** Animated step move (as → / ←); resolves when it ends. `stepAnimated()` is the running move or null. */
-    w.__storyink.step = (dir: number, chapter?: boolean) => {
+    api.step = (dir: number, chapter?: boolean) => {
       armed.current = true
       return storyRef.current?.step(dir < 0 ? -1 : 1, !!chapter) ?? Promise.resolve()
     }
-    w.__storyink.stepAnimated = () => storyRef.current?.moving() ?? null
-    w.__storyink.state = () => ({ t: storyRef.current?.now() ?? 0, mode: storyRef.current?.modeNow() ?? "static" })
-    w.__storyink.camera = () => cameraRef.current()
-    w.__storyink.pace = () => paceRef.current
-    w.__storyink.setPace = (n: number) => setPaceRef.current(Number(n))
+    api.stepAnimated = () => storyRef.current?.moving() ?? null
+    api.state = () => ({ t: storyRef.current?.now() ?? 0, mode: storyRef.current?.modeNow() ?? "static" })
+    api.camera = () => cameraRef.current()
+    api.pace = () => paceRef.current
+    api.setPace = (n: number) => setPaceRef.current(Number(n))
   }, [tl])
 
   /** Initial / resize placement: `#camera=follow` + `#t=` shows the followed view; engaged follow re-follows; else fit. */
@@ -494,6 +555,8 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
     const el = stage.current
     if (!el) return
     const onWheel = (ev: WheelEvent) => {
+      // In a page the wheel scrolls the page; zoom needs Ctrl / ⌘ (or pinch) unless expanded.
+      if (embedded && !expandedRef.current && !ev.ctrlKey && !ev.metaKey) return
       ev.preventDefault()
       const r = el.getBoundingClientRect()
       k.stop()
@@ -535,9 +598,15 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
     }
     const key = (ev: KeyboardEvent) => {
       if (ev.target instanceof HTMLInputElement || ev.metaKey || ev.ctrlKey || ev.altKey) return
+      // Pages: only the focused figure reacts (Space / arrows scroll the page otherwise).
+      if (!ownsRef.current()) return
       const st = storyRef.current
       if (ev.key === "Escape" && drawerRef.current.get()) {
         drawerRef.current.close()
+        return
+      }
+      if (ev.key === "Escape" && expandedRef.current) {
+        setExpanded(false)
         return
       }
       if (ev.target instanceof Element && ev.target.closest(".si-cite") && (ev.key === "Enter" || ev.key === " ")) return
@@ -710,19 +779,37 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
     if (c.kind === "file") setDrawer({ file: c.ref })
     else if (drawerInfo(scene, c.id)) setDrawer({ id: c.id })
   }
+  /** Page figures scope their viewer-only rules to their own root. */
+  const scope = embedded ? `.si-app[data-si-app="${embedded.id.replace(/["\\]/g, "\\$&")}"] ` : ""
   /** Viewer-only rules: pointer + hover on elements with a drawer, the hovered cite's element. */
   const affordCss = useMemo(() => {
     if (!hydrated || !drawerOk) return ""
     const d = drawerIds(scene)
     const keys = [...d.node.map((i) => `node:${i}`), ...d.edge.map((i) => `edge:${i}`), ...scene.edges.filter((e) => e.label && d.edge.includes(e.id)).map((e) => `label:${e.label!.id}`), ...d.group.map((i) => `group:${i}`)]
     if (!keys.length) return ""
-    const sel = (suffix: string) => keys.map((k) => `.si-stage ${siSel(k)}${suffix}`).join(",")
+    const sel = (suffix: string) => keys.map((k) => `${scope}.si-stage ${siSel(k)}${suffix}`).join(",")
     return `${sel("")}{cursor:pointer;}${sel(":hover")}{filter:drop-shadow(0 0 3px var(--si-inkFaint));}`
-  }, [hydrated, drawerOk, scene])
-  const hotCss = hot?.kind === "element" ? `${hot.si.map((k) => `.si-stage ${siSel(k)}`).join(",")}{filter:drop-shadow(0 0 4px var(--si-ink)) drop-shadow(0 0 1px var(--si-ink));}` : ""
+  }, [hydrated, drawerOk, scene, scope])
+  const hotCss = hot?.kind === "element" ? `${hot.si.map((k) => `${scope}.si-stage ${siSel(k)}`).join(",")}{filter:drop-shadow(0 0 4px var(--si-ink)) drop-shadow(0 0 1px var(--si-ink));}` : ""
   // The rail shows what the header caption shows: the full-motion gate (t = 0) is step 1; the
   // reduced-motion gate shows the final frame, so the last narrated step.
   const railIdx = showRail && tl && story ? railIndex(tl, story.beat) : -1
+
+  /**
+   * Page figures before hydration and at `#static=1`: the diagram is fitted by CSS (no camera
+   * transform), so the server markup and a static capture lay out the same with or without
+   * JavaScript and whatever the hydration timing.
+   */
+  const fluid = !!embedded && !expanded && (!hydrated || !!hash.still)
+  /** Page figures (not expanded): the compact toolbar (no pauses / frame / export buttons). */
+  const compact = !!embedded && !expanded
+  useEffect(() => {
+    if (!embedded) return
+    document.documentElement.classList.toggle("si-fig-expanded", expanded)
+    if (!expanded) return
+    root.current?.focus({ preventScroll: true })
+    return () => document.documentElement.classList.remove("si-fig-expanded")
+  }, [expanded])
 
   const toggleTheme = () => {
     const next: ThemeName = (theme ?? systemTheme()) === "dark" ? "light" : "dark"
@@ -747,13 +834,35 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
 
   return (
     <LazyMotion features={domAnimation} strict>
-    <div className={`si-app${hash.chrome ? "" : " si-nochrome"}${reduced ? " si-reduced" : ""}${hash.beats && tl ? " si-sheet-mode" : ""}`}>
+    <div
+      className={`si-app${embedded ? ` si-embedded${expanded ? " si-expanded" : ""}` : ""}${hash.chrome ? "" : " si-nochrome"}${reduced ? " si-reduced" : ""}${hash.beats && tl ? " si-sheet-mode" : ""}`}
+      {...(embedded
+        ? {
+            ref: root,
+            tabIndex: 0,
+            "data-si-app": embedded.id,
+            "aria-label": `${TYPE_LABEL[scene.type]}: ${scene.title}`,
+            // Clicking a figure focuses it (keys then act on it), without scrolling the page.
+            onPointerDown: () => {
+              if (!root.current?.contains(document.activeElement)) root.current?.focus({ preventScroll: true })
+            },
+          }
+        : {})}
+    >
+      {embedded ? (
+        tl ? (
+          <div className="si-fig-caps">
+            <Captions frame={hash.beats ? undefined : liveFrame} />
+          </div>
+        ) : null
+      ) : (
       <header className="si-head">
         <p className="si-kind">{TYPE_LABEL[scene.type]}</p>
         <h1 className="si-title">{scene.title}</h1>
         {scene.subtitle ? <p className="si-subtitle">{scene.subtitle}</p> : null}
         {tl ? <Captions frame={hash.beats ? undefined : liveFrame} /> : null}
       </header>
+      )}
       {hash.beats && tl ? (
         <BeatSheet scene={scene} tl={tl} {...(hash.cols ? { cols: hash.cols } : {})} {...(hash.range ? { range: hash.range } : {})} />
       ) : sheet ? (
@@ -770,30 +879,33 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
           on={(narrated && !!tl) || drawable}
           side={
             // One side column: the open drawer replaces the rail (the stage re-fits either way).
-            drawer && drawerOk ? (
+            drawer && drawerOk && !embedded ? (
               <Drawer scene={scene} target={drawer} onClose={() => setDrawer(undefined)} />
             ) : railIdx >= 0 && tl ? (
               <Rail scene={scene} tl={tl} index={railIdx} onCite={setHot} onOpen={onCiteOpen} onHide={toggleRail} />
             ) : null
           }
         >
-        <div className={`si-stage${story?.mode === "gate" ? " si-gated" : ""}`} ref={stage} onClick={(e) => {
+        <div className={`si-stage${story?.mode === "gate" ? " si-gated" : ""}`} ref={stage} {...(embedded && !expanded ? { style: figureStageStyle(vb, hash.chrome) } : {})} onClick={(e) => {
             // A click on the diagram surface starts the story; clicks on controls (toolbar, transport) don't.
             if (story?.mode === "gate" && !(e.target as Element).closest?.(NO_PAN)) story.ungate()
           }}>
-          <m.div className="si-canvas" style={{ x, y, scale: k, originX: 0, originY: 0, ...(hydrated && hash.camera === "follow" && hash.t !== undefined ? { visibility: "hidden" as const } : {}) }}>
-            {story && story.glitch > 0 ? <GlitchFilter t={story.t} amount={story.glitch} /> : null}
+          <m.div
+            className={fluid ? "si-canvas si-canvas-fluid" : "si-canvas"}
+            style={fluid ? { bottom: hash.chrome ? FIG_CHROME : 0 } : { x, y, scale: k, originX: 0, originY: 0, ...(hydrated && hash.camera === "follow" && hash.t !== undefined ? { visibility: "hidden" as const } : {}) }}
+          >
+            {story && story.glitch > 0 ? <GlitchFilter t={story.t} amount={story.glitch} id={`${pfx}si-glitch`} /> : null}
             <div
               className="si-figure"
               style={
                 story && story.glitch > 0
-                  ? { opacity: story.dim, filter: `url(#si-glitch) blur(${+(0.3 * story.blur).toFixed(2)}px)` }
+                  ? { opacity: story.dim, filter: `url(#${pfx}si-glitch) blur(${+(0.3 * story.blur).toFixed(2)}px)` }
                   : story && (story.dim < 1 || story.blur > 0)
                   ? { opacity: story.dim, ...(story.blur > 0 ? { filter: `blur(${story.blur}px)` } : {}) }
                   : undefined
               }
             >
-              <Diagram scene={scene} frame={liveFrame} />
+              <Diagram scene={scene} frame={liveFrame} {...(pfx ? { idPrefix: pfx } : {})} />
               <div className="si-counters" />
             </div>
           </m.div>
@@ -804,10 +916,14 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
             <Btn label="+" title="Zoom in (+)" onClick={() => zoomAt(1.25, undefined, undefined, true)} />
             <Btn label="Fit" title="Fit to view (0)" onClick={fitClick} />
             <span className="si-sep" />
-            <Btn label="Toggle theme" title="Toggle light/dark" onClick={toggleTheme}>
-              {resolved === "dark" ? <Sun /> : <Moon />}
-            </Btn>
-            <span className="si-sep" />
+            {embedded ? null : (
+              <>
+                <Btn label="Toggle theme" title="Toggle light/dark" onClick={toggleTheme}>
+                  {resolved === "dark" ? <Sun /> : <Moon />}
+                </Btn>
+                <span className="si-sep" />
+              </>
+            )}
             {tl ? (
               <>
                 <Btn
@@ -817,11 +933,11 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
                   still={reduced}
                   onClick={toggleMotion}
                 />
-                <Btn
+                {compact ? null : <Btn
                   label={`Pauses: ${paceLabel(pace)}`}
                   title={`Reading pauses after each step: ${paceLabel(pace)}${Math.abs(pace - authorPace) < 1e-9 ? " (default)" : ""}. Click or [ / ] to change`}
                   onClick={cyclePace}
-                />
+                />}
                 <Btn
                   label="Follow"
                   title={follow ? "Camera follows the story. Click to keep the view still (F)" : "Camera stays still. Click to follow the story (F)"}
@@ -831,15 +947,25 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
                 <span className="si-sep" />
               </>
             ) : null}
-            {tl ? (
+            {tl && !compact ? (
               <Btn label={exportCurrent ? "Frame: now" : "Frame: end"} title="Export the final frame or the frame on screen" onClick={() => setExportCurrent((v) => !v)} />
             ) : null}
-            <Btn label="SVG" title="Export SVG" onClick={() => exportWith(() => hooks?.exportSvg(resolved))} />
-            <Btn label="PNG" title="Export PNG (2×)" onClick={() => exportWith(() => hooks?.exportPng(resolved))} />
+            {compact ? null : (
+              <>
+                <Btn label="SVG" title="Export SVG" onClick={() => exportWith(() => hooks?.exportSvg(resolved))} />
+                <Btn label="PNG" title="Export PNG (2×)" onClick={() => exportWith(() => hooks?.exportPng(resolved))} />
+              </>
+            )}
             {narrated && tl ? (
               <>
                 <span className="si-sep" />
                 <Btn label="Narration" title={railOn ? "Hide the narration rail (N)" : "Show the narration rail (N)"} pressed={railOn} onClick={toggleRail} />
+              </>
+            ) : null}
+            {embedded ? (
+              <>
+                <span className="si-sep" />
+                <Btn label={expanded ? "Close" : "Expand"} title={expanded ? "Back to the page (Esc)" : "Fill the window (Esc returns)"} pressed={expanded} onClick={() => setExpanded((v) => !v)} />
               </>
             ) : null}
           </div>
@@ -847,12 +973,40 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
         </StageWrap>
       )}
       {affordCss || hotCss ? <style>{affordCss + hotCss}</style> : null}
+      {embedded && hydrated && drawer && drawerOk
+        ? createPortal(
+            // Page figures: the drawer is a page-level overlay (one per page at a time is the reader's call).
+            <div className="si-drawer-layer" ref={layer} data-for={embedded.id}>
+              <Drawer scene={scene} target={drawer} onClose={() => setDrawer(undefined)} />
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
     </LazyMotion>
   )
 }
 
 const sheet0 = (h: HashParams) => !!h.sheet?.length
+
+/** Page figure toolbar / transport strip (px) and fit padding (diagram px, as `fitCamera`). */
+const FIG_CHROME = 56
+const FIG_PAD = 32
+
+/**
+ * Page figure stage size: full column width; height = the diagram's aspect (with fit padding) at
+ * that width plus the toolbar strip, so a fit fills the width; at least 260 px; at most the
+ * height of a 1.25× fit (the largest fit scale) and `--si-fig-max` (90vh; snapshots pin it). Pure
+ * CSS: the same before and after hydration.
+ */
+export function figureStageStyle(vb: { w: number; h: number }, chrome: boolean): Record<string, string> {
+  const extra = chrome ? FIG_CHROME : 0
+  const w = vb.w + 2 * FIG_PAD
+  const h = vb.h + 2 * FIG_PAD
+  // Full column width (the figure's container width, `cqw`); height from the aspect, up to the
+  // largest fit scale (1.25, as `fitCamera`) and the viewport cap.
+  return { height: `min(${+((100 * h) / w).toFixed(3)}cqw + ${extra}px, ${Math.round(h * 1.25 + extra)}px, var(--si-fig-max, 90vh))` }
+}
 
 /** Narrated scenes: the stage and the narration rail side by side (bottom sheet when narrow). */
 function StageWrap({ on, side: rail, children }: { on: boolean; side: ReactNode; children: ReactNode }): ReactElement {
@@ -869,10 +1023,10 @@ function StageWrap({ on, side: rail, children }: { on: boolean; side: ReactNode;
  * Glitch rewind (HTML only): horizontal band displacement. Noise → only the extremes of R
  * displace (bands), G pinned at 0.5 (no vertical shift); strength follows the rewind speed.
  */
-function GlitchFilter({ t, amount }: { t: number; amount: number }) {
+function GlitchFilter({ t, amount, id = "si-glitch" }: { t: number; amount: number; id?: string }) {
   return (
     <svg className="si-glitch-defs" width="0" height="0" aria-hidden="true" style={{ position: "absolute" }}>
-      <filter id="si-glitch" x="0" y="0" width="100%" height="100%" colorInterpolationFilters="sRGB">
+      <filter id={id} x="0" y="0" width="100%" height="100%" colorInterpolationFilters="sRGB">
         <feTurbulence type="fractalNoise" baseFrequency="0.0008 0.09" numOctaves={1} seed={Math.round(t * 24)} result="n" />
         {/* Contrast first (noise sits near 0.5), then only the extremes displace: bands. */}
         <feComponentTransfer in="n" result="c">

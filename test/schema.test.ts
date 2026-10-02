@@ -21,7 +21,8 @@ function typeOk(t: string, v: unknown): boolean {
 
 export function check(s: S, v: unknown, at = "$"): string[] {
   const errs: string[] = []
-  if (s.$ref) {
+  if (s.$ref === "#") errs.push(...check(root, v, at))
+  else if (s.$ref) {
     const key = (s.$ref as string).replace("#/$defs/", "")
     errs.push(...check((root.$defs as Record<string, S>)[key], v, at))
   }
@@ -71,6 +72,7 @@ const files = [
   ...fs.readdirSync(ex).filter((f) => f.endsWith(".json")).map((f) => path.join(ex, f)),
   ...fs.readdirSync(path.join(ex, "changes")).filter((f) => f.endsWith(".json") && !f.endsWith(".changes.json")).map((f) => path.join(ex, "changes", f)),
   path.join(import.meta.dir, "fixtures", "openwick-architecture.json"),
+  ...fs.readdirSync(path.join(ex, "pages")).filter((f) => f.endsWith(".page.json")).map((f) => path.join(ex, "pages", f)),
 ]
 
 describe("JSON schema", () => {
@@ -103,5 +105,20 @@ describe("JSON schema", () => {
     expect(bad({ nodes: [{ id: "a" }], edges: [{ from: "a", to: "a", emphasis: "loud" }] })).toBe(true)
     expect(bad({ nodes: [{ id: "a" }], change: { branch: "x" } })).toBe(true)
     expect(check(root, { type: "sequence", title: "s", participants: [{ id: "a", delta: "removed" }], messages: [{ from: "a", to: "a", delta: "added", emphasis: "muted", files: ["x"] }] })).toEqual([])
+  })
+
+  test("pages: accepts blocks, rejects bad block shapes", () => {
+    const page = (blocks: unknown[]) => ({ type: "page", title: "p", sections: [{ title: "s", blocks }] })
+    const ok = (blocks: unknown[]) => check(root, page(blocks)).length === 0
+    expect(ok([{ prose: "x" }, { figure: { spec: "a.json", claim: "c" } }, { figure: { spec: { type: "architecture", title: "t", nodes: [{ id: "a" }] } } }])).toBe(true)
+    expect(ok([{ kpis: [{ label: "a", value: 1, tone: "good" }] }, { callout: { tone: "risk", body: "b" } }, { filemap: "changes" }, { diff: { file: "a.ts", lines: [1, 2] } }])).toBe(true)
+    expect(ok([{ columns: [[{ prose: "a" }], [{ details: { summary: "s", blocks: [{ checklist: [{ text: "t", done: true }] }] } }]] }])).toBe(true)
+    expect(ok([{ prose: "x", callout: { tone: "note", body: "b" } }])).toBe(false)
+    expect(ok([{ prose: "x", extra: 1 }])).toBe(false)
+    expect(ok([{ callout: { tone: "loud", body: "b" } }])).toBe(false)
+    expect(ok([{ risks: [{ risk: "r", severity: "huge" }] }])).toBe(false)
+    expect(ok([{ figure: { spec: { type: "architecture", title: "t", nodes: [{ id: "a", kind: "nope" }] } } }])).toBe(false)
+    expect(ok([{ columns: [[{ prose: "a" }]] }])).toBe(false)
+    expect(check(root, { type: "page", title: "p" }).length).toBeGreaterThan(0)
   })
 })

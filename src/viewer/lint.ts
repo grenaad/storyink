@@ -27,7 +27,7 @@ const parseBox = (s: string | null): Box | undefined => {
 }
 
 /** Measure real glyph boxes with getBBox and report overflow / overlap. */
-export function lintDom(doc: Document, scene: Scene, sheet: boolean): LintReport {
+export function lintDom(doc: ParentNode, scene: Scene, sheet: boolean): LintReport {
   const root = doc.querySelector<SVGSVGElement>(sheet ? ".si-sheet svg.storyink" : ".si-stage svg.storyink") ?? doc.querySelector("svg.storyink")
   const issues: LintIssue[] = []
   let texts = 0

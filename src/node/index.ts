@@ -12,6 +12,7 @@ import type { ThemeName } from "../theme/tokens.ts"
 
 export { findBrowser, browserVersion, type Browser } from "./chrome.ts"
 export { gitDiff, defaultBranch, diffSetFrom, asDiffSet, diffSummary, diffSetJson, type GitDiffOptions } from "./git.ts"
+export { loadPage, looksLikePage, resolvePageFiles, writePage, type LoadPageResult } from "./page.ts"
 export { snapshot, screenshotPage, type SnapshotOptions, type SnapshotReceipt, type SnapshotResult, type Capture, type Gate } from "./snapshot.ts"
 
 export interface LoadResult {

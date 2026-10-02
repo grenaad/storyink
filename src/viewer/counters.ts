@@ -11,7 +11,8 @@ import type { Frame, Timeline } from "../core/story/types.ts"
  * hidden and the SVG text shows the exact clock value from `storyState`, so
  * any `t` renders deterministically.
  */
-export function createCounterOverlay(scene: Scene) {
+/** `root`: where to look for the stage (a page figure root; default the document). */
+export function createCounterOverlay(scene: Scene, root: ParentNode = document) {
   const tl = scene.timeline
   const ids = tl ? Object.keys(tl.counters) : []
   let mounted = false
@@ -20,7 +21,7 @@ export function createCounterOverlay(scene: Scene) {
 
   const mount = () => {
     if (mounted || !tl || !ids.length) return
-    const fig = document.querySelector<HTMLElement>(".si-stage .si-figure")
+    const fig = root.querySelector<HTMLElement>(".si-stage .si-figure")
     const host = fig?.querySelector<HTMLElement>(".si-counters")
     const svg = fig?.querySelector<SVGSVGElement>("svg.storyink")
     if (!fig || !host || !svg) return
@@ -63,7 +64,7 @@ export function createCounterOverlay(scene: Scene) {
       if (!tl || !ids.length) return
       const T = cur ?? tl
       mount()
-      const fig = document.querySelector<HTMLElement>(".si-stage .si-figure")
+      const fig = root.querySelector<HTMLElement>(".si-stage .si-figure")
       if (playing !== live) {
         live = playing
         fig?.classList.toggle("si-live-counters", live)

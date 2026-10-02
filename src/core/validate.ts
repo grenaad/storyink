@@ -162,6 +162,10 @@ export function validate(input: unknown): ValidationResult {
     c.error("", "spec must be a JSON object", `start with { "type": "architecture", "title": "...", ... }`)
     return { ok: false, diagnostics: c.diagnostics }
   }
+  if (value.type === "page") {
+    c.error("type", `"page" is a page spec, not a diagram`, "validate it with validatePage() (storyink validate / storyink render handle both)")
+    return { ok: false, diagnostics: c.diagnostics }
+  }
   const type = oneOf(c, value.type, DIAGRAM_TYPES, "type", "diagram type")
   if (value.type === undefined) c.error("type", `missing required field "type"`, `use one of: ${DIAGRAM_TYPES.join(", ")}`)
   const title = str(c, value, "title", "", true)

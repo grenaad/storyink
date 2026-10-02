@@ -10,6 +10,8 @@ import { readSkill, skillPath } from "./node/assets.ts"
 import { asDiffSet, diffSetFrom, diffSetJson, diffSummary, gitDiff } from "./node/git.ts"
 import { parseSource, setStoryCamera, setStoryMotion, setStoryPace, snapshot, writeAnimatedSvg, writeDiagram, type SnapshotReceipt } from "./node/index.ts"
 import type { ThemeName } from "./theme/tokens.ts"
+import { loadPage, looksLikePage, writePage } from "./node/page.ts"
+import type { DiffSet } from "./core/diff/types.ts"
 
 export const PLUGIN_ID = "storyink"
 
@@ -17,7 +19,7 @@ const NAMESPACE_DESCRIPTION =
   "Render architecture, workflow, sequence, data-flow and lifecycle diagrams from a JSON spec or Mermaid into standalone HTML + SVG, validate specs, and snapshot renders to PNG so you can look at them. Load the storyink skill for the spec format and the render -> look -> fix loop."
 
 const SKILL_DESCRIPTION =
-  "Create polished architecture, workflow, sequence, data-flow and lifecycle diagrams as standalone HTML/SVG with storyink, then snapshot and visually check them. Use when asked to draw, visualise or diagram a system, flow, API sequence, pipeline or state machine, or to convert Mermaid."
+  "Create polished architecture, workflow, sequence, data-flow and lifecycle diagrams as standalone HTML/SVG with storyink, and explainer pages (PR reviews, plan reviews, recaps) that embed them, then snapshot and visually check them. Use when asked to draw, visualise or diagram a system, flow, API sequence, pipeline or state machine, to convert Mermaid, or to write a visual review / plan / recap page."
 
 type Json = Record<string, unknown>
 
@@ -99,7 +101,8 @@ const plugin = {
         input: {
           type: "object",
           properties: {
-            spec: { description: "storyink spec object, or a JSON string", type: ["object", "string"] },
+            spec: { description: 'storyink spec object, or a JSON string. A page ("type": "page") renders a document of prose, data blocks and figures; its figure `spec` paths resolve against the project directory', type: ["object", "string"] },
+            path: { type: "string", description: "Or a spec / page .json file (a page's figure paths resolve against the page file's directory)" },
             mermaid: { type: "string", description: "Mermaid flowchart / sequenceDiagram / stateDiagram-v2 text (alternative to spec)" },
             output: { type: "string", description: "Output .html path (relative to the project directory)" },
             svg: { type: "string", description: "Optional output .svg path" },
@@ -143,6 +146,7 @@ const plugin = {
         execute: async (input, context) => {
           const i = input as {
             spec?: unknown
+            path?: string
             mermaid?: string
             output: string
             svg?: string
@@ -158,6 +162,42 @@ const plugin = {
             changes?: string | object
           }
           if (context.signal.aborted) throw new Error("aborted")
+          let pageDir: string = base
+          if (i.path) {
+            try {
+              i.spec = fs.readFileSync(abs(i.path), "utf8")
+              pageDir = path.dirname(abs(i.path))
+            } catch (e) {
+              return { content: `storyink: could not read ${i.path}: ${(e as Error).message}`, metadata: { ok: false } }
+            }
+          }
+          if (looksLikePage(i.spec)) {
+            if (i.svg || i.animatedSvg) return { content: "storyink: a page renders to HTML only (svg / animatedSvg render one diagram; render a figure's spec for its SVG).", metadata: { ok: false } }
+            let ds: DiffSet | undefined
+            if (i.changes !== undefined) {
+              try {
+                ds = typeof i.changes === "string" ? diffSetFrom(fs.readFileSync(abs(i.changes), "utf8"), i.changes) : asDiffSet(i.changes)
+              } catch (e) {
+                return { content: `storyink: could not read changes: ${(e as Error).message}`, metadata: { ok: false } }
+              }
+            }
+            const p = loadPage(i.spec, pageDir, ds)
+            if (!p.ok || !p.page) return { content: `storyink: page is invalid, nothing written.\n${summarize(p.diagnostics)}`, metadata: { ok: false, diagnostics: p.diagnostics } }
+            const html = writePage(p.page, abs(i.output), i.theme ? { theme: i.theme } : {})
+            const ignored = (["story", "motion", "camera", "pace"] as const).filter((k) => i[k] !== undefined)
+            return {
+              content: [
+                `storyink: rendered page "${(p.page as { title?: string }).title ?? ""}"`,
+                `- html: ${html.path} (${(html.bytes / 1024).toFixed(1)} KiB)`,
+                ignored.length ? `- note: ${ignored.join(", ")} ignored for pages (set them in each figure's spec)` : "",
+                p.diagnostics.length ? `warnings:\n${summarize(p.diagnostics)}` : "",
+                "Next: run storyink_snapshot on the html and look at it before describing it.",
+              ]
+                .filter(Boolean)
+                .join("\n"),
+              metadata: { ok: true, html, diagnostics: p.diagnostics, page: true },
+            }
+          }
           let changeDiags: Diagnostic[] = []
           if (i.changes !== undefined) {
             let ds
@@ -294,20 +334,25 @@ const plugin = {
 
       editor.add({
         name: "validate",
-        description: "Validate a storyink spec (object/JSON string) or Mermaid text. Returns structured diagnostics with JSON paths and fix hints.",
+        description: "Validate a storyink spec or page (object/JSON string/file) or Mermaid text. Returns structured diagnostics with JSON paths and fix hints (a page's figure diagnostics are prefixed with the figure's path).",
         input: {
           type: "object",
           properties: {
             spec: { description: "storyink spec object, or a JSON string", type: ["object", "string"] },
             mermaid: { type: "string" },
-            path: { type: "string", description: "Or a .json/.mmd file to validate" },
+            path: { type: "string", description: "Or a .json/.mmd file to validate (a page's figure paths resolve against its directory)" },
           },
           additionalProperties: false,
         },
         options: { namespace: "storyink" },
         execute: async (input) => {
           const i = input as { spec?: unknown; mermaid?: string; path?: string }
-          const s = i.path ? parseSource(fs.readFileSync(abs(i.path), "utf8"), i.path) : specFrom(i)
+          const text = i.path ? fs.readFileSync(abs(i.path), "utf8") : undefined
+          const s = looksLikePage(text ?? i.spec)
+            ? { ...loadPage(text ?? i.spec, i.path ? path.dirname(abs(i.path)) : base), source: "page" as const }
+            : text !== undefined
+              ? parseSource(text, i.path)
+              : specFrom(i)
           return {
             content: s.ok
               ? `storyink: valid${s.diagnostics.length ? ` with warnings\n${summarize(s.diagnostics)}` : ""}`
@@ -340,6 +385,7 @@ const plugin = {
             pace: { type: "number", minimum: 0, maximum: 10, description: "Reading-hold pace for the captures (default: the HTML's author pace, 0.6 unless set)" },
             rail: { type: "boolean", description: "`at` frames: show the narration rail (specs with `narrate` steps)" },
             drawer: { type: "string", description: "`at` frames: open the change drawer on this element id or file path" },
+            figure: { type: "string", description: "Page HTML (type: page): snapshot this figure with the single-diagram pipeline (default: full-page captures per theme)" },
             maxImageSize: { type: "number", description: "Longest side of the returned image in px (default 1024, 256–2048)" },
           },
           required: ["html"],
@@ -361,6 +407,7 @@ const plugin = {
             pace?: number
             rail?: boolean
             drawer?: string
+            figure?: string
           }
           const image = i.image ?? "overview"
           const r = await snapshot(abs(i.html), {
@@ -373,6 +420,7 @@ const plugin = {
             ...(typeof i.pace === "number" ? { pace: i.pace } : {}),
             ...(i.rail ? { rail: true } : {}),
             ...(i.drawer ? { drawer: i.drawer } : {}),
+            ...(i.figure ? { figure: i.figure } : {}),
             ...(i.width ? { width: i.width } : {}),
             ...(i.outDir ? { outDir: abs(i.outDir) } : {}),
             signal: context.signal,

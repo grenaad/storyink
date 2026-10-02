@@ -17,6 +17,11 @@ export interface DiagramProps {
   style?: string
   /** Unique prefix when several copies share a page (contact sheet). */
   copy?: string
+  /**
+   * Prefix for every DOM id this SVG defines (gradients, clips, masks, filters) and the
+   * `url(#…)` references to them, so several diagrams can share one document (pages). Default "".
+   */
+  idPrefix?: string
   className?: string
   /** Storyboard frame; omitted = the resting (static) diagram. */
   frame?: Frame
@@ -1142,7 +1147,9 @@ export function Diagram(props: DiagramProps): ReactElement {
   )
 }
 
-function DiagramInner({ scene, style, copy = "", className, frame, smil, union }: DiagramProps): ReactElement {
+function DiagramInner({ scene, style, copy: copy0 = "", idPrefix = "", className, frame, smil, union }: DiagramProps): ReactElement {
+  // Every def id is built from `copy`; the id prefix rides on it (empty = unchanged output).
+  const copy = idPrefix + copy0
   const vb = scene.viewBox
   const has = (o?: object) => !!o && Object.keys(o).length > 0
   const fr =
@@ -1196,7 +1203,7 @@ function DiagramInner({ scene, style, copy = "", className, frame, smil, union }
       role="img"
       aria-label={scene.title}
       data-storyink={scene.type}
-      data-copy={copy || undefined}
+      data-copy={copy0 || undefined}
     >
       {/* Accessible name via role="img" + aria-label only: an SVG <title> shows as a hover tooltip. */}
       {style ? <style>{style}</style> : null}
