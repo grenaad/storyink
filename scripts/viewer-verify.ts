@@ -289,16 +289,24 @@ async function sampleUntilStill(s: S, ms = 6000) {
   }
   return out
 }
-/** |Δt| / Δwall over the middle half of a sampled move (skips the ease). */
+/**
+ * Story speed of a sampled move: Σ|Δt| / ΣΔwall over the sample pairs, leaving out gap skips
+ * (a pair whose |Δt|/Δwall is over 10×: the clock jumped across a reading hold) and the first and
+ * last quarter of the pairs (the ease). Not a median of per-pair ratios: the clock advances once
+ * per display frame (16.7 ms) while samples land every ~25–35 ms, so per-pair ratios alias to
+ * 1 or 2 frames' worth (e.g. 1.2× / 2.4× at 2×) and their median follows the sampling period.
+ */
 const midRate = (xs: { w: number; t: number }[]) => {
-  // Median of per-sample |Δt|/Δwall: robust to the ease and to gap skips (jumps).
-  const r: number[] = []
+  const pairs: { dt: number; dw: number }[] = []
   for (let i = 1; i < xs.length; i++) {
     const dw = (xs[i].w - xs[i - 1].w) / 1000
-    if (dw > 0.005) r.push(Math.abs(xs[i].t - xs[i - 1].t) / dw)
+    const dt = Math.abs(xs[i].t - xs[i - 1].t)
+    if (dw > 0.005 && dt / dw <= 10) pairs.push({ dt, dw })
   }
-  r.sort((a, b) => a - b)
-  return r.length ? r[Math.floor(r.length / 2)] : 0
+  const q = Math.floor(pairs.length / 4)
+  const mid = pairs.slice(q, pairs.length - q)
+  const W = mid.reduce((a, p) => a + p.dw, 0)
+  return W > 0 ? mid.reduce((a, p) => a + p.dt, 0) / W : 0
 }
 async function stepChecks(s: S) {
   const tag = "[keys]"
