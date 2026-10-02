@@ -4,6 +4,7 @@ import type { GraphNode, GraphSpec, PanelRow, SetRef } from "../spec.ts"
 import { parseRef } from "../anchor.ts"
 import { snap, textWidth, wrap } from "./measure.ts"
 import { codeLines, tokenize } from "./tokenize.ts"
+import { hunksOfNode, sizeDiff } from "./diffnode.ts"
 
 /** Rich node kinds (0.4). */
 export const RICH_KINDS = new Set(["panel", "code", "chip"])
@@ -15,7 +16,7 @@ const ADV_CODE = T.code * 0.6
 /** Every story `set` step in order (static scan; auto stories have none). */
 function setSteps(spec: GraphSpec): SetRef[] {
   const st = spec.story
-  if (!st || st === "auto" || st.steps === "auto") return []
+  if (!st || st === "auto" || !Array.isArray(st.steps)) return []
   const out: SetRef[] = []
   for (const s of st.steps) {
     const list = s.set === undefined ? [] : Array.isArray(s.set) ? s.set : [s.set]
@@ -194,7 +195,7 @@ export const faceH = (n: Pick<SceneNode, "h" | "shape" | "stack">): number => (n
 
 /** Size any rich node. */
 export function sizeRich(spec: GraphSpec, n: GraphNode): SceneNode {
-  const s = n.kind === "chip" ? sizeChip(n) : n.kind === "code" ? sizeCode(spec, n) : sizePanel(spec, n)
+  const s = n.kind === "chip" ? sizeChip(n) : n.kind === "code" ? (n.diff !== undefined && hunksOfNode(n) ? sizeDiff(spec, n) : sizeCode(spec, n)) : sizePanel(spec, n)
   const labels = labelVersions(spec, n)
   if (labels.length > 1) s.labels = labels.map((l) => [l])
   if (n.kind !== "chip" && labels.length > 1) {

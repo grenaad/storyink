@@ -1,4 +1,5 @@
 /** storyink diagram spec (JSON). See docs/spec.md and schema/storyink.schema.json. */
+import type { DiffFile, Hunk } from "./diff/types.ts"
 
 export const DIAGRAM_TYPES = ["architecture", "workflow", "sequence", "dataflow", "lifecycle"] as const
 export type DiagramType = (typeof DIAGRAM_TYPES)[number]
@@ -34,6 +35,60 @@ export type EdgeStyle = (typeof EDGE_STYLES)[number]
 export const ARROWS = ["end", "none", "both"] as const
 export type ArrowMode = (typeof ARROWS)[number]
 
+/** What a change did to an element (pr-lens style). */
+export const DELTAS = ["added", "modified", "removed", "unchanged"] as const
+export type Delta = (typeof DELTAS)[number]
+
+/**
+ * A source location. `lines` is 1-based inclusive, on the head side; on the base side when the
+ * element is removed or `revision: "base"`. A bare string is a path.
+ */
+export interface FileRef {
+  path: string
+  lines?: number | [number, number]
+  revision?: "head" | "base"
+}
+export type FileRefLike = string | FileRef
+
+/** Added / deleted line counts ("+38 −12"). */
+export interface ChangeStat {
+  add?: number
+  del?: number
+}
+
+/** Change metadata shown in the header ("main → feat/batch"). */
+export interface ChangeMeta {
+  base?: string
+  head?: string
+  title?: string
+  url?: string
+}
+
+/**
+ * A `code` node's diff: a file range resolved from `--changes` (`{ file, lines?, context?, max? }`)
+ * or resolved hunks (`{ file?, hunks }`). A string `diff` is unified hunk text.
+ */
+export interface DiffRef {
+  file?: string
+  lines?: number | [number, number]
+  /** Context lines kept around changes (default 3). */
+  context?: number
+  /** Fold after this many rows with a "… N more lines" row (default 24). */
+  max?: number
+  hunks?: Hunk[]
+}
+
+/** Embedded by `resolveChanges` (`--changes`): only the hunks the spec's elements reference. */
+export interface EmbeddedChanges {
+  base?: string
+  head?: string
+  files: DiffFile[]
+}
+
+/** Emphasis of an edge / message in a change diagram. */
+export type Emphasis = "hero" | "muted"
+export const EMPHASES = ["hero", "muted"] as const
+
 interface Common {
   $schema?: string
   style?: StyleOptions
@@ -42,6 +97,10 @@ interface Common {
   subtitle?: string
   /** Storyboard: a hand-written story, or "auto" to derive one from graph / message order. */
   story?: Story | "auto"
+  /** Change metadata (base / head / title / url) for change diagrams. */
+  change?: ChangeMeta
+  /** Hunks embedded by `resolveChanges` / `--changes` (diff nodes, drawer). Not hand-written. */
+  changes?: EmbeddedChanges
 }
 
 export const ICONS = ["wrench", "plug", "file", "terminal", "search", "globe", "bolt", "user", "spark"] as const
@@ -49,7 +108,7 @@ export type IconName = (typeof ICONS)[number]
 export const ROW_STATUSES = ["none", "running", "done", "error"] as const
 export type RowStatus = (typeof ROW_STATUSES)[number]
 /** Code languages for syntax colouring ("js" uses the TypeScript lexer). */
-export const CODE_LANGS = ["ts", "js", "json", "text"] as const
+export const CODE_LANGS = ["ts", "js", "json", "text", "py", "go", "rust", "sql", "yaml", "sh"] as const
 export type CodeLang = (typeof CODE_LANGS)[number]
 
 /** One body row of a `panel` node. Anchor + story target: "<node>#<id>". */
@@ -99,12 +158,22 @@ export interface GraphNode {
   code?: string | string[]
   /** code only (default "ts"). */
   lang?: CodeLang
+  /** code only: a diff shown with gutter and +/− rows (string = unified hunk text). */
+  diff?: string | DiffRef
   /** panel/code: reserved body size. */
   size?: ContentSize
   /** Dimmed/disabled at rest (0.42); story `undim` lifts it. */
   muted?: boolean
   /** chip: 1..3 sheets peeking below ("more items"). */
   stack?: number
+  /** What the change did to this node. */
+  delta?: Delta
+  /** Source locations behind this node. */
+  files?: FileRefLike[]
+  /** Added / deleted lines ("+38 −12"); filled from `--changes` when absent. */
+  stat?: ChangeStat
+  /** One line: what changed and why (auto captions, drawer). */
+  summary?: string
 }
 
 export interface NodeCounter {
@@ -132,7 +201,9 @@ export type PulseRef =
 /** Typewriter target: a code node or a panel row ("node#row"). */
 export type TypeRef = string | { id: string; by?: "char" | "word"; cps?: number; duration?: number }
 /** Active-line bar: "code#2", "code#2-4", or an object (`off: true` hides it). */
-export type LineRef = string | { id: string; lines?: number | [number, number]; off?: true }
+export type LineRef = string | { id: string; lines?: number | [number, number]; off?: true; hunk?: number }
+/** Story `apply` on a diff code node: all its (remaining) hunks, or one (1-based); `cps` = typing speed of added lines. */
+export type ApplyRef = string | { id: string; hunk?: number; cps?: number }
 export interface StatusRef {
   id: string
   to: RowStatus
@@ -188,8 +259,31 @@ export interface StoryStep {
   /** Persistent glow on / off (nodes). */
   glow?: string | string[]
   unglow?: string | string[]
-  /** Camera focus + spotlight target override. */
-  focus?: string
+  /** Camera focus + spotlight target override: one id, or several (their union box). */
+  focus?: string | string[]
+  /**
+   * Change diagrams: apply these elements' delta look with motion (removed edges retract and
+   * ghost, removed nodes strike and fade, added ones reveal / draw on, modified ones flash and
+   * turn gold; a diff code node applies). Before it they show their before look.
+   */
+  change?: string | string[]
+  /** Diff code nodes: play the change (base version → diff), all hunks or one. */
+  apply?: ApplyRef | ApplyRef[]
+  /** Narration for the HTML viewer's rail (the animated SVG falls back to it as a caption). */
+  narrate?: Narrate
+}
+
+/** A cite: `text` (found in the body, in order) linked to an element id, `node#row`, or a file `path` / `path#L12` / `path#L12-20`. */
+export interface NarrateCite {
+  text: string
+  ref: string
+}
+
+/** Step narration: a heading (default: the step's `stop`), a body and its cites. */
+export interface Narrate {
+  heading?: string
+  body: string
+  cites?: NarrateCite[]
 }
 
 export interface Story {
@@ -215,9 +309,9 @@ export interface Story {
    */
   pace?: number
   /** Steps, or "auto" to derive them (like `"story": "auto"`, with the options above). */
-  steps: StoryStep[] | "auto"
+  steps: StoryStep[] | "auto" | "changes"
   /** A soft light that follows the action. */
-  spotlight?: boolean
+  spotlight?: boolean | "veil"
   /** Loop reset effect in the HTML viewer. */
   rewind?: "tape" | "glitch"
 }
@@ -236,12 +330,16 @@ export interface GraphGroup {
   direction?: Direction
   /** Label only, no box (a column heading). */
   bare?: boolean
+  /** What the change did to this group. */
+  delta?: Delta
 }
 
 /** Diagram-level presentation options. */
 export interface StyleOptions {
   /** Draw arrowheads on graph edges (default false: Kit style, ports at both ends). Sequences always have heads. */
   arrowheads?: boolean
+  /** Change legend (default: shown when any element has a delta other than `unchanged`). */
+  legend?: boolean
 }
 
 export interface GraphEdge {
@@ -251,6 +349,10 @@ export interface GraphEdge {
   label?: string
   style?: EdgeStyle
   arrow?: ArrowMode
+  delta?: Delta
+  emphasis?: Emphasis
+  files?: FileRefLike[]
+  summary?: string
 }
 
 export interface GraphSpec extends Common {
@@ -269,6 +371,7 @@ export interface Participant {
   id: string
   label?: string
   kind?: ParticipantKind
+  delta?: Delta
 }
 
 export interface Message {
@@ -277,6 +380,10 @@ export interface Message {
   to: string
   label?: string
   kind?: MessageKind
+  delta?: Delta
+  emphasis?: Emphasis
+  files?: FileRefLike[]
+  summary?: string
 }
 
 export interface Activation {

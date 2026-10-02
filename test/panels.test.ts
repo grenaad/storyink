@@ -162,7 +162,7 @@ describe("validation (rich nodes and anchors)", () => {
     expect(d[0].hint).toContain(`did you mean "plug"?`)
     expect(msgs(diag([{ id: "c", kind: "code", code: 3 }]))).toContain(`error: "code" must be a string or a list of lines`)
     expect(msgs(diag([{ id: "c", kind: "service", code: "x" }]))).toContain(`warning: "code" is only drawn on "code" nodes`)
-    expect(msgs(diag([{ id: "c", kind: "code", code: "x", lang: "rust" }]))).toContain(`error: unknown code language "rust"`)
+    expect(msgs(diag([{ id: "c", kind: "code", code: "x", lang: "cobol" }]))).toContain(`error: unknown code language "cobol"`)
     expect(msgs(diag([{ id: "c", kind: "code", code: "x", size: { cols: 2 } }]))).toContain(`error: "size" must be { "cols": 8–160, "lines": 1–60 }`)
     expect(msgs(diag([{ id: "c", kind: "chip", stack: 5 }]))).toContain(`error: "stack" must be 1, 2 or 3`)
     expect(msgs(diag([{ id: "c", kind: "code", code: ["\tx", "y".repeat(131)] }]))).toEqual([`warning: tabs are shown as 2 spaces`, `warning: code line 2 is 131 characters; the panel grows to fit`])

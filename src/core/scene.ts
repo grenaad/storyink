@@ -1,5 +1,21 @@
 import type { Accent } from "../theme/tokens.ts"
-import type { ArrowMode, CodeLang, DiagramType, Direction, EdgeStyle, FrameKind, IconName, MessageKind, RowStatus } from "./spec.ts"
+import type { ArrowMode, ChangeMeta, ChangeStat, CodeLang, Delta, DiagramType, Direction, EdgeStyle, Emphasis, FileRef, FrameKind, IconName, MessageKind, RowStatus } from "./spec.ts"
+
+/**
+ * Change-diagram badge ("NEW" / "CHANGED" / "REMOVED") and stat ("+38 −12"), relative to the
+ * node box. `right` = inset from the right edge (the badge's x is `w − right − w_badge`), or
+ * `cx` = centred (diamonds). `text` is empty for a stat without a badge.
+ */
+export interface SceneBadge {
+  text: string
+  w: number
+  h: number
+  y: number
+  right?: number
+  cx?: number
+  stat?: ChangeStat & { w: number }
+}
+
 
 export interface Pt {
   x: number
@@ -101,6 +117,45 @@ export interface SceneNode extends Box {
   stack?: number
   /** Label versions (story `set` label); [0] = spec. */
   labels?: string[][]
+  delta?: Delta
+  /** The kind's accent when the delta replaced it (the before look of a `change` step). */
+  accent0?: Accent
+  stat?: ChangeStat
+  summary?: string
+  files?: FileRef[]
+  badge?: SceneBadge
+  /** Diff code node: rows of the unified diff (the node's `code` mirrors them for bars / anchors). */
+  diff?: SceneDiff
+}
+
+/** One diff row at its resting (fully applied) position; `y` = row top relative to the node. */
+export interface SceneDiffRow {
+  kind: "context" | "add" | "del" | "hunk" | "fold"
+  old?: number
+  new?: number
+  text: string
+  tokens: CodeLine
+  marks?: [number, number][]
+  /** 0-based hunk index. */
+  hunk: number
+  y: number
+}
+
+export interface SceneDiff {
+  rows: SceneDiffRow[]
+  /** Hunk count (story `apply` hunks are 1-based). */
+  hunks: number
+  lang: CodeLang
+  file?: string
+  /** Row height and the first row's top. */
+  lh: number
+  top: number
+  /** Gutter: right edges of the old / new number columns, the rule, the +/− marker and code x. */
+  oldX: number
+  newX: number
+  ruleX: number
+  markX: number
+  codeX: number
 }
 
 export interface SceneGroup extends Box {
@@ -111,6 +166,7 @@ export interface SceneGroup extends Box {
   composite: boolean
   /** Label only, no box. */
   bare?: boolean
+  delta?: Delta
 }
 
 export interface Arrowhead {
@@ -147,6 +203,10 @@ export interface SceneEdge {
   /** Row id / code line the edge leaves from / arrives at (from/to stay node ids). */
   fromAnchor?: string
   toAnchor?: string
+  delta?: Delta
+  emphasis?: Emphasis
+  summary?: string
+  files?: FileRef[]
 }
 
 export interface ScenePort extends Pt {
@@ -198,8 +258,14 @@ export interface Scene {
   bands: SceneBand[]
   /** Sequence participant boxes (Mermaid box). */
   boxes: SceneBox[]
+  /** Change metadata (header line "base → head"). */
+  change?: ChangeMeta
+  /** Change legend band above the diagram (deltas present, in legend order). */
+  legend?: SceneLegend
   /** Compiled storyboard, when the spec has a story. */
   timeline?: import("./story/types.ts").Timeline
+  /** Embedded hunks (`--changes`), carried for the HTML viewer's drawer; only when the spec has them. */
+  changes?: import("./spec.ts").EmbeddedChanges
 }
 
 export interface SceneBand extends Box {
@@ -211,4 +277,14 @@ export interface SceneBox extends Box {
   id: string
   label?: string
   participants: string[]
+}
+
+export interface SceneLegend {
+  /** Left of the first item and its text baseline. */
+  x: number
+  y: number
+  items: Delta[]
+  /** Right-aligned change meta ("main → feat/batch"), with its right edge. */
+  meta?: string
+  metaX?: number
 }

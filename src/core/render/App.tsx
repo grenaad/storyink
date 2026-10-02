@@ -9,6 +9,9 @@ import { Diagram } from "./Diagram.tsx"
 import { CAMERA, cameraAt, cameraAtEnd, fitCamera, followStep, readableScale, stepAt, stepFocus, type Camera, type Viewport } from "../story/camera.ts"
 import { steppedTime } from "../story/state.ts"
 import { recompilePace } from "../story/compile.ts"
+import { hasNarration, looksLikePath, parseFileRef, type CiteTarget } from "../story/narrate.ts"
+import { Drawer, drawerIdForSi, drawerIds, drawerInfo, hasDrawer, type DrawerTarget } from "./Drawer.tsx"
+import { Rail, railIndex } from "./Narration.tsx"
 
 export interface AppProps {
   scene: Scene
@@ -49,6 +52,10 @@ export interface HashParams {
   pace?: number
   /** `#camera=follow|fit`: follow the story (also places a `#t=` frame) or keep the whole diagram in view. */
   camera?: "follow" | "fit"
+  /** `#drawer=<id>`: open the change drawer on an element (or a file path) on load. */
+  drawer?: string
+  /** `#rail=0|1`: hide / show the narration rail (`rail=1` also shows it under `#chrome=0`). */
+  rail?: boolean
 }
 
 export function parseHash(hash: string): HashParams {
@@ -73,6 +80,8 @@ export function parseHash(hash: string): HashParams {
     ...(p.get("pace") !== null && p.get("pace") !== "" && paceOk(Number(p.get("pace"))) ? { pace: Number(p.get("pace")) } : {}),
     ...(Number(p.get("cols")) >= 1 ? { cols: Math.min(12, Math.floor(Number(p.get("cols")))) } : {}),
     ...(/^\d+-\d+$/.test(p.get("range") ?? "") ? { range: p.get("range")!.split("-").map(Number) as [number, number] } : {}),
+    ...(p.get("drawer") ? { drawer: p.get("drawer")! } : {}),
+    ...(p.get("rail") === "1" || p.get("rail") === "0" ? { rail: p.get("rail") === "1" } : {}),
   }
 }
 
@@ -90,6 +99,19 @@ export function resolveMotion(o: { hash?: "full" | "reduced"; stored?: string | 
 }
 
 export const MOTION_KEY = "storyink-motion"
+
+/** The reader's narration-rail toggle (`"on"` | `"off"`; default on). */
+export const RAIL_KEY = "storyink-rail"
+
+/** A drawer target for an id from the hash / page contract: an element with drawer content, else a file path. */
+export function drawerTarget(scene: Scene, id: string): DrawerTarget | undefined {
+  if (drawerInfo(scene, id)) return { id }
+  if (looksLikePath(id)) return { file: parseFileRef(id) }
+  return undefined
+}
+
+/** Attribute selector for a `data-si` key (ids may hold quotes / backslashes). */
+const siSel = (key: string) => `[data-si="${key.replace(/["\\]/g, "\\$&")}"]`
 
 export const FOLLOW_KEY = "storyink-follow"
 
@@ -211,6 +233,12 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
   const [override, setOverride] = useState<Frame | undefined>(undefined)
   const [exportCurrent, setExportCurrent] = useState(false)
   const vb = scene.viewBox
+  /** Narration rail / change drawer (HTML only; only when the scene has narration / drawer content). */
+  const narrated = useMemo(() => hasNarration(scene), [scene])
+  const drawable = useMemo(() => hasDrawer(scene) || narrated, [scene, narrated])
+  const [storedRail, setStoredRail] = useState<string | null>(null)
+  const [drawer, setDrawer] = useState<DrawerTarget | undefined>(undefined)
+  const [hot, setHot] = useState<CiteTarget | undefined>(undefined)
   const [storedPace, setStoredPace] = useState<string | null>(null)
   /** The author's pace (as compiled into the HTML) and the one in effect. */
   const authorPace = scene.timeline?.pace ?? 0.6
@@ -320,7 +348,9 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
       setStoredMotion(localStorage.getItem(MOTION_KEY))
       setStoredFollow(localStorage.getItem(FOLLOW_KEY))
       setStoredPace(localStorage.getItem(PACE_KEY))
+      setStoredRail(localStorage.getItem(RAIL_KEY))
     } catch {}
+    if (h.drawer) setDrawer(drawerTarget(scene, h.drawer))
     setHydrated(true)
     let stored: ThemeName | undefined
     try {
@@ -330,7 +360,11 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
     const initial = h.theme ?? stored ?? (document.documentElement.dataset.theme as ThemeName | undefined)
     setTheme(initial ?? systemTheme())
     if (initial) applyTheme(initial, false)
-    const onHash = () => setHash(parseHash(location.hash))
+    const onHash = () => {
+      const nh = parseHash(location.hash)
+      setHash(nh)
+      if (nh.drawer) setDrawer(drawerTarget(scene, nh.drawer))
+    }
     addEventListener("hashchange", onHash)
     return () => removeEventListener("hashchange", onHash)
   }, [])
@@ -349,7 +383,11 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
     const w = window as unknown as { __storyink?: Record<string, unknown> }
     if (!w.__storyink) return
     w.__storyink.duration = tl?.duration ?? 0
-    w.__storyink.steps = tl ? tl.steps.map((st) => ({ id: st.id, label: st.label, t0: st.t0, t1: st.t1, ...(st.stop ? { stop: st.stop } : {}) })) : []
+    w.__storyink.steps = tl ? tl.steps.map((st) => ({ id: st.id, label: st.label, t0: st.t0, t1: st.t1, ...(st.stop ? { stop: st.stop } : {}), ...(st.narrate ? { narrate: st.narrate } : {}) })) : []
+    /** Change drawer: open on an element id (or a file path), close, and the open target. */
+    w.__storyink.openDrawer = (id: string) => drawerRef.current.open(String(id))
+    w.__storyink.closeDrawer = () => drawerRef.current.close()
+    w.__storyink.drawer = () => drawerRef.current.get()
     w.__storyink.setTime = (x: number | "end") => storyRef.current?.seek(x === "end" ? (tl?.duration ?? 0) : Number(x))
     w.__storyink.play = () => storyRef.current?.play()
     w.__storyink.pause = () => storyRef.current?.pause()
@@ -492,10 +530,17 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
       const moved = drag.moved
       drag = undefined
       if (moved) el.classList.remove("si-dragging")
+      // A click (no drag) on an element with drawer content opens its drawer.
+      else clickRef.current(ev.target as Element | null)
     }
     const key = (ev: KeyboardEvent) => {
       if (ev.target instanceof HTMLInputElement || ev.metaKey || ev.ctrlKey || ev.altKey) return
       const st = storyRef.current
+      if (ev.key === "Escape" && drawerRef.current.get()) {
+        drawerRef.current.close()
+        return
+      }
+      if (ev.target instanceof Element && ev.target.closest(".si-cite") && (ev.key === "Enter" || ev.key === " ")) return
       if (st && (ev.key === " " || ev.code === "Space")) {
         ev.preventDefault()
         if (st.mode === "gate") st.ungate()
@@ -510,6 +555,7 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
       else if (st && (ev.key === "[" || ev.key === "]")) stepPaceRef.current(ev.key === "]" ? 1 : -1)
       else if (st && (ev.key === "r" || ev.key === "R")) st.replay()
       else if (st && (ev.key === "m" || ev.key === "M")) toggleMotionRef.current()
+      else if (ev.key === "n" || ev.key === "N") toggleRailRef.current()
       else if (ev.key === "0") fitClickRef.current()
       else if (ev.key === "+" || ev.key === "=") zoomAt(1.25, undefined, undefined, true)
       else if (ev.key === "-" || ev.key === "_") zoomAt(0.8, undefined, undefined, true)
@@ -619,6 +665,65 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
   /** The transport's scrubber is a reader seek: follow reacts to it. */
   const transport = story ? { ...story, seek: (t: number) => ((armed.current = true), story.seek(t)) } : undefined
 
+  /** Rail + drawer are viewer chrome: off in sheets, `#static=1` and `#chrome=0` (unless the hash asks). */
+  // Client-only (never in the SSR markup): the stage size is final in the hydration commit, so
+  // captures never race a rail / drawer appearing or disappearing. `#static=1` keeps them off
+  // unless the hash asks explicitly (`#rail=1` / `#drawer=`), so snapshot gates compare like with like.
+  const uiOk = hydrated && !hash.beats && !sheet0(hash) && (!hash.still || hash.rail === true || hash.drawer !== undefined)
+  const railOn = hash.rail ?? (storedRail !== "off")
+  const showRail = narrated && !!tl && uiOk && railOn && (hash.chrome || hash.rail === true)
+  const drawerOk = drawable && uiOk && (hash.chrome || hash.drawer !== undefined)
+  const toggleRail = () => {
+    if (!narrated) return
+    const next = railOn ? "off" : "on"
+    setStoredRail(next)
+    try {
+      localStorage.setItem(RAIL_KEY, next)
+    } catch {}
+    if (hash.rail !== undefined) setHash((h) => ({ ...h, rail: next === "on" }))
+  }
+  const toggleRailRef = useRef(toggleRail)
+  toggleRailRef.current = toggleRail
+  const drawerRef = useRef({ open: (_id: string) => false as boolean, close: () => {}, get: () => undefined as DrawerTarget | undefined })
+  drawerRef.current = {
+    open: (id: string) => {
+      const t = drawable ? drawerTarget(scene, id) : undefined
+      if (t) setDrawer(t)
+      return !!t
+    },
+    close: () => setDrawer(undefined),
+    get: () => drawer,
+  }
+  const clickRef = useRef((_t: Element | null) => {})
+  clickRef.current = (target: Element | null) => {
+    if (!drawerOk || !target || storyRef.current?.modeNow() === "gate" || target.closest?.(NO_PAN)) return
+    for (let g = target.closest?.("[data-si]"); g; g = g.parentElement?.closest("[data-si]") ?? null) {
+      const id = drawerIdForSi(scene, g.getAttribute("data-si") ?? "")
+      if (id && drawerInfo(scene, id)) {
+        setDrawer({ id })
+        return
+      }
+    }
+  }
+  const onCiteOpen = (c: CiteTarget) => {
+    setHot(undefined)
+    if (c.kind === "file") setDrawer({ file: c.ref })
+    else if (drawerInfo(scene, c.id)) setDrawer({ id: c.id })
+  }
+  /** Viewer-only rules: pointer + hover on elements with a drawer, the hovered cite's element. */
+  const affordCss = useMemo(() => {
+    if (!hydrated || !drawerOk) return ""
+    const d = drawerIds(scene)
+    const keys = [...d.node.map((i) => `node:${i}`), ...d.edge.map((i) => `edge:${i}`), ...scene.edges.filter((e) => e.label && d.edge.includes(e.id)).map((e) => `label:${e.label!.id}`), ...d.group.map((i) => `group:${i}`)]
+    if (!keys.length) return ""
+    const sel = (suffix: string) => keys.map((k) => `.si-stage ${siSel(k)}${suffix}`).join(",")
+    return `${sel("")}{cursor:pointer;}${sel(":hover")}{filter:drop-shadow(0 0 3px var(--si-inkFaint));}`
+  }, [hydrated, drawerOk, scene])
+  const hotCss = hot?.kind === "element" ? `${hot.si.map((k) => `.si-stage ${siSel(k)}`).join(",")}{filter:drop-shadow(0 0 4px var(--si-ink)) drop-shadow(0 0 1px var(--si-ink));}` : ""
+  // The rail shows what the header caption shows: the full-motion gate (t = 0) is step 1; the
+  // reduced-motion gate shows the final frame, so the last narrated step.
+  const railIdx = showRail && tl && story ? railIndex(tl, story.beat) : -1
+
   const toggleTheme = () => {
     const next: ThemeName = (theme ?? systemTheme()) === "dark" ? "light" : "dark"
     setTheme(next)
@@ -661,6 +766,17 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
           ))}
         </div>
       ) : (
+        <StageWrap
+          on={(narrated && !!tl) || drawable}
+          side={
+            // One side column: the open drawer replaces the rail (the stage re-fits either way).
+            drawer && drawerOk ? (
+              <Drawer scene={scene} target={drawer} onClose={() => setDrawer(undefined)} />
+            ) : railIdx >= 0 && tl ? (
+              <Rail scene={scene} tl={tl} index={railIdx} onCite={setHot} onOpen={onCiteOpen} onHide={toggleRail} />
+            ) : null
+          }
+        >
         <div className={`si-stage${story?.mode === "gate" ? " si-gated" : ""}`} ref={stage} onClick={(e) => {
             // A click on the diagram surface starts the story; clicks on controls (toolbar, transport) don't.
             if (story?.mode === "gate" && !(e.target as Element).closest?.(NO_PAN)) story.ungate()
@@ -720,11 +836,32 @@ export function App({ scene, hooks }: AppProps & { hooks?: ViewerHooks }): React
             ) : null}
             <Btn label="SVG" title="Export SVG" onClick={() => exportWith(() => hooks?.exportSvg(resolved))} />
             <Btn label="PNG" title="Export PNG (2×)" onClick={() => exportWith(() => hooks?.exportPng(resolved))} />
+            {narrated && tl ? (
+              <>
+                <span className="si-sep" />
+                <Btn label="Narration" title={railOn ? "Hide the narration rail (N)" : "Show the narration rail (N)"} pressed={railOn} onClick={toggleRail} />
+              </>
+            ) : null}
           </div>
         </div>
+        </StageWrap>
       )}
+      {affordCss || hotCss ? <style>{affordCss + hotCss}</style> : null}
     </div>
     </LazyMotion>
+  )
+}
+
+const sheet0 = (h: HashParams) => !!h.sheet?.length
+
+/** Narrated scenes: the stage and the narration rail side by side (bottom sheet when narrow). */
+function StageWrap({ on, side: rail, children }: { on: boolean; side: ReactNode; children: ReactNode }): ReactElement {
+  if (!on) return <>{children}</>
+  return (
+    <div className="si-main">
+      {children}
+      {rail}
+    </div>
   )
 }
 

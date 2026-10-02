@@ -21,9 +21,21 @@ export const joinRef = (node: string, anchor?: string): string => (anchor ? `${n
 /** A code-line anchor ("3") → 3; a row anchor → undefined. */
 export const lineOf = (anchor: string): number | undefined => (/^[1-9][0-9]*$/.test(anchor) ? Number(anchor) : undefined)
 
+/**
+ * Diff code nodes: "+14" (head line 14) / "-13" (base line 13) → the 1-based display row.
+ * (Kept here, not in layout, so anchor lookups stay dependency-free.)
+ */
+export function signedLineOf(n: Pick<SceneNode, "diff">, anchor: string): number | undefined {
+  const m = /^([+-])([1-9][0-9]*)$/.exec(anchor)
+  if (!m || !n.diff) return undefined
+  const line = Number(m[2])
+  const k = n.diff.rows.findIndex((r) => (m[1] === "+" ? r.new === line && r.kind !== "del" : r.old === line && r.kind !== "add"))
+  return k < 0 ? undefined : k + 1
+}
+
 /** y of an anchor relative to its node's top (row: first text line centre; code line: its centre). */
-export function anchorOffsetY(n: Pick<SceneNode, "rows" | "code">, anchor: string): number | undefined {
-  const k = lineOf(anchor)
+export function anchorOffsetY(n: Pick<SceneNode, "rows" | "code" | "diff">, anchor: string): number | undefined {
+  const k = lineOf(anchor) ?? signedLineOf(n, anchor)
   if (k !== undefined) {
     const c = n.code
     if (!c || k > c.slots) return undefined
@@ -56,7 +68,7 @@ export function boxOfRef(scene: Scene, ref: string): Box | undefined {
   const n = scene.nodes.find((x) => x.id === node)
   if (!n) return undefined
   if (!anchor) return { x: n.x, y: n.y, w: n.w, h: n.h }
-  const k = lineOf(anchor)
+  const k = lineOf(anchor) ?? signedLineOf(n, anchor)
   if (k !== undefined && n.code) {
     if (k > n.code.slots) return undefined
     return { x: n.x, y: n.y + n.code.top + (k - 1) * n.code.lh, w: n.w, h: n.code.lh }

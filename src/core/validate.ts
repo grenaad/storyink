@@ -1,7 +1,9 @@
 import {
   ARROWS,
   CODE_LANGS,
+  DELTAS,
   DIAGRAM_TYPES,
+  EMPHASES,
   ICONS,
   ROW_STATUSES,
   EDGE_STYLES,
@@ -9,17 +11,27 @@ import {
   GRAPH_NODE_KINDS,
   MESSAGE_KINDS,
   PARTICIPANT_KINDS,
+  type ChangeMeta,
+  type ChangeStat,
+  type FileRef,
+  type FileRefLike,
+  type GraphEdge,
+  type GraphNode,
   type GraphSpec,
   type MessageRef,
   type StoryStep,
   type SequenceSpec,
   type Spec,
 } from "./spec.ts"
+import { normalizeLang } from "./diff/lang.ts"
 import { layoutGraph } from "./layout/graph.ts"
 import { layoutSequence } from "./layout/sequence.ts"
 import { compileStory } from "./story/compile.ts"
 import { lineOf, parseRef } from "./anchor.ts"
 import { codeVersions } from "./layout/panels.ts"
+import { hunksOfNode, rowsOfNode } from "./layout/diffnode.ts"
+import { applyChanges } from "./layout/delta.ts"
+import { parseHunks } from "./diff/parse.ts"
 
 export type Severity = "error" | "warning"
 
@@ -124,7 +136,7 @@ function arr(c: Collector, o: Obj, key: string, required: boolean): unknown[] {
   return value
 }
 
-const COMMON_KEYS = new Set(["$schema", "type", "title", "subtitle", "direction", "story", "style"])
+const COMMON_KEYS = new Set(["$schema", "type", "title", "subtitle", "direction", "story", "style", "change", "changes"])
 
 function unknownKeys(c: Collector, o: Obj, allowed: Set<string>, path: string) {
   for (const k of Object.keys(o))
@@ -157,14 +169,16 @@ export function validate(input: unknown): ValidationResult {
   if (value.$schema !== undefined && typeof value.$schema !== "string") c.error("$schema", `"$schema" must be a string`)
   if (!type) return { ok: false, diagnostics: c.diagnostics }
 
-  let style: { arrowheads?: boolean } | undefined
+  let style: { arrowheads?: boolean; legend?: boolean } | undefined
   if (value.style !== undefined) {
     if (!isObj(value.style)) c.error("style", `"style" must be an object`, `e.g. "style": { "arrowheads": true }`)
     else {
-      unknownKeys(c, value.style, new Set(["arrowheads"]), "style")
+      unknownKeys(c, value.style, new Set(["arrowheads", "legend"]), "style")
+      if (value.style.legend !== undefined && typeof value.style.legend !== "boolean") c.error("style.legend", `"legend" must be true or false`)
+      else if (typeof value.style.legend === "boolean") style = { ...style, legend: value.style.legend }
       if (value.style.arrowheads !== undefined && typeof value.style.arrowheads !== "boolean")
         c.error("style.arrowheads", `"arrowheads" must be true or false`)
-      else if (typeof value.style.arrowheads === "boolean") style = { arrowheads: value.style.arrowheads }
+      else if (typeof value.style.arrowheads === "boolean") style = { arrowheads: value.style.arrowheads, ...style }
       if (type === "sequence" && value.style.arrowheads === false)
         c.warn("style.arrowheads", "sequence diagrams always draw arrowheads")
     }
@@ -176,6 +190,11 @@ export function validate(input: unknown): ValidationResult {
     ...(subtitle ? { subtitle } : {}),
   }
   const spec = type === "sequence" ? validateSequence(c, value, base) : validateGraph(c, value, type, base)
+  const change = changeMetaOf(c, value.change)
+  if (change) spec.change = change
+  // `changes` (embedded hunks, written by resolveChanges) is carried as is; later phases read it.
+  if (isObj(value.changes)) spec.changes = value.changes as unknown as Spec["changes"]
+  checkChangeConsistency(c, spec)
   if (value.story !== undefined) {
     const st = validateStoryShape(c, value.story)
     if (st !== undefined) spec.story = st
@@ -184,6 +203,7 @@ export function validate(input: unknown): ValidationResult {
     // Resolve ids and timing against the real layout.
     try {
       const scene = type === "sequence" ? layoutSequence(spec as SequenceSpec) : layoutGraph(spec as GraphSpec)
+      applyChanges(scene, spec)
       c.diagnostics.push(...compileStory(scene, spec).diagnostics)
     } catch (e) {
       c.error("story", `story could not be compiled: ${(e as Error).message}`)
@@ -197,16 +217,57 @@ const STEP_KEYS = new Set([
   "id", "at", "reveal", "pulse", "highlight", "caption", "counter", "stop", "hold",
   // 0.4 content steps
   "type", "line", "status", "dim", "undim", "hide", "show", "set", "clear", "wire", "unwire", "glow", "unglow", "focus",
+  // diff code nodes
+  "apply",
+  // change diagrams
+  "change",
+  // narration rail
+  "narrate",
 ])
+
+/** Narrate shape: heading / body strings, cites `{ text, ref }` whose text occurs in the body, in order. */
+function validateNarrate(c: Collector, v: unknown, p: string): void {
+  if (!isObj(v)) {
+    c.error(p, `"narrate" must be { "heading"?: string, "body": string, "cites"?: [{ "text", "ref" }] }`)
+    return
+  }
+  for (const k of Object.keys(v)) if (!["heading", "body", "cites"].includes(k)) c.warn(`${p}.${k}`, `unknown key "${k}"`, `narrate keys: heading, body, cites`)
+  if (v.heading !== undefined && typeof v.heading !== "string") c.error(`${p}.heading`, `"heading" must be a string`)
+  if (typeof v.body !== "string" || !v.body.trim()) {
+    c.error(`${p}.body`, `"narrate" needs a non-empty "body" string`)
+    return
+  }
+  if (v.cites === undefined) return
+  if (!Array.isArray(v.cites)) {
+    c.error(`${p}.cites`, `"cites" must be a list of { "text", "ref" }`)
+    return
+  }
+  let from = 0
+  v.cites.forEach((x, k) => {
+    const q = `${p}.cites[${k}]`
+    if (!isObj(x) || typeof x.text !== "string" || !x.text || typeof x.ref !== "string" || !x.ref.trim()) {
+      c.error(q, `a cite must be { "text": "words in the body", "ref": "element id or file path" }`)
+      return
+    }
+    const at = (v.body as string).indexOf(x.text, from)
+    if (at < 0) {
+      const anywhere = (v.body as string).includes(x.text)
+      c.error(`${q}.text`, anywhere ? `cite "${x.text}" is out of order` : `cite "${x.text}" does not occur in the body`, anywhere ? "list cites in the order their text appears in the body" : "a cite's text must be copied exactly from the body")
+      return
+    }
+    from = at + x.text.length
+  })
+}
 
 function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefined {
   if (raw === "auto") return "auto"
+  if (raw === "changes") return { steps: "changes" }
   if (!isObj(raw)) {
     c.error("story", `"story" must be an object or "auto"`, `{ "steps": [ { "reveal": ["api"] } ] } or "auto"`)
     return undefined
   }
   unknownKeys(c, raw, new Set(["autoplay", "camera", "end", "motion", "pace", "steps", "spotlight", "rewind"]), "story")
-  if (raw.spotlight !== undefined && typeof raw.spotlight !== "boolean") c.error("story.spotlight", `"spotlight" must be true or false`)
+  if (raw.spotlight !== undefined && typeof raw.spotlight !== "boolean" && raw.spotlight !== "veil") c.error("story.spotlight", `"spotlight" must be true, false or "veil"`, `"veil" dims everything outside the step's focus`)
   const rewind = oneOf(c, raw.rewind, ["tape", "glitch"] as const, "story.rewind", "story rewind")
   const motion = oneOf(c, raw.motion, ["full", "reduced", "system"] as const, "story.motion", "story motion")
   const camera = oneOf(c, raw.camera, ["follow", "fit"] as const, "story.camera", "story camera")
@@ -217,17 +278,21 @@ function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefin
     ...(motion ? { motion } : {}),
     ...(camera ? { camera } : {}),
     ...(paceOk && typeof raw.pace === "number" ? { pace: raw.pace } : {}),
-    ...(raw.spotlight === true ? { spotlight: true } : {}),
+    ...(raw.spotlight === true ? { spotlight: true } : raw.spotlight === "veil" ? { spotlight: "veil" as const } : {}),
     ...(rewind ? { rewind } : {}),
   }
   if (raw.autoplay !== undefined && typeof raw.autoplay !== "boolean") c.error("story.autoplay", `"autoplay" must be true or false`)
   const end = oneOf(c, raw.end, ["hold", "loop"] as const, "story.end", "story end")
+  if (raw.steps === "changes") {
+    const e0 = oneOf(c, raw.end, ["hold", "loop"] as const, "story.end", "story end")
+    return { ...opts, ...(e0 ? { end: e0 } : {}), steps: "changes" }
+  }
   if (raw.steps === "auto") {
     const e0 = oneOf(c, raw.end, ["hold", "loop"] as const, "story.end", "story end")
     return { ...opts, ...(e0 ? { end: e0 } : {}), steps: "auto" }
   }
   if (!Array.isArray(raw.steps)) {
-    c.error("story.steps", `"steps" must be an array or "auto"`)
+    c.error("story.steps", `"steps" must be an array, "auto" or "changes"`)
     return undefined
   }
   const steps: StoryStep[] = []
@@ -252,7 +317,9 @@ function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefin
       if (!list.every((x) => isObj(x) && typeof x.id === "string" && typeof x.to === "number")) c.error(`${p}.counter`, `"counter" must be { "id": "...", "to": number }`)
     }
     for (const k of ["undim", "hide", "show", "clear", "glow", "unglow"]) strList(s0[k], k)
-    if (s0.focus !== undefined && typeof s0.focus !== "string") c.error(`${p}.focus`, `"focus" must be an id`)
+    if (s0.focus !== undefined && typeof s0.focus !== "string" && !(Array.isArray(s0.focus) && s0.focus.length && s0.focus.every((x) => typeof x === "string"))) c.error(`${p}.focus`, `"focus" must be an id or a list of ids`)
+    strList(s0.change, "change")
+    if (s0.narrate !== undefined) validateNarrate(c, s0.narrate, `${p}.narrate`)
     const objList = (key: string, ok: (x: unknown) => boolean, msg: string) => {
       const v = s0[key]
       if (v === undefined) return
@@ -274,6 +341,11 @@ function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefin
     )
     objList("wire", idOrObj("edge"), `"wire" must be an edge id or { "edge": ..., "duration"?: s }`)
     objList("unwire", idOrObj("edge"), `"unwire" must be an edge id or { "edge": ..., "duration"?: s }`)
+    objList(
+      "apply",
+      (x) => typeof x === "string" || (isObj(x) && typeof x.id === "string" && Object.keys(x).every((k) => k === "id" || k === "hunk" || k === "cps") && (x.cps === undefined || (typeof x.cps === "number" && x.cps > 0))),
+      `"apply" must be a diff code node id or { "id": ..., "hunk"?: n, "cps"?: n }`,
+    )
     if (s0.dim !== undefined && !(isObj(s0.dim) && Array.isArray(s0.dim.ids))) strList(s0.dim, "dim")
     if (isObj(s0.dim) && s0.dim.to !== undefined && !(typeof s0.dim.to === "number" && s0.dim.to >= 0.05 && s0.dim.to <= 1)) c.error(`${p}.dim.to`, `"to" must be a level from 0.05 to 1`)
     if (s0.pulse !== undefined) {
@@ -315,7 +387,8 @@ function validateGraph(
   arr(c, o, "groups", false).forEach((g, i) => {
     const p = `groups[${i}]`
     if (!isObj(g)) return c.error(p, "group must be an object", `{ "id": "vpc", "label": "VPC" }`)
-    unknownKeys(c, g, new Set(["id", "label", "kind", "parent", "direction", "bare"]), p)
+    unknownKeys(c, g, new Set(["id", "label", "kind", "parent", "direction", "bare", "delta"]), p)
+    const gDelta = oneOf(c, g.delta, DELTAS, `${p}.delta`, "delta")
     if (g.bare !== undefined && typeof g.bare !== "boolean") c.error(`${p}.bare`, `"bare" must be true or false`)
     const id = str(c, g, "id", p, true)
     if (!id) return
@@ -328,6 +401,7 @@ function validateGraph(
       ...(typeof g.parent === "string" ? { parent: g.parent } : {}),
       ...(g.direction !== undefined && dirOf(g.direction, `${p}.direction`) ? { direction: dirOf(g.direction, `${p}.direction`) } : {}),
       ...(g.bare === true ? { bare: true } : {}),
+      ...(gDelta ? { delta: gDelta } : {}),
     })
   })
 
@@ -337,7 +411,7 @@ function validateGraph(
   rawNodes.forEach((n, i) => {
     const p = `nodes[${i}]`
     if (!isObj(n)) return c.error(p, "node must be an object", `{ "id": "api", "label": "API" }`)
-    unknownKeys(c, n, new Set(["id", "label", "kind", "detail", "tag", "parent", "group", "direction", "counter", ...RICH_NODE_KEYS]), p)
+    unknownKeys(c, n, new Set(["id", "label", "kind", "detail", "tag", "parent", "group", "direction", "counter", ...RICH_NODE_KEYS, ...CHANGE_NODE_KEYS]), p)
     const id = str(c, n, "id", p, true)
     if (!id) return
     if (!ID_RE.test(id)) c.error(`${p}.id`, `invalid id "${id}"`, "use letters, digits, _ . : -")
@@ -354,6 +428,7 @@ function validateGraph(
       ...(n.direction !== undefined && dirOf(n.direction, `${p}.direction`) ? { direction: dirOf(n.direction, `${p}.direction`) } : {}),
       ...(counterOf(c, n.counter, `${p}.counter`) ?? {}),
       ...richOf(c, n, kind ?? defaultKind, p, id),
+      ...changeOf(c, n, p, "node", kind ?? defaultKind),
     })
   })
   const counterIds = new Set<string>()
@@ -404,7 +479,8 @@ function validateGraph(
   arr(c, o, "edges", false).forEach((e, i) => {
     const p = `edges[${i}]`
     if (!isObj(e)) return c.error(p, "edge must be an object", `{ "from": "a", "to": "b" }`)
-    unknownKeys(c, e, new Set(["id", "from", "to", "label", "style", "arrow"]), p)
+    unknownKeys(c, e, new Set(["id", "from", "to", "label", "style", "arrow", ...CHANGE_EDGE_KEYS]), p)
+    const ech = changeOf(c, e, p, "edge")
     const from = str(c, e, "from", p, true)
     const to = str(c, e, "to", p, true)
     for (const [end, ref] of [["from", from], ["to", to]] as const) {
@@ -430,6 +506,7 @@ function validateGraph(
       ...(typeof e.label === "string" && e.label ? { label: e.label } : {}),
       style: style ?? "solid",
       arrow: arrow ?? "end",
+      ...ech,
     })
   })
 
@@ -471,7 +548,7 @@ function richOf(c: Collector, n: Obj, kind: string, p: string, id: string): Part
     else out.stack = n.stack
   }
   if (n.lang !== undefined) {
-    const lang = oneOf(c, n.lang, CODE_LANGS, `${p}.lang`, "code language")
+    const lang = oneOf(c, normalizeLang(n.lang), CODE_LANGS, `${p}.lang`, "code language")
     if (lang) out.lang = lang
   }
   if (n.size !== undefined) {
@@ -542,7 +619,24 @@ function checkAnchor(c: Collector, path: string, ref: string, node: string, anch
   const n = nodes.find((x) => x.id === node)
   if (!n || (n.kind !== "panel" && n.kind !== "code")) return c.error(path, `"${ref}": anchors work on panel rows and code lines only`, n ? `"${node}" is a ${n.kind ?? "node"}` : `"${node}" is a group`)
   const k = lineOf(anchor)
+  if (n.kind === "code" && n.diff !== undefined) {
+    const rows = hunksOfNode(n) ? rowsOfNode(n) : undefined
+    if (!rows) return
+    const m = /^([+-])([1-9][0-9]*)$/.exec(anchor)
+    if (m) {
+      const line = Number(m[2])
+      const side = m[1] === "+" ? "head" : "base"
+      const hit = rows.some((r) => (m[1] === "+" ? r.new === line && r.kind !== "del" : r.old === line && r.kind !== "add"))
+      const shown = rows.filter((r) => (m[1] === "+" ? r.kind !== "del" : r.kind !== "add")).map((r) => (m[1] === "+" ? r.new : r.old)).filter((x): x is number => x !== undefined)
+      if (!hit) c.error(path, `"${ref}": "${node}" shows no ${side} line ${line}`, shown.length ? `${side} lines shown: ${shown[0]}–${shown[shown.length - 1]}` : `the diff shows no ${side} lines`)
+      return
+    }
+    if (k === undefined) return c.error(path, `"${ref}": diff anchors are "${node}#+14" (head line), "${node}#-13" (base line) or a display row "${node}#3"`)
+    if (k > rows.length) c.error(path, `"${ref}": "${node}" shows ${rows.length} rows`)
+    return
+  }
   if (n.kind === "code") {
+    if (k === undefined && /^[+-][1-9][0-9]*$/.test(anchor)) return c.error(path, `"${ref}": head / base line anchors need a diff code node`, `give "${node}" a "diff" (or use a display line "${node}#1")`)
     if (k === undefined) return c.error(path, `"${ref}": code anchors are line numbers ("${node}#1")`)
     const lines = Math.max(n.size?.lines ?? 0, ...codeVersions(spec, n).map((v) => v.length))
     if (k > lines) c.error(path, `"${ref}": "${node}" has ${lines} lines`, `reserve more with "size": { "lines": ${k} }`)
@@ -577,13 +671,14 @@ function validateSequence(c: Collector, o: Obj, base: { title: string; subtitle?
   arr(c, o, "participants", true).forEach((p0, i) => {
     const p = `participants[${i}]`
     if (!isObj(p0)) return c.error(p, "participant must be an object", `{ "id": "api", "label": "API" }`)
-    unknownKeys(c, p0, new Set(["id", "label", "kind"]), p)
+    unknownKeys(c, p0, new Set(["id", "label", "kind", "delta"]), p)
+    const pDelta = oneOf(c, p0.delta, DELTAS, `${p}.delta`, "delta")
     const id = str(c, p0, "id", p, true)
     if (!id) return
     if (ids.has(id)) c.error(`${p}.id`, `duplicate participant "${id}"`)
     ids.add(id)
     const kind = oneOf(c, p0.kind, PARTICIPANT_KINDS, `${p}.kind`, "participant kind")
-    participants.push({ id, label: str(c, p0, "label", p, false) ?? id, kind: kind ?? "participant" })
+    participants.push({ id, label: str(c, p0, "label", p, false) ?? id, kind: kind ?? "participant", ...(pDelta ? { delta: pDelta } : {}) })
   })
   if (Array.isArray(o.participants) && participants.length === 0 && o.participants.length === 0)
     c.error("participants", "sequence has no participants", "add at least one participant")
@@ -606,7 +701,8 @@ function validateSequence(c: Collector, o: Obj, base: { title: string; subtitle?
       messages.push({ from: "", to: "", kind: "sync" })
       return
     }
-    unknownKeys(c, m, new Set(["id", "from", "to", "label", "kind"]), p)
+    unknownKeys(c, m, new Set(["id", "from", "to", "label", "kind", ...CHANGE_EDGE_KEYS]), p)
+    const mch = changeOf(c, m, p, "message")
     const from = pref(m.from, `${p}.from`) ?? ""
     const to = pref(m.to, `${p}.to`) ?? ""
     let kind = oneOf(c, m.kind, MESSAGE_KINDS, `${p}.kind`, "message kind") ?? "sync"
@@ -622,6 +718,7 @@ function validateSequence(c: Collector, o: Obj, base: { title: string; subtitle?
       to,
       ...(typeof m.label === "string" ? { label: m.label } : {}),
       kind,
+      ...mch,
     })
   })
 
@@ -744,4 +841,213 @@ function validateSequence(c: Collector, o: Obj, base: { title: string; subtitle?
 
 export function formatDiagnostic(d: Diagnostic): string {
   return `${d.severity}${d.path ? ` at ${d.path}` : ""}: ${d.message}${d.hint ? ` (hint: ${d.hint})` : ""}`
+}
+
+// ---------------------------------------------------------------------------
+// Change diagrams: delta / emphasis / files / stat / summary, `change` meta, consistency.
+
+const CHANGE_NODE_KEYS = ["delta", "files", "stat", "summary", "diff"]
+const CHANGE_EDGE_KEYS = ["delta", "emphasis", "files", "summary"]
+const FILE_REF_KEYS = new Set(["path", "lines", "revision"])
+
+const posInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 1
+
+function fileRefsOf(c: Collector, v: unknown, path: string): FileRefLike[] | undefined {
+  if (v === undefined) return undefined
+  const list = Array.isArray(v) ? v : typeof v === "string" || isObj(v) ? [v] : undefined
+  if (!list) {
+    c.error(path, `"files" must be a list of paths or { "path", "lines"?, "revision"? }`, `"files": ["src/api.ts", { "path": "src/db.ts", "lines": [10, 24] }]`)
+    return undefined
+  }
+  if (!Array.isArray(v)) c.warn(path, `"files" should be a list`, `wrap it in [ ... ]`)
+  const out: FileRefLike[] = []
+  list.forEach((f, i) => {
+    const p = Array.isArray(v) ? `${path}[${i}]` : path
+    if (typeof f === "string") {
+      if (!f.trim()) return c.error(p, "file path must not be empty")
+      out.push(f)
+      return
+    }
+    if (!isObj(f)) return c.error(p, `file must be a path or { "path": ..., "lines"?: ... }`)
+    unknownKeys(c, f, FILE_REF_KEYS, p)
+    if (typeof f.path !== "string" || !f.path.trim()) return c.error(`${p}.path`, `"path" must be a non-empty string`, `"path": "src/api.ts"`)
+    const ref: FileRef = { path: f.path }
+    if (f.lines !== undefined) {
+      if (posInt(f.lines)) ref.lines = f.lines
+      else if (Array.isArray(f.lines) && f.lines.length === 2 && posInt(f.lines[0]) && posInt(f.lines[1])) {
+        if (f.lines[0] > f.lines[1]) c.error(`${p}.lines`, `line range ${f.lines[0]}–${f.lines[1]} is reversed`, `use [${f.lines[1]}, ${f.lines[0]}]`)
+        else ref.lines = [f.lines[0], f.lines[1]]
+      } else c.error(`${p}.lines`, `"lines" must be a line number ≥ 1 or [first, last]`, `"lines": 12 or "lines": [12, 30] (1-based, inclusive)`)
+    }
+    const rev = oneOf(c, f.revision, ["head", "base"] as const, `${p}.revision`, "revision")
+    if (rev) ref.revision = rev
+    out.push(ref)
+  })
+  return out.length ? out : undefined
+}
+
+function statOf(c: Collector, v: unknown, path: string): ChangeStat | undefined {
+  if (v === undefined) return undefined
+  if (!isObj(v)) {
+    c.error(path, `"stat" must be { "add"?: n, "del"?: n }`, `"stat": { "add": 38, "del": 12 }`)
+    return undefined
+  }
+  unknownKeys(c, v, new Set(["add", "del"]), path)
+  const out: ChangeStat = {}
+  for (const k of ["add", "del"] as const) {
+    const x = v[k]
+    if (x === undefined) continue
+    if (typeof x !== "number" || !Number.isInteger(x)) c.error(`${path}.${k}`, `"${k}" must be a whole number of lines`)
+    else if (x < 0) c.error(`${path}.${k}`, `"${k}" must not be negative`, `count lines, e.g. "${k}": ${-x}`)
+    else out[k] = x
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+/** Change fields of a node / edge / message (validated, normalised). */
+type ChangeOut = Pick<GraphNode, "delta" | "files" | "stat" | "summary" | "diff"> & Pick<GraphEdge, "emphasis">
+function changeOf(c: Collector, o: Obj, p: string, what: "node" | "edge" | "message", kind?: string): ChangeOut {
+  const out: ChangeOut = {}
+  const d = oneOf(c, o.delta, DELTAS, `${p}.delta`, "delta")
+  if (d) out.delta = d
+  if (what !== "node") {
+    const em = oneOf(c, o.emphasis, EMPHASES, `${p}.emphasis`, "emphasis")
+    if (em) out.emphasis = em
+  }
+  const files = fileRefsOf(c, o.files, `${p}.files`)
+  if (files) out.files = files
+  if (o.summary !== undefined) {
+    if (typeof o.summary !== "string") c.error(`${p}.summary`, `"summary" must be a string`)
+    else if (o.summary.trim()) {
+      out.summary = o.summary
+      if (o.summary.length > 200) c.warn(`${p}.summary`, `"summary" is ${o.summary.length} characters`, "keep it to one line: what changed and why")
+    }
+  }
+  if (what === "node") {
+    const st = statOf(c, o.stat, `${p}.stat`)
+    if (st) out.stat = st
+    // `diff` (code nodes) is resolved and validated by the diff phases; carried as is here.
+    const d = diffOf(c, o.diff, `${p}.diff`, kind)
+    if (d !== undefined) out.diff = d
+    if (d !== undefined && o.code !== undefined) c.warn(`${p}.code`, `"code" is ignored on a diff node: the base version comes from the hunks`, `drop "code", or drop "diff" to show plain code`)
+  }
+  return out
+}
+
+function changeMetaOf(c: Collector, v: unknown): ChangeMeta | undefined {
+  if (v === undefined) return undefined
+  if (!isObj(v)) {
+    c.error("change", `"change" must be an object`, `"change": { "base": "main", "head": "feat/batch" }`)
+    return undefined
+  }
+  unknownKeys(c, v, new Set(["base", "head", "title", "url"]), "change")
+  const out: ChangeMeta = {}
+  for (const k of ["base", "head", "title", "url"] as const) {
+    if (v[k] === undefined) continue
+    if (typeof v[k] !== "string") c.error(`change.${k}`, `"${k}" must be a string`)
+    else if ((v[k] as string).trim()) out[k] = v[k] as string
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+/** Removed endpoints, hero budget, legend with nothing to show. */
+function checkChangeConsistency(c: Collector, spec: Spec): void {
+  const seq = spec.type === "sequence"
+  const removed = new Set<string>()
+  const ends: { path: string; from: string; to: string; delta?: string; emphasis?: string }[] = []
+  let anyDelta = false
+  if (seq) {
+    const s = spec as SequenceSpec
+    for (const p of s.participants) {
+      if (p.delta) anyDelta = true
+      if (p.delta === "removed") removed.add(p.id)
+    }
+    s.messages.forEach((m, i) => ends.push({ path: `messages[${i}]`, from: m.from, to: m.to, delta: m.delta, emphasis: m.emphasis }))
+  } else {
+    const g = spec as GraphSpec
+    for (const n of g.nodes) {
+      if (n.delta) anyDelta = true
+      if (n.delta === "removed") removed.add(n.id)
+    }
+    for (const gr of g.groups ?? []) if (gr.delta) anyDelta = true
+    ;(g.edges ?? []).forEach((e, i) => ends.push({ path: `edges[${i}]`, from: parseRef(e.from).node, to: parseRef(e.to).node, delta: e.delta, emphasis: e.emphasis }))
+  }
+  const what = seq ? "message" : "edge"
+  const ofWhat = seq ? "participant" : "node"
+  let heroes = 0
+  for (const e of ends) {
+    if (e.delta) anyDelta = true
+    const gone = [e.from, e.to].filter((x) => removed.has(x))
+    if (gone.length && e.delta !== "removed") {
+      const list = gone.map((x) => `"${x}"`).join(" and ")
+      if (e.delta === "added") c.error(`${e.path}.delta`, `an added ${what} cannot connect to removed ${ofWhat} ${list}`, `connect it to the ${ofWhat} that replaces ${list}, or mark the ${what} "removed"`)
+      else c.warn(e.path, `${what} touches removed ${ofWhat} ${list} but is not removed`, `set "delta": "removed" on the ${what}`)
+    }
+    if (e.emphasis === "hero" && ++heroes === 3) c.warn(`${e.path}.emphasis`, `more than 2 hero ${what}s`, "keep hero emphasis for the one or two paths the change is about")
+  }
+  if (spec.style?.legend === true && !anyDelta) c.warn("style.legend", "the legend has nothing to show", `add "delta" to the elements the change touches`)
+}
+
+// ---------------------------------------------------------------------------
+// Diff code nodes: `diff` = unified hunk text, or { file, lines?, context?, max? } resolved by
+// --changes into { file, hunks }.
+
+const DIFF_KEYS = new Set(["file", "lines", "context", "max", "hunks"])
+
+function diffOf(c: Collector, v: unknown, p: string, kind?: string): GraphNode["diff"] | undefined {
+  if (v === undefined) return undefined
+  if (kind !== undefined && kind !== "code") {
+    c.error(p, `"diff" is only drawn on "code" nodes`, `set "kind": "code"`)
+    return undefined
+  }
+  if (typeof v === "string" || (Array.isArray(v) && v.every((x) => typeof x === "string"))) {
+    const text = Array.isArray(v) ? v.join("\n") : v
+    const hunks = parseHunks(text)
+    if (!hunks.some((h) => h.lines.length)) {
+      c.error(p, `"diff" has no diff lines`, `unified hunk text: "@@ -12,3 +12,4 @@\\n context\\n-old\\n+new"`)
+      return undefined
+    }
+    return text
+  }
+  if (!isObj(v)) {
+    c.error(p, `"diff" must be unified hunk text or { "file", "lines"?, "context"?, "max"? }`)
+    return undefined
+  }
+  unknownKeys(c, v, DIFF_KEYS, p)
+  const intIn = (k: string, lo: number, hi: number) => {
+    const x = v[k]
+    if (x === undefined) return true
+    if (typeof x === "number" && Number.isInteger(x) && x >= lo && x <= hi) return true
+    c.error(`${p}.${k}`, `"${k}" must be a whole number from ${lo} to ${hi}`)
+    return false
+  }
+  let ok = intIn("context", 0, 20) && intIn("max", 4, 200)
+  if (v.file !== undefined && (typeof v.file !== "string" || !v.file.trim())) {
+    c.error(`${p}.file`, `"file" must be a non-empty path`)
+    ok = false
+  }
+  if (v.lines !== undefined) {
+    const L = v.lines
+    const good = posInt(L) || (Array.isArray(L) && L.length === 2 && posInt(L[0]) && posInt(L[1]) && L[0] <= L[1])
+    if (!good) {
+      c.error(`${p}.lines`, `"lines" must be a line number ≥ 1 or [first, last]`, `"lines": [40, 62] (head side, 1-based, inclusive)`)
+      ok = false
+    }
+  }
+  if (v.hunks !== undefined) {
+    const hs = v.hunks
+    const good = Array.isArray(hs) && hs.every((h) => isObj(h) && Array.isArray(h.lines) && typeof h.oldStart === "number" && typeof h.newStart === "number" && (h.lines as unknown[]).every((l) => isObj(l) && (l.kind === "context" || l.kind === "add" || l.kind === "del") && typeof l.text === "string"))
+    if (!good) {
+      c.error(`${p}.hunks`, `"hunks" must be parsed hunks ({ header, oldStart, newStart, lines: [{ kind, text, old?, new? }] })`, "let --changes / resolveChanges write them")
+      ok = false
+    }
+  } else if (ok) {
+    c.error(
+      p,
+      typeof v.file === "string" ? `"diff": { "file": "${v.file}" } needs the diff: render with --changes changes.json (storyink_render "changes")` : `"diff" needs "file" (resolved with --changes) or unified hunk text`,
+      typeof v.file === "string" ? `run "storyink diff -o changes.json" first, or inline the hunk text as "diff": "@@ … @@\\n-old\\n+new"` : undefined,
+    )
+    ok = false
+  }
+  return ok ? (v as unknown as GraphNode["diff"]) : undefined
 }

@@ -54,7 +54,7 @@ describe("plugin", () => {
     expect(plugin.id).toBe("storyink")
     await plugin.setup(m.ctx as any)
     expect(m.namespaces[0].name).toBe("storyink")
-    expect(m.tools.map((t) => t.name).sort()).toEqual(["from_mermaid", "render", "snapshot", "validate"])
+    expect(m.tools.map((t) => t.name).sort()).toEqual(["diff", "from_mermaid", "render", "snapshot", "validate"])
     for (const t of m.tools) {
       expect(t.options.namespace).toBe("storyink")
       expect(t.input.type).toBe("object")
@@ -86,5 +86,26 @@ describe("plugin", () => {
     const validateTool = m.tools.find((t) => t.name === "validate")
     const v = await validateTool.execute({ spec: '{"type":"sequence"}' }, context())
     expect(v.metadata.ok).toBe(false)
+  })
+
+  test("diff summarises a patch and render resolves `changes`", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "storyink-plugin-"))
+    const m = mockCtx(dir)
+    await plugin.setup(m.ctx as any)
+    const diff = m.tools.find((t) => t.name === "diff")
+    const patch = "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,2 +1,3 @@ fn\n x\n-y\n+z\n+w\n"
+    const res = await diff.execute({ patch, output: "changes.json" }, context())
+    expect(res.metadata.ok).toBe(true)
+    expect(res.metadata.stats).toEqual({ files: 1, add: 2, del: 1 })
+    expect(res.content).toContain("@@ -1,2 +1,3 @@ fn")
+    expect(res.content).not.toContain("+z") // never full hunks
+    expect(fs.existsSync(path.join(dir, "changes.json"))).toBe(true)
+    const render = m.tools.find((t) => t.name === "render")
+    const spec = { type: "architecture", title: "x", nodes: [{ id: "a", label: "A", files: ["src/a.ts"] }] }
+    const r = await render.execute({ spec, changes: "changes.json", output: "c.html" }, context())
+    expect(r.metadata.ok).toBe(true)
+    expect(fs.existsSync(path.join(dir, "c.html"))).toBe(true)
+    const bad = await render.execute({ spec, changes: { nope: 1 }, output: "d.html" }, context())
+    expect(bad.metadata.ok).toBe(false)
   })
 })

@@ -4,6 +4,10 @@ import { fromMermaid } from "./core/mermaid/index.ts"
 import { formatDiagnostic, type Diagnostic } from "./core/validate.ts"
 import { VERSION } from "./generated/meta.ts"
 import { readSkill, skillPath } from "./node/assets.ts"
+import { resolveChanges } from "./core/diff/resolve.ts"
+import { changesStoryOf } from "./core/story/changes.ts"
+import type { Spec } from "./core/spec.ts"
+import { diffSetFrom, diffSetJson, diffSummary, gitDiff } from "./node/git.ts"
 import { loadSpec, parseSource, setStoryCamera, setStoryMotion, setStoryPace, snapshot, writeAnimatedSvg, writeDiagram } from "./node/index.ts"
 import type { ThemeName } from "./theme/tokens.ts"
 
@@ -20,16 +24,20 @@ const cyan = paint(COLOR, "36")
 const HELP = `${bold("storyink")} ${dim(VERSION)} - diagrams from JSON or Mermaid into standalone HTML and SVG
 
 ${bold("Usage")}
-  storyink render <in.json|in.mmd|-> [-o out.html] [--svg out.svg] [--theme light|dark] [--story auto]
+  storyink render <in.json|in.mmd|-> [-o out.html] [--svg out.svg] [--theme light|dark] [--story auto|changes]
                  [--motion full|reduced|system]   story playback motion (default full; system = OS setting)
                  [--camera follow|fit]   viewer camera while playing (default follow)
                  [--pace N]   reading holds after each beat × N (default 0.6; 0 = none)
                  [--animated-svg out.svg [--theme light|dark|both] [--once] [--font system|embed]]
                    animated SVG (SMIL) for READMEs / PRs: plays inside <img>, no script
+                 [--changes changes.json|x.diff|x.patch]   resolve files / stat / diff nodes from a diff
+  storyink diff [<range>|<base> [<head>]] [--staged] [--patch file|-] [-o changes.json] [--json] [-- <pathspec>…]
+                   parse git diff (default: working tree vs merge base with main/master)
   storyink mermaid <in.mmd> [-o out.json]
   storyink validate <in> [--json]
   storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats]|--no-sheet]
                    [--at 0.5,1.2,end] [--motion reduced] [--camera follow] [--pace N] [--scale 2] [-o dir] [--json]
+                   [--rail] [--drawer <id|path>]   narration rail / change drawer in the --at captures
                    [--preview out.jpg [--preview-size 1024]]   compact one-image preview for agents
   storyink skill            print the SKILL.md path and content
   storyink --help | --version
@@ -47,14 +55,21 @@ ${bold("Examples")}
 interface Args {
   _: string[]
   flags: Map<string, string | true>
+  /** Everything after a bare `--` (diff pathspecs). */
+  rest: string[]
 }
 
 function parseArgs(argv: string[]): Args {
   const _: string[] = []
   const flags = new Map<string, string | true>()
-  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size", "--animated-svg", "--font", "--motion", "--camera", "--pace"])
+  const rest: string[] = []
+  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size", "--animated-svg", "--font", "--motion", "--camera", "--pace", "--patch", "--changes", "--drawer"])
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
+    if (a === "--") {
+      rest.push(...argv.slice(i + 1))
+      break
+    }
     if (a === "-" || !a.startsWith("-")) _.push(a)
     else if (a.includes("=")) {
       const [k, ...v] = a.split("=")
@@ -63,7 +78,7 @@ function parseArgs(argv: string[]): Args {
     else if (a === "--sheet" && (argv[i + 1] === "beats" || argv[i + 1] === "themes")) flags.set(a, argv[++i])
     else flags.set(a, true)
   }
-  return { _, flags }
+  return { _, flags, rest }
 }
 
 const str = (a: Args, ...keys: string[]) => {
@@ -111,13 +126,31 @@ async function main(argv: string[]): Promise<number> {
     const file = a._[1]
     if (!file) throw new Error("render needs an input file (or - for stdin)")
     const input = readInput(file)
+    const changesFile = str(a, "--changes")
+    if (changesFile) {
+      const ds = diffSetFrom(fs.readFileSync(changesFile, "utf8"), changesFile)
+      let raw: unknown
+      try {
+        raw = JSON.parse(input.text)
+      } catch {
+        const m = parseSource(input.text, input.name)
+        raw = m.spec
+      }
+      if (raw && typeof raw === "object") {
+        const r = resolveChanges(raw as Spec, ds)
+        printDiagnostics(r.diagnostics)
+        input.text = JSON.stringify(r.spec)
+        if (input.name) input.name = input.name.replace(/\.(mmd|mermaid)$/i, ".json")
+      }
+    }
     const loaded = parseSource(input.text, input.name)
     printDiagnostics(loaded.diagnostics)
     if (!loaded.ok || !loaded.spec) return 1
     const storyFlag = str(a, "--story")
     if (storyFlag !== undefined) {
-      if (storyFlag !== "auto") throw new Error(`--story takes "auto", got "${storyFlag}"`)
-      if (loaded.spec.story === undefined) loaded.spec.story = "auto"
+      if (storyFlag !== "auto" && storyFlag !== "changes") throw new Error(`--story takes "auto" or "changes", got "${storyFlag}"`)
+      if (storyFlag === "changes") loaded.spec.story = changesStoryOf(loaded.spec.story)
+      else if (loaded.spec.story === undefined) loaded.spec.story = "auto"
     }
     const motion = str(a, "--motion")
     if (motion !== undefined) {
@@ -159,6 +192,32 @@ async function main(argv: string[]): Promise<number> {
       ok = ok && r.ok
     }
     return ok ? 0 : 1
+  }
+
+  if (cmd === "diff") {
+    const patch = str(a, "--patch")
+    const [x, y] = a._.slice(1)
+    const ds = gitDiff({
+      cwd: process.cwd(),
+      staged: a.flags.has("--staged"),
+      ...(a.rest.length ? { paths: a.rest } : {}),
+      ...(patch !== undefined ? { patch: patch === "-" ? fs.readFileSync(0, "utf8") : fs.readFileSync(patch, "utf8") } : {}),
+      ...(y !== undefined ? { base: x, head: y } : x !== undefined ? (/\.\./.test(x) ? { range: x } : { base: x }) : {}),
+    })
+    const json = diffSetJson(ds)
+    const out = str(a, "-o", "--out")
+    if (out) {
+      fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true })
+      fs.writeFileSync(out, json)
+    }
+    if (a.flags.has("--json")) process.stdout.write(json)
+    else {
+      const [head, total, ...rows] = diffSummary(ds)
+      console.log(`${bold(head)}\n${dim(total)}`)
+      for (const r of rows) console.log(r.replace(/\+(\d+) −(\d+)/, (_, p, m) => `${green(`+${p}`)} ${red(`−${m}`)}`))
+      if (out) console.log(`${green("wrote")} ${path.resolve(out)} ${dim(kb(Buffer.byteLength(json)))}`)
+    }
+    return 0
   }
 
   if (cmd === "mermaid") {
@@ -209,6 +268,8 @@ async function main(argv: string[]): Promise<number> {
       ...(str(a, "--motion") === "reduced" || str(a, "--motion") === "full" ? { motion: str(a, "--motion") as "full" | "reduced" } : {}),
       ...(str(a, "--camera") === "follow" ? { camera: "follow" as const } : {}),
       ...(str(a, "--pace") !== undefined ? { pace: Number(str(a, "--pace")) } : {}),
+      ...(a.flags.has("--rail") ? { rail: true } : {}),
+      ...(str(a, "--drawer") ? { drawer: str(a, "--drawer") } : {}),
       ...(str(a, "-o", "--out") ? { outDir: str(a, "-o", "--out") } : {}),
       ...(str(a, "--t") ? { t: str(a, "--t") } : {}),
     })

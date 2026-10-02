@@ -15,8 +15,8 @@ import { createHash } from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { animatedHeaderHeight, animatedSvg, renderSvg, toScene } from "../src/core/index.ts"
-import { loadSpec, screenshotPage } from "../src/node/index.ts"
+import { animatedHeaderHeight, animatedSvg, renderSvg, resolveChanges, toScene, validate, type Spec } from "../src/core/index.ts"
+import { diffSetFrom, loadSpec, screenshotPage } from "../src/node/index.ts"
 import { ANIMATED } from "./animated-gallery.ts"
 import { wallShots } from "./cdp.ts"
 
@@ -52,7 +52,28 @@ const RICH_ALL = [
   ["failover.dataflow", "examples/failover.dataflow.json"],
   ["retry-helper.architecture", "examples/retry-helper.architecture.json"],
   ["agent-session.architecture", "examples/agent-session.architecture.json"],
+  // Change diagrams (deltas, hero edges, legend).
+  ["batch-email.dataflow", "examples/changes/batch-email.dataflow.json"],
+  ["auth-session-to-jwt.sequence", "examples/changes/auth-session-to-jwt.sequence.json"],
+  ["rate-limit-plugin.architecture", "examples/changes/rate-limit-plugin.architecture.json"],
+  // Diff code nodes (story apply).
+  ["payment-retry.architecture", "examples/changes/payment-retry.architecture.json"],
+  ["etl-dedupe.dataflow", "examples/changes/etl-dedupe.dataflow.json"],
+  ["storyink-core.architecture", "examples/changes/storyink-core.architecture.json"],
+  // Change stories (change steps, story: "changes", veil).
+  ["cache-layer.architecture", "examples/changes/cache-layer.architecture.json"],
+  ["batch-email.changes.dataflow", "examples/changes/batch-email.changes.dataflow.json"],
+  ["auth-session-to-jwt.changes.sequence", "examples/changes/auth-session-to-jwt.changes.sequence.json"],
 ] as const
+/** Specs rendered with --changes (resolved before validation). */
+const CHANGES: Record<string, string> = { "examples/changes/storyink-core.architecture.json": "examples/changes/storyink-0.4.0.changes.json" }
+const load = (file: string): { spec?: Spec } => {
+  const ch = CHANGES[file]
+  if (!ch) return loadSpec(path.join(root, file))
+  const raw = JSON.parse(fs.readFileSync(path.join(root, file), "utf8"))
+  const ds = diffSetFrom(fs.readFileSync(path.join(root, ch), "utf8"), ch)
+  return { spec: validate(resolveChanges(raw as Spec, ds).spec).spec }
+}
 // --only name,name limits the rich set (e.g. one new example).
 const oni = process.argv.indexOf("--only")
 const onlyNames = oni > 0 ? new Set(process.argv[oni + 1].split(",")) : undefined
@@ -62,7 +83,7 @@ const withRich = onlyRich || process.argv.includes("--rich")
 // ANIMATED includes the 0.4 rich examples (RICH); --only-rich limits parity to them.
 const SETS = onlyRich ? RICH : ANIMATED
 for (const [name, file] of SETS) {
-  const l = loadSpec(path.join(root, file))
+  const l = load(file)
   const spec = { ...l.spec!, story: l.spec!.story ?? ("auto" as const) }
   const scene = toScene(spec)
   const tl = scene.timeline!
@@ -98,7 +119,7 @@ if (withRich) {
   for (const [name0, file] of RICH)
   for (const theme of ["dark", "light"] as const) {
     const name = `${name0}.${theme}`
-    const spec = loadSpec(path.join(root, file)).spec!
+    const spec = load(file).spec!
     const info = animatedSvg(spec, { theme, font: "embed" })
     fs.writeFileSync(`${D}/${name}.img.svg`, info.svg)
     fs.writeFileSync(`${D}/${name}.img.html`, `<!doctype html><body style="margin:0;background:${theme === "dark" ? "#000" : "#fff"}"><img id="i" src="${name}.img.svg"></body>`)

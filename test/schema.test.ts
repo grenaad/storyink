@@ -69,6 +69,7 @@ export function check(s: S, v: unknown, at = "$"): string[] {
 const ex = path.join(import.meta.dir, "..", "examples")
 const files = [
   ...fs.readdirSync(ex).filter((f) => f.endsWith(".json")).map((f) => path.join(ex, f)),
+  ...fs.readdirSync(path.join(ex, "changes")).filter((f) => f.endsWith(".json") && !f.endsWith(".changes.json")).map((f) => path.join(ex, "changes", f)),
   path.join(import.meta.dir, "fixtures", "openwick-architecture.json"),
 ]
 
@@ -85,10 +86,22 @@ describe("JSON schema", () => {
     expect(bad([{ id: "a", kind: "panel", rows: [{ id: "12", text: "t" }] }])).toBe(true)
     expect(bad([{ id: "a", kind: "chip", icon: "plugg" }])).toBe(true)
     expect(bad([{ id: "a", kind: "chip", stack: 4 }])).toBe(true)
-    expect(bad([{ id: "a", kind: "code", lang: "rust" }])).toBe(true)
+    expect(bad([{ id: "a", kind: "code", lang: "cobol" }])).toBe(true)
     expect(bad([{ id: "a", kind: "code", size: { cols: 4 } }])).toBe(true)
     expect(bad([{ id: "a", kind: "code", code: ["x"] }], { story: { steps: [{ line: "a#4-" }] } })).toBe(true)
     expect(bad([{ id: "a", kind: "code", code: ["x"] }], { story: { steps: [{ set: { id: "a" } }] } })).toBe(true)
     expect(bad([{ id: "a", kind: "code", code: ["x"] }], { story: { steps: [{ line: "a#1-2", set: { id: "a", code: "y" }, type: { id: "a", cps: 90 } }] } })).toBe(false)
+  })
+
+  test("change fields: accepts valid, rejects bad values", () => {
+    const base = { type: "architecture", title: "x" }
+    const bad = (v: object) => check(root, { ...base, ...v }).length > 0
+    expect(bad({ nodes: [{ id: "a", delta: "added", stat: { add: 1, del: 0 }, summary: "s", files: ["a.ts", { path: "b.ts", lines: [1, 2], revision: "base" }] }], edges: [{ from: "a", to: "a", delta: "removed", emphasis: "hero" }], groups: [{ id: "g", delta: "modified" }], change: { base: "main", head: "x" }, style: { legend: false } })).toBe(false)
+    expect(bad({ nodes: [{ id: "a", delta: "new" }] })).toBe(true)
+    expect(bad({ nodes: [{ id: "a", stat: { add: -1 } }] })).toBe(true)
+    expect(bad({ nodes: [{ id: "a", files: [{ path: "a.ts", lines: 0 }] }] })).toBe(true)
+    expect(bad({ nodes: [{ id: "a" }], edges: [{ from: "a", to: "a", emphasis: "loud" }] })).toBe(true)
+    expect(bad({ nodes: [{ id: "a" }], change: { branch: "x" } })).toBe(true)
+    expect(check(root, { type: "sequence", title: "s", participants: [{ id: "a", delta: "removed" }], messages: [{ from: "a", to: "a", delta: "added", emphasis: "muted", files: ["x"] }] })).toEqual([])
   })
 })

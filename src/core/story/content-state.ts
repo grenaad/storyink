@@ -14,6 +14,8 @@ import type { ContentLayer, Frame, StatusFrame, Timeline, TimelineTyping } from 
 export const SHIMMER = { width: 140, peak: 0.85, dip: 0.4 } as const
 /** Spotlight peak amplitude, glide (spring visual duration, s) and end fade (s). */
 export const SPOT = { a: 0.06, glide: 0.75, fade: 0.6 } as const
+/** Veil (spotlight "veil"): strength, glide spring and fade-out after the last event. */
+export const VEIL = { a: 0.55, glide: 0.75, fade: 0.6 } as const
 
 const r2 = (n: number) => Math.round(n * 100) / 100
 
@@ -92,6 +94,22 @@ export function contentFrame(scene: Scene, tl: Timeline, t: number, tc: number, 
     if (Object.keys(undraw).length) frame.undraw = undraw
   }
 
+  // Diff code nodes: per-hunk apply progress (linear; the renderer's phases ease it).
+  if (tl.applies) {
+    const diff: Record<string, number[]> = {}
+    for (const [id, ev] of Object.entries(tl.applies)) {
+      const n = scene.nodes.find((x) => x.id === id)
+      if (!n?.diff) continue
+      const us = new Array<number>(n.diff.hunks).fill(1)
+      for (const e of ev) {
+        const u = reduced ? (tc >= e.t1 - 1e-9 ? 1 : 0) : Math.max(0, Math.min(1, (t - e.t0) / Math.max(1e-6, e.t1 - e.t0)))
+        for (const h of e.hunks) us[h] = Math.round(u * 1e4) / 1e4
+      }
+      if (us.some((u) => u < 1)) diff[id] = us
+    }
+    if (Object.keys(diff).length) frame.diff = diff
+  }
+
   // Active-line bars: opacity and range spring between events.
   if (tl.bars) {
     const bars: Record<string, { a: number; b: number; o: number }> = {}
@@ -148,6 +166,39 @@ export function contentFrame(scene: Scene, tl: Timeline, t: number, tc: number, 
     }
     const a = SPOT.a * (reduced ? (t >= first.t ? 1 : 0) : react(t - first.t)) * (1 - smoothstep((t - tl.lastEvent) / SPOT.fade))
     if (a > 0.0005) frame.spot = { x: r2(x), y: r2(y), r: r2(r), a: Math.round(a * 1e4) / 1e4 }
+  }
+
+  // Veil (spotlight "veil"): the cutout glides between step focus boxes; gone after the last event.
+  if (tl.veil?.length) {
+    const v = tl.veil
+    let { x, y, w, h } = v[0]
+    for (let k = 1; k < v.length; k++) {
+      const p = reduced ? (t >= v[k].t ? 1 : 0) : spring(t - v[k].t, VEIL.glide)
+      x += (v[k].x - v[k - 1].x) * p
+      y += (v[k].y - v[k - 1].y) * p
+      w += (v[k].w - v[k - 1].w) * p
+      h += (v[k].h - v[k - 1].h) * p
+    }
+    const a = (reduced ? (t >= v[0].t ? 1 : 0) : react(t - v[0].t)) * (1 - smoothstep((t - tl.lastEvent) / VEIL.fade))
+    if (a > 0.0005) frame.veil = { x: r2(x), y: r2(y), w: r2(w), h: r2(h), a: Math.round(a * 1e4) / 1e4 }
+  }
+
+  // Change steps: before → after look per element (eased), legend items appearing.
+  if (tl.changes) {
+    const delta: Record<string, number> = {}
+    for (const [id, e] of Object.entries(tl.changes)) {
+      const u = reduced ? (tc >= e.t1 - 1e-9 ? 1 : 0) : inOutCubic((t - e.t0) / Math.max(1e-6, e.t1 - e.t0))
+      if (u < 0.9995) delta[id] = Math.round(u * 1e4) / 1e4
+    }
+    if (Object.keys(delta).length) frame.delta = delta
+  }
+  if (tl.legendAt) {
+    const legend: Record<string, number> = {}
+    for (const [d, at] of Object.entries(tl.legendAt)) {
+      const o = reduced ? (t >= at ? 1 : 0) : react(t - at)
+      if (o < 0.9995) legend[d] = Math.round(o * 1e4) / 1e4
+    }
+    if (Object.keys(legend).length) frame.legend = legend
   }
 
   // Content versions, typing and the caret.

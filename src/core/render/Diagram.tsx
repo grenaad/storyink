@@ -1,11 +1,15 @@
-import { createContext, useContext, type CSSProperties, type ReactElement, type ReactNode } from "react"
+import { createContext, Fragment, useContext, type CSSProperties, type ReactElement, type ReactNode } from "react"
 import type { ContentLayer, Frame, StatusFrame } from "../story/types.ts"
 import { SHIMMER } from "../story/content-state.ts"
 import { geometry as G, type as T } from "../../theme/tokens.ts"
 import type { Arrowhead, CodeLine, Scene, SceneEdge, SceneFrame, SceneGroup, SceneNode, SceneRow } from "../scene.ts"
 import { r2 } from "../layout/measure.ts"
 import { ICON_PATHS, STATUS_PATHS } from "./icons.ts"
-import type { IconName, RowStatus } from "../spec.ts"
+import type { Delta, Emphasis, IconName, RowStatus } from "../spec.ts"
+import { delta as DL } from "../../theme/tokens.ts"
+import { textWidth } from "../layout/measure.ts"
+import { groupBadgeText, LEGEND_SWATCH, legendItemW, statParts } from "../layout/delta.ts"
+import { diffGeom } from "../layout/diffnode.ts"
 
 export interface DiagramProps {
   scene: Scene
@@ -159,9 +163,12 @@ function NodeView({ n, copy, fr, smil, typed }: { n: SceneNode; copy: string; fr
   const glows = fr?.glows.filter((g) => g.node === n.id) ?? []
   const rich = n.shape === "window" || n.shape === "chip"
   const counterText = n.counter ? (fr?.counters[n.counter.id] ?? `${n.counter.prefix ?? ""}${n.counter.value}${n.counter.suffix ?? ""}`) : undefined
+  // A `change` step owns this node's delta look: neutral before, the delta face fades in over it.
+  const ch = useChange(n.id, fr)
+  const face = rich ? <RichFace n={n} /> : <NodeShape n={n} />
   return (
     <g
-      className={`si-node si-a-${n.accent}`}
+      className={ch ? `si-node si-a-${n.accent0 ?? n.accent}` : `si-node si-a-${n.accent}${n.delta ? ` si-d-${n.delta}` : ""}`}
       data-si={`node:${n.id}`}
       data-copy={copy || undefined}
       data-box={`${n.x},${n.y},${n.w},${n.h}`}
@@ -169,7 +176,13 @@ function NodeView({ n, copy, fr, smil, typed }: { n: SceneNode; copy: string; fr
       style={opStyle(v, nodeLevel(n, fr))}
     >
       {smil?.(`node:${n.id}`)}
-      {rich ? <RichFace n={n} /> : <NodeShape n={n} />}
+      <DeltaLevel level={ch ? ch.level(deltaLevel(n.delta)) : deltaLevel(n.delta)} smil={ch?.union ? smil : undefined} hook={`dlvl:${n.id}`}>
+      {face}
+      {ch ? (
+        <ChangeLayer ch={ch} smil={smil} hook={`dface:${n.id}`} className={`si-dface si-a-${n.accent} si-d-${n.delta}`}>
+          {face}
+        </ChangeLayer>
+      ) : null}
       {smil?.(`glow:${n.id}`)}
       {glows.map((g, k) => {
         const gid = `si-glow-${copy}-${n.id}-${k}`.replace(/[^\w-]/g, "_")
@@ -221,6 +234,158 @@ function NodeView({ n, copy, fr, smil, typed }: { n: SceneNode; copy: string; fr
         </text>
       ) : null}
       {n.counter ? smil?.(`cdup:${n.counter.id}`) : null}
+      {n.delta === "removed" ? (
+        ch ? (
+          <ChangeLayer ch={ch} smil={smil} hook={`dstrike:${n.id}`}>
+            <NodeStrike n={n} />
+          </ChangeLayer>
+        ) : (
+          <NodeStrike n={n} />
+        )
+      ) : null}
+      {n.badge ? (
+        ch ? (
+          <ChangeLayer ch={ch} smil={smil} hook={`dbadge:${n.id}`}>
+            <BadgeView n={n} />
+          </ChangeLayer>
+        ) : (
+          <BadgeView n={n} />
+        )
+      ) : null}
+      </DeltaLevel>
+    </g>
+  )
+}
+
+/** Change diagrams: static level of a delta (removed = ghost, unchanged = context), × emphasis. */
+function deltaLevel(d?: Delta, emphasis?: Emphasis): number | undefined {
+  const a = d === "removed" ? DL.ghost : d === "unchanged" ? DL.context : 1
+  const b = emphasis === "muted" ? DL.mutedEdge : 1
+  return a * b < 1 ? +(a * b).toFixed(3) : undefined
+}
+
+/** A static opacity wrapper (inside the story-owned group, so story levels multiply with it). */
+function DeltaLevel({ level, children, smil, hook }: { level?: number; children: ReactNode; smil?: Smil; hook?: string }) {
+  // Animated SVG (a change step owns the level): always a group, with its SMIL track.
+  if (smil && hook) return <g className="si-dl" opacity={level}>{smil(hook)}{children}</g>
+  return level === undefined ? <>{children}</> : <g className="si-dl" opacity={level}>{children}</g>
+}
+
+/** A `change` step on an element: before → after progress (`p`, 1 = after look). */
+interface Change {
+  p: number
+  union: boolean
+  /** The delta level at this progress (1 before → the delta's level after). */
+  level: (after?: number) => number | undefined
+}
+function useChange(id: string, fr?: Frame): Change | undefined {
+  const tl = useContext(TlCtx)
+  const u = useUnion()
+  if (!tl?.changes?.[id]) return undefined
+  const p = fr?.delta?.[id] ?? 1
+  return {
+    p,
+    union: !!u,
+    level: (after) => {
+      const l = 1 + ((after ?? 1) - 1) * p
+      return l < 0.9995 ? +l.toFixed(3) : undefined
+    },
+  }
+}
+/** The after-look layer of a changed element (opacity = progress; SMIL hook in the animated SVG). */
+function ChangeLayer({ ch, smil, hook, className, children }: { ch: Change; smil?: Smil; hook: string; className?: string; children: ReactNode }) {
+  if (!ch.union && ch.p <= 0.0005) return null
+  return (
+    <g className={className} opacity={ch.p < 0.9995 ? +ch.p.toFixed(3) : undefined}>
+      {ch.union ? smil?.(hook) : null}
+      {children}
+    </g>
+  )
+}
+
+const strikeY = (baseline: number, size: number) => f(baseline - size * 0.3)
+
+/** Removed nodes: a rule through the label (spec version). */
+function NodeStrike({ n }: { n: SceneNode }) {
+  if (n.shape === "window") {
+    const hh = n.header?.h ?? G.headerH
+    const x = G.panelPadX + (n.icon ? G.iconW : 0)
+    const title = n.header?.title ?? n.label.join(" ").toUpperCase()
+    return <line className="si-strike" x1={x - 2} x2={f(x + textWidth(title, T.header, T.tagTracking) + 1)} y1={strikeY(hh / 2 + T.header * 0.36, T.header)} y2={strikeY(hh / 2 + T.header * 0.36, T.header)} />
+  }
+  if (n.shape === "chip") {
+    const w = textWidth(n.label.join(" "), T.label)
+    const y = strikeY(n.text.labelY[0], T.label)
+    return <line className="si-strike" x1={f(n.text.cx - 2)} x2={f(n.text.cx + w + 2)} y1={y} y2={y} />
+  }
+  const size = n.shape === "pill" ? T.label - 1 : T.label
+  return (
+    <>
+      {n.label.map((line, k) => {
+        const w = textWidth(line, size)
+        const y = strikeY(n.text.labelY[k], size)
+        return <line key={k} className="si-strike" x1={f(n.text.cx - w / 2 - 2)} x2={f(n.text.cx + w / 2 + 2)} y1={y} y2={y} />
+      })}
+    </>
+  )
+}
+
+/** Delta badge ("NEW" / "CHANGED" / "REMOVED") and stat ("+38 −12"). */
+function BadgeView({ n }: { n: SceneNode }) {
+  const b = n.badge!
+  const x = b.cx !== undefined ? b.cx - b.w / 2 : n.w - (b.right ?? 0) - b.w
+  const base = f(b.y + b.h / 2 + DL.badgeFont * 0.36)
+  const sp = b.stat ? statParts(b.stat) : undefined
+  const statBase = f(b.y + b.h / 2 + DL.statFont * 0.36)
+  return (
+    <g className="si-badge" data-si={`badge:${n.id}`}>
+      {b.text && n.delta ? (
+        <>
+          <rect className={`si-badge-${n.delta}`} x={f(x)} y={f(b.y)} width={f(b.w)} height={b.h} rx={2} />
+          <text className={`si-badge-text si-badge-text-${n.delta}`} x={f(x + b.w / 2)} y={base} textAnchor="middle">
+            {b.text}
+          </text>
+        </>
+      ) : null}
+      {sp && (sp.add || sp.del) ? (
+        <text className="si-stat" x={f(b.text ? x - 5 : x + b.w)} y={statBase} textAnchor="end">
+          {sp.add ? <tspan className="si-stat-add">{sp.add}</tspan> : null}
+          {sp.add && sp.del ? " " : null}
+          {sp.del ? <tspan className="si-stat-del">{sp.del}</tspan> : null}
+        </text>
+      ) : null}
+    </g>
+  )
+}
+
+/** Legend band: the deltas present, and the change meta ("main → feat/batch") on the right. */
+function LegendView({ scene, fr, smil }: { scene: Scene; fr?: Frame; smil?: Smil }) {
+  const u = useUnion()
+  const l = scene.legend!
+  let x = l.x
+  const sy = l.y - 8.5
+  return (
+    <g className="si-legend" data-si="legend">
+      {l.items.map((d) => {
+        const at = x
+        x += legendItemW(d)
+        const o = fr?.legend?.[d]
+        const timed = !!scene.timeline?.legendAt?.[d]
+        return (
+          <g key={d} opacity={o !== undefined ? +o.toFixed(3) : undefined}>
+            {u && timed ? smil?.(`legend:${d}`) : null}
+            <rect className={`si-sw-${d}`} x={f(at)} y={f(sy)} width={LEGEND_SWATCH} height={9} rx={1.5} opacity={d === "removed" ? DL.ghost + 0.2 : d === "unchanged" ? DL.context : undefined} />
+            <text className="si-legend-text" x={f(at + LEGEND_SWATCH + 6)} y={f(l.y)}>
+              {d.toUpperCase()}
+            </text>
+          </g>
+        )
+      })}
+      {l.meta ? (
+        <text className="si-legend-meta" x={f(l.metaX ?? 0)} y={f(l.y)} textAnchor="end">
+          {l.meta}
+        </text>
+      ) : null}
     </g>
   )
 }
@@ -286,6 +451,42 @@ function SpotLayer({ fr, copy, smil }: { fr?: Frame; copy: string; smil?: Smil }
     </g>
   )
 }
+
+/**
+ * Veil (story `spotlight: "veil"`): the page colour over everything outside a soft rounded cutout
+ * (mask: full rect + blurred black cutout) and a thin rim; the cutout glides between step focus
+ * boxes and the veil is gone in the final frame.
+ */
+function VeilLayer({ fr, copy, smil, vb }: { fr?: Frame; copy: string; smil?: Smil; vb: Scene["viewBox"] }) {
+  const u = useUnion()
+  const tl = useContext(TlCtx)
+  const v0 = fr?.veil
+  const v = v0 ?? (u && tl?.veil?.length ? { ...tl.veil[0], a: 0 } : undefined)
+  if (!v) return null
+  const id = `si-veil-${copy}`.replace(/[^\w-]/g, "_")
+  return (
+    <g className={xcls("si-veil", !!u && !v0)} opacity={v.a < 0.9995 ? +v.a.toFixed(3) : undefined} aria-hidden="true" style={{ pointerEvents: "none" }}>
+      {smil?.("veil")}
+      <defs>
+        <filter id={`${id}-b`} x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur stdDeviation={VEIL_BLUR} />
+        </filter>
+        <mask id={id} maskUnits="userSpaceOnUse" x={vb.x} y={vb.y} width={vb.w} height={vb.h}>
+          <rect x={vb.x} y={vb.y} width={vb.w} height={vb.h} fill="#fff" />
+          <rect x={f(v.x)} y={f(v.y)} width={f(v.w)} height={f(v.h)} rx={14} fill="#000" filter={`url(#${id}-b)`}>
+            {smil?.("veilr")}
+          </rect>
+        </mask>
+      </defs>
+      <rect className="si-veil-shade" x={vb.x} y={vb.y} width={vb.w} height={vb.h} mask={`url(#${id})`} />
+      <rect className="si-veil-rim" x={f(v.x)} y={f(v.y)} width={f(v.w)} height={f(v.h)} rx={14}>
+        {smil?.("veilr")}
+      </rect>
+    </g>
+  )
+}
+/** Veil cutout edge softness (Gaussian blur, px). */
+const VEIL_BLUR = 9
 
 /** Rest / story level of a node: dim channel (`lvl`, else muted → 0.42) × visibility channel. */
 function nodeLevel(n: Pick<SceneNode, "id" | "muted">, fr?: Frame): number | undefined {
@@ -602,6 +803,7 @@ function CodeView({ n, fr, smil, copy, typed }: { n: SceneNode; copy: string; fr
   return (
     <g className="si-code" data-si={`code:${n.id}`}>
       {smil?.(`code:${n.id}`)}
+      {n.diff ? <DiffView n={n} fr={fr} smil={smil} copy={copy} /> : null}
       {bar ? (
         <g className={xcls("si-bar", barX)} style={barX ? undefined : layerStyle(bar.o)} opacity={barX ? 0 : undefined}>
           {smil?.(`bar:${n.id}`)}
@@ -613,7 +815,7 @@ function CodeView({ n, fr, smil, copy, typed }: { n: SceneNode; copy: string; fr
           </rect>
         </g>
       ) : null}
-      {unionLayers(u, tl, n.id, layers).map(({ l, extra }) => {
+      {(n.diff ? [] : unionLayers(u, tl, n.id, layers)).map(({ l, extra }) => {
         const ver = c.versions[l.v]
         if (!ver) return null
         const clip = typed.get(`${n.id}|${l.v}`) === "char"
@@ -654,12 +856,106 @@ function CodeView({ n, fr, smil, copy, typed }: { n: SceneNode; copy: string; fr
   )
 }
 
+/**
+ * A diff code node's body: gutter (old | new numbers), +/− markers, row tints with intra-line
+ * marks, hunk headers and the fold row. Story `apply` (frame.diff) plays the base version into the
+ * diff; the animated SVG renders every row with SMIL hooks (`drow` / `dtint` / `dnum` / `dh` / `dclip`).
+ */
+function DiffView({ n, fr, smil, copy }: { n: SceneNode; fr?: Frame; smil?: Smil; copy: string }) {
+  const u = useUnion()
+  const tl = useContext(TlCtx)
+  const d = n.diff!
+  const look = diffGeom(d, fr?.diff?.[n.id])
+  const animated = !!(u && tl?.applies?.[n.id])
+  const base = d.lh / 2 + T.code * 0.35
+  const numBase = d.lh / 2 + T.detail * 0.35
+  const op = (o: number) => (o < 1 ? +o.toFixed(3) : undefined)
+  return (
+    <g className="si-diff" data-si={`diff:${n.id}`}>
+      <line className="si-diff-rule" x1={d.ruleX} x2={d.ruleX} y1={d.top - 4} y2={f(n.h - G.panelPadY + 4)} />
+      {d.rows.map((r, k) => {
+        const l = look[k]
+        if (!animated && l.h <= 0) return null
+        const key = `${n.id}:${k}`
+        const clip = r.kind === "add" && (animated || l.h < d.lh || l.chars !== undefined)
+        const cid = clipId(copy, "diff", n.id, k)
+        const text = r.kind === "fold" ? (
+          <text className="si-diff-fold" x={d.codeX} y={f(numBase)}>
+            {r.text}
+          </text>
+        ) : r.kind === "hunk" ? null : (
+          <CodeLineText line={r.tokens} x={d.codeX} y={base} />
+        )
+        return (
+          <g key={k} className={`si-drow si-drow-${r.kind}`} transform={`translate(0 ${f(l.y)})`}>
+            {smil?.(`drow:${key}`)}
+            {r.kind === "add" || r.kind === "del" ? (
+              <g className="si-dtint" opacity={op(l.tint)}>
+                {smil?.(`dtint:${key}`)}
+                <rect className={`si-diff-bg-${r.kind}`} x={1} y={0} width={n.w - 2} height={f(l.h)}>
+                  {smil?.(`dh:${key}`)}
+                </rect>
+                {(r.marks ?? []).map(([a, b], j) => (
+                  <rect key={j} className={`si-diff-mk-${r.kind}`} x={f(d.codeX + a * ADV_CODE - 1)} y={2} width={f((b - a) * ADV_CODE + 2)} height={f(Math.max(0, Math.min(l.h, d.lh) - 4))}>
+                    {smil?.(`dmk:${key}`)}
+                  </rect>
+                ))}
+                <text className={`si-diff-sign si-diff-sign-${r.kind}`} x={d.markX} y={f(base)}>
+                  {r.kind === "add" ? "+" : "\u2212"}
+                </text>
+                {r.kind === "del" ? <line className="si-diff-strike" x1={d.codeX} x2={f(d.codeX + r.text.trimEnd().length * ADV_CODE)} y1={f(d.lh / 2)} y2={f(d.lh / 2)} /> : null}
+              </g>
+            ) : null}
+            {r.kind === "hunk" ? (
+              <g opacity={op(l.num)}>
+                {smil?.(`dnum:${key}`)}
+                <rect className="si-diff-hunk-bg" x={1} y={1} width={n.w - 2} height={d.lh - 2} />
+                <text className="si-diff-hunk" x={d.markX} y={f(numBase)}>
+                  {r.text}
+                </text>
+              </g>
+            ) : r.kind !== "fold" ? (
+              <g opacity={op(l.num)}>
+                {smil?.(`dnum:${key}`)}
+                {r.old !== undefined ? (
+                  <text className="si-diff-num" x={d.oldX} y={f(numBase)} textAnchor="end">
+                    {r.old}
+                  </text>
+                ) : null}
+                {r.new !== undefined ? (
+                  <text className="si-diff-num" x={d.newX} y={f(numBase)} textAnchor="end">
+                    {r.new}
+                  </text>
+                ) : null}
+              </g>
+            ) : null}
+            {clip ? (
+              <g clipPath={`url(#${cid})`}>
+                <clipPath id={cid}>
+                  <rect x={d.codeX - 2} y={0} width={f(l.chars !== undefined ? l.chars * ADV_CODE + 2 : n.w - d.codeX)} height={f(l.h)}>
+                    {smil?.(`dclip:${key}`)}
+                    {smil?.(`dh:${key}`)}
+                  </rect>
+                </clipPath>
+                {text}
+              </g>
+            ) : (
+              text
+            )}
+          </g>
+        )
+      })}
+    </g>
+  )
+}
+
 function GroupView({ g, fr, smil }: { g: SceneGroup; fr?: Frame; smil?: Smil }) {
+  const ch = useChange(g.id, fr)
   const labelText = g.composite ? g.label : g.label.toUpperCase()
   const v = fr?.el[g.id]
   const l = fr?.lvl?.[g.id] !== undefined || fr?.vis?.[g.id] !== undefined ? (fr?.lvl?.[g.id] ?? 1) * (fr?.vis?.[g.id] ?? 1) : undefined
   return (
-    <g className="si-grp" data-si={`group:${g.id}`} style={opStyle(v, l)} transform={v?.dy ? `translate(0 ${f(v.dy)})` : undefined}>
+    <g className={g.delta && !ch ? `si-grp si-d-${g.delta}` : "si-grp"} data-si={`group:${g.id}`} style={opStyle(v, l)} transform={v?.dy ? `translate(0 ${f(v.dy)})` : undefined}>
       {smil?.(`group:${g.id}`)}
       {g.bare ? null : <rect className={g.composite ? "si-group-composite" : "si-group"} x={g.x} y={g.y} width={g.w} height={g.h} rx={G.groupRadius} />}
       {g.composite ? (
@@ -667,11 +963,20 @@ function GroupView({ g, fr, smil }: { g: SceneGroup; fr?: Frame; smil?: Smil }) 
       ) : null}
       <text className={g.composite ? "si-group-title" : "si-group-label"} x={f(g.x + 12)} y={f(g.y + (g.composite ? 16 : 15))}>
         {labelText}
+        {g.delta && groupBadgeText(g.delta) ? (
+          <tspan className={`si-group-badge-${g.delta}`} fontWeight={700} fillOpacity={ch && ch.p < 0.9995 ? +ch.p.toFixed(3) : undefined}>
+            {groupBadgeText(g.delta)}
+            {ch?.union ? smil?.(`gbadge:${g.id}`) : null}
+          </tspan>
+        ) : null}
         {g.kind && !g.composite ? <tspan className="si-group-label" dx={8} opacity={0.7}>{`· ${g.kind.toUpperCase()}`}</tspan> : null}
       </text>
     </g>
   )
 }
+
+/** Dashed wires (and removed edges, dashed by CSS) draw on / retract by opacity, not by a dash. */
+export const dashedLook = (e: Pick<SceneEdge, "style" | "delta">): boolean => e.style === "dashed" || e.delta === "removed"
 
 function EdgeView({ e, fr, smil, lvl }: { e: SceneEdge; fr?: Frame; smil?: Smil; lvl?: number }) {
   const cls = `si-wire${e.style === "dashed" ? " si-dashed" : e.style === "thick" ? " si-thick" : ""}`
@@ -684,19 +989,38 @@ function EdgeView({ e, fr, smil, lvl }: { e: SceneEdge; fr?: Frame; smil?: Smil;
   const wireStyle: CSSProperties | undefined = u !== undefined
     ? u >= 1
       ? { opacity: 0 }
-      : e.style === "dashed"
+      : dashedLook(e)
         ? { opacity: +Math.max(0, 1 - u * 1.4).toFixed(3) }
         : { strokeDasharray: `${f(L)} ${f(L)}`, strokeDashoffset: f(-L * u) }
     : drawing
     ? d <= 0
       ? { opacity: 0 }
-      : e.style === "dashed"
+      : dashedLook(e)
         ? { opacity: +Math.min(1, d * 1.4).toFixed(3) }
         : { strokeDasharray: `${f(L)} ${f(L)}`, strokeDashoffset: f(L * (1 - d)) }
     : undefined
+  const ch = useChange(e.id, fr)
   return (
-    <g className="si-edge" data-si={`edge:${e.id}`} style={lvl !== undefined && lvl < 1 ? { opacity: +lvl.toFixed(3) } : undefined}>
+    <g className={ch ? "si-edge" : `si-edge${e.delta ? ` si-d-${e.delta}` : ""}${e.emphasis === "hero" ? " si-hero" : ""}`} data-si={`edge:${e.id}`} style={lvl !== undefined && lvl < 1 ? { opacity: +lvl.toFixed(3) } : undefined}>
       {smil?.(`edge:${e.id}`)}
+      {ch ? (
+        // After look (ghost / gold / hero) over the neutral wire, which a removed edge retracts.
+        <ChangeLayer ch={ch} smil={smil} hook={`eafter:${e.id}`} className={`si-edge si-d-${e.delta}${e.emphasis === "hero" ? " si-hero" : ""}`}>
+          <DeltaLevel level={deltaLevel(e.delta, e.emphasis)}>
+            {e.emphasis === "hero" ? <path className="si-hero-glow" d={e.d} /> : null}
+            <path className={cls} d={e.d} />
+            {e.heads.map((h, k) => (
+              <Head key={k} h={h} />
+            ))}
+          </DeltaLevel>
+        </ChangeLayer>
+      ) : null}
+      <DeltaLevel level={ch ? deltaLevel(undefined, e.emphasis) : deltaLevel(e.delta, e.emphasis)}>
+      {e.emphasis === "hero" && !ch ? (
+        <path className="si-hero-glow" d={e.d} style={wireStyle}>
+          {smil?.(`wire:${e.id}`)}
+        </path>
+      ) : null}
       <path className={cls} d={e.d} style={wireStyle}>
         {smil?.(`wire:${e.id}`)}
       </path>
@@ -715,6 +1039,7 @@ function EdgeView({ e, fr, smil, lvl }: { e: SceneEdge; fr?: Frame; smil?: Smil;
           </text>
         </g>
       ) : null}
+      </DeltaLevel>
     </g>
   )
 }
@@ -724,13 +1049,26 @@ function LabelView({ e, fr, smil }: { e: SceneEdge; fr?: Frame; smil?: Smil }) {
   const text = e.seq !== undefined ? l.text.replace(/^\d+\.\s*/, "") : l.text
   const d = fr?.draw[e.id]
   const o = d === undefined ? 1 : Math.max(0, Math.min(1, (d - 0.35) / 0.4))
+  const ch = useChange(e.id, fr)
+  const strike = <line className="si-strike" x1={f(l.x + l.w / 2 - textWidth(text, T.edgeLabel) / 2 - 1)} x2={f(l.x + l.w / 2 + textWidth(text, T.edgeLabel) / 2 + 1)} y1={f(l.y + l.h / 2)} y2={f(l.y + l.h / 2)} />
   return (
-    <g className="si-lbl" data-si={`label:${l.id}`} data-box={`${l.x},${l.y},${l.w},${l.h}`} style={o < 1 ? { opacity: +o.toFixed(3) } : undefined}>
+    <g className={e.delta && !ch ? `si-lbl si-d-${e.delta}` : "si-lbl"} data-si={`label:${l.id}`} data-box={`${l.x},${l.y},${l.w},${l.h}`} style={o < 1 ? { opacity: +o.toFixed(3) } : undefined}>
       {smil?.(`elabel:${e.id}`)}
       <rect className={`si-pill si-on-${l.surface ?? "bg"}`} x={l.x} y={l.y} width={l.w} height={l.h} />
+      <DeltaLevel level={ch ? ch.level(deltaLevel(e.delta, e.emphasis)) : deltaLevel(e.delta, e.emphasis)} smil={ch?.union ? smil : undefined} hook={`llvl:${e.id}`}>
       <text className="si-edge-label" x={f(l.x + l.w / 2)} y={f(l.y + l.h / 2 + 3.8)} textAnchor="middle">
         {text}
       </text>
+      {e.delta === "removed" ? (
+        ch ? (
+          <ChangeLayer ch={ch} smil={smil} hook={`lstrike:${e.id}`}>
+            {strike}
+          </ChangeLayer>
+        ) : (
+          strike
+        )
+      ) : null}
+      </DeltaLevel>
     </g>
   )
 }
@@ -810,7 +1148,7 @@ function DiagramInner({ scene, style, copy = "", className, frame, smil, union }
   const fr =
     frame &&
     (has(frame.el) || has(frame.draw) || has(frame.grow) || frame.pulses.length || frame.glows.length || has(frame.flash) || has(frame.counters) ||
-      has(frame.lvl) || has(frame.vis) || has(frame.content) || has(frame.status) || has(frame.bars) || has(frame.lit) || has(frame.undraw) || frame.caret?.length || frame.spot)
+      has(frame.lvl) || has(frame.vis) || has(frame.content) || has(frame.status) || has(frame.bars) || has(frame.lit) || has(frame.undraw) || has(frame.diff) || has(frame.delta) || has(frame.legend) || frame.veil || frame.caret?.length || frame.spot)
       ? frame
       : undefined
   // Ports follow their wire: the out port appears as the wire starts, the in port when it lands.
@@ -835,6 +1173,9 @@ function DiagramInner({ scene, style, copy = "", className, frame, smil, union }
     return Math.min(a ?? 1, b ?? 1) * (own ?? 1)
   }
   const typed = typedOf(scene)
+  // Ports keep the neutral look on edges a change step owns (their wire is the before look).
+  const edgeDelta = new Map(scene.edges.filter((e) => e.delta && e.delta !== "unchanged" && !scene.timeline?.changes?.[e.id]).map((e) => [e.id, e.delta]))
+  const lifeDelta = new Map(scene.nodes.filter((n) => n.delta).map((n) => [n.id, n.delta]))
   const portStyle = (p: Scene["ports"][number]): CSSProperties | undefined => {
     const u = fr?.undraw?.[p.edge]
     // Retract: the out port goes as the retract starts, the in port when it ends.
@@ -860,6 +1201,7 @@ function DiagramInner({ scene, style, copy = "", className, frame, smil, union }
       {/* Accessible name via role="img" + aria-label only: an SVG <title> shows as a hover tooltip. */}
       {style ? <style>{style}</style> : null}
       <rect className="si-bg" x={vb.x} y={vb.y} width={vb.w} height={vb.h} />
+      {scene.legend ? <LegendView scene={scene} fr={fr} smil={smil} /> : null}
       <g className="si-bands">
         {scene.boxes.map((b) => (
           <g key={b.id} data-si={`box:${b.id}`}>
@@ -894,9 +1236,16 @@ function DiagramInner({ scene, style, copy = "", className, frame, smil, union }
       </g>
       <g className="si-lifelines">
         {scene.lifelines.map((l) => (
-          <line key={l.id} className="si-life" data-si={`lifeline:${l.id}`} x1={l.x} x2={l.x} y1={l.y1} y2={l.y2} style={opStyle(partOf(l.participant))}>
-            {smil?.(`life:${l.participant}`)}
-          </line>
+          <Fragment key={l.id}>
+            <line className={lifeDelta.get(l.participant) === "removed" && !scene.timeline?.changes?.[l.participant] ? "si-life si-d-removed" : "si-life"} data-si={`lifeline:${l.id}`} x1={l.x} x2={l.x} y1={l.y1} y2={l.y2} style={opStyle(partOf(l.participant))}>
+              {smil?.(`life:${l.participant}`)}
+            </line>
+            {lifeDelta.get(l.participant) === "removed" && scene.timeline?.changes?.[l.participant] && (union || (fr?.delta?.[l.participant] ?? 1) > 0.0005) ? (
+              <line className="si-life si-d-removed" x1={l.x} x2={l.x} y1={l.y1} y2={l.y2} opacity={(fr?.delta?.[l.participant] ?? 1) < 0.9995 ? +(fr?.delta?.[l.participant] ?? 1).toFixed(3) : undefined}>
+                {union ? smil?.(`lifeafter:${l.participant}`) : null}
+              </line>
+            ) : null}
+          </Fragment>
         ))}
       </g>
       <g className="si-activations">
@@ -923,7 +1272,7 @@ function DiagramInner({ scene, style, copy = "", className, frame, smil, union }
       </g>
       <g className="si-ports">
         {scene.ports.filter((p) => !p.covered).map((p) => (
-          <circle key={p.id} className="si-port" data-si={`port:${p.id}`} cx={p.x} cy={p.y} r={G.portRadius} style={portStyle(p)}>
+          <circle key={p.id} className={edgeDelta.get(p.edge) ? `si-port si-d-${edgeDelta.get(p.edge)}` : "si-port"} data-si={`port:${p.id}`} cx={p.x} cy={p.y} r={G.portRadius} style={portStyle(p)}>
             {smil?.(`port:${p.id}`)}
           </circle>
         ))}
@@ -935,6 +1284,7 @@ function DiagramInner({ scene, style, copy = "", className, frame, smil, union }
             <LabelView key={e.id} e={e} fr={fr} smil={smil} />
           ))}
       </g>
+      {fr?.veil || (union && scene.timeline?.veil) ? <VeilLayer fr={fr} copy={copy} smil={smil} vb={vb} /> : null}
       {fr?.spot || union ? <SpotLayer fr={fr} copy={copy} smil={smil} /> : null}
       {fr ? <PulseLayer fr={fr} /> : null}
       {smil?.("overlay")}

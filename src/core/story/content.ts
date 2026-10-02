@@ -6,7 +6,8 @@
 import { geometry as G, story as S } from "../../theme/tokens.ts"
 import type { Scene, SceneNode } from "../scene.ts"
 import type { LevelRef, LineRef, RowStatus, SetRef, StatusRef, StoryStep, TypeRef, WireRef } from "../spec.ts"
-import { boxOfRef, parseRef } from "../anchor.ts"
+import { boxOfRef, parseRef, signedLineOf } from "../anchor.ts"
+import { addedChars, hunkRowsOf } from "../layout/diffnode.ts"
 import { springSettle } from "./ease.ts"
 import type { Timeline, TimelineTyping } from "./types.ts"
 
@@ -53,6 +54,8 @@ export function classify(scene: Scene, id: string, resolveEdge: (ref: string) =>
   if (nd && r.anchor) {
     if (nd.rows?.some((x) => x.id === r.anchor)) return { kind: "row", id, node: nd, row: r.anchor }
     if (nd.code && /^[1-9][0-9]*$/.test(r.anchor)) return { kind: "line", id, node: nd, line: Number(r.anchor) }
+    const signed = nd.code ? signedLineOf(nd, r.anchor) : undefined
+    if (signed !== undefined) return { kind: "line", id, node: nd, line: signed }
   }
   return { kind: "unknown", id }
 }
@@ -69,11 +72,14 @@ export interface ContentOut {
   wires: Record<string, { t0: number; t1: number; on: boolean }[]>
   status: Record<string, { t: number; to: RowStatus }[]>
   lit: Record<string, { t0: number; t1?: number }[]>
+  applies: Record<string, { t0: number; t1: number; hunks: number[] }[]>
 }
 
 /** Mutable state across steps (step order). */
 export class Content {
-  readonly out: ContentOut = { typing: [], versions: {}, bars: {}, levels: {}, vis: {}, wires: {}, status: {}, lit: {} }
+  readonly out: ContentOut = { typing: [], versions: {}, bars: {}, levels: {}, vis: {}, wires: {}, status: {}, lit: {}, applies: {} }
+  /** Diff nodes: hunks applied so far. */
+  private applied = new Map<string, Set<number>>()
   private st = new Map<string, RowStatus>()
   private lit = new Map<string, boolean>()
   private ver = new Map<string, number>()
@@ -149,7 +155,7 @@ export class Content {
     appear: Record<string, number>,
     err: (path: string, message: string, hint?: string) => void,
     warn: (path: string, message: string, hint?: string) => void,
-  ): { ends: number[]; acts: string[]; focus?: string } {
+  ): { ends: number[]; acts: string[]; focus?: string | string[] } {
     // Content events sit on the step's published (ms-rounded) start, so step windows match exactly.
     t0 = Math.round(t0 * 1000) / 1000
     const sc = this.scene
@@ -173,7 +179,8 @@ export class Content {
       if (!fields.length) return err(pp, `set "${s.id}" changes nothing`, `add "code", "text", "detail", "tag" or "label"`)
       setIds.add(s.id)
       if (s.code !== undefined) {
-        if (r.kind === "node" && r.node.code) {
+        if (r.kind === "node" && r.node.diff) err(pp, `"${s.id}" is a diff code node; set "code" does not apply to it`, `use "apply": "${s.id}" to play the change`)
+        else if (r.kind === "node" && r.node.code) {
           const v = this.next(s.id)
           this.ver.set(s.id, v)
           this.push(this.out.versions, s.id, { t: t0, v })
@@ -209,6 +216,7 @@ export class Content {
       if (!((r.kind === "node" && r.node.code) || r.kind === "row"))
         return err(pp, r.kind === "unknown" ? `unknown id "${id}"` : `clear takes a code node or a panel row, got "${id}" (${what(r)})`)
       if (setIds.has(id)) return err(pp, `"${id}" is set and cleared in one step`, "use two steps")
+      if (r.kind === "node" && r.node.diff) return err(pp, `"${id}" is a diff code node; clear does not apply to it`, `hide it with "hide", or dim it`)
       if ((this.ver.get(id) ?? 0) === -1) return warn(pp, `"${id}" is already cleared; clear has no effect`)
       this.ver.set(id, -1)
       this.push(this.out.versions, id, { t: t0, v: -1 })
@@ -232,6 +240,7 @@ export class Content {
         const rowEx = sc.nodes.find((n) => n.rows?.length)
         return err(pp, `type takes a code node or a panel row ("${rowEx ? `${rowEx.id}#${rowEx.rows![0].id}` : "panel#row"}"), got "${o.id}"`, r.kind === "unknown" ? "unknown id" : `"${o.id}" is ${what(r)}`)
       }
+      if (r.kind === "node" && r.node.diff) return err(pp, `"${o.id}" is a diff code node; type does not apply to it`, `"apply": { "id": "${o.id}", "cps": 60 } types the added lines`)
       const v = this.ver.get(o.id) ?? 0
       if (v < 0) return err(pp, `nothing to type: "${o.id}" was cleared`, `add "set": { "id": "${o.id}", ${isCode ? `"code"` : `"text"`}: … } to this step`)
       if (this.typed.has(`${o.id}|${v}`)) return warn(pp, `"${o.id}" is already typed`)
@@ -274,6 +283,20 @@ export class Content {
       if (!parsed) return err(pp, `line takes a code node: "code#2-4"`, `or { "id": "code", "lines": [2, 4] } / { "id": "code", "off": true }`)
       const r = kind(parsed.id)
       if (!(r.kind === "node" && r.node.code)) return err(pp, `line takes a code node: "${parsed.id}#2-4"`, r.kind === "unknown" ? `unknown id "${parsed.id}"` : `"${parsed.id}" is ${what(r)}`)
+      // Diff nodes: head / base line numbers and hunks map to display rows.
+      if (parsed.signed || parsed.hunk !== undefined) {
+        const d = r.node.diff
+        if (!d) return err(pp, parsed.hunk !== undefined ? `"${parsed.id}" has no hunks (not a diff code node)` : `"${parsed.id}#${parsed.signed}" needs a diff code node`, `plain code lines are "${parsed.id}#3"`)
+        if (parsed.hunk !== undefined) {
+          const hr = hunkRowsOf(d, parsed.hunk)
+          if (!hr) return err(pp, `"${parsed.id}" has no hunk ${parsed.hunk}`, `hunks: 1–${d.hunks}`)
+          ;[parsed.a, parsed.b] = hr
+        } else {
+          const k = signedLineOf(r.node, parsed.signed!)
+          if (k === undefined) return err(pp, `"${parsed.id}" shows no ${parsed.signed!.startsWith("+") ? "head" : "base"} line ${parsed.signed!.slice(1)}`, `shown: ${shownLines(r.node, parsed.signed![0] as "+" | "-")}`)
+          parsed.a = parsed.b = k
+        }
+      }
       if (parsed.off) {
         if (!this.bar.get(parsed.id)?.on) {
           // A clear in this step already took the bar away.
@@ -295,6 +318,37 @@ export class Content {
       this.push(this.out.bars, parsed.id, { t: t0, a, b, on: true })
       acts.push(a === b ? `Line ${a}` : `Lines ${a}–${b}`)
       ends.push(t0 + REACT_SETTLE)
+    })
+
+    // apply: a diff code node goes from its base version to the diff (one hunk, or all left).
+    asList(st.apply as ApplyRef | ApplyRef[] | undefined).forEach((ref, k) => {
+      const pp = at("apply", st.apply, k)
+      const o = typeof ref === "string" ? { id: ref } : ref
+      if (!o || typeof o !== "object" || typeof o.id !== "string") return err(pp, `apply takes a diff code node id or { "id": ..., "hunk"?: n, "cps"?: n }`)
+      const r = kind(o.id)
+      if (!(r.kind === "node" && r.node.diff)) {
+        const ex = sc.nodes.find((n) => n.diff)
+        return err(pp, `apply takes a diff code node, got "${o.id}"`, r.kind === "unknown" ? `unknown id "${o.id}"` : `"${o.id}" is ${what(r)}${ex ? `; diff nodes: ${sc.nodes.filter((n) => n.diff).map((n) => n.id).join(", ")}` : `; give a code node a "diff"`}`)
+      }
+      const d = r.node.diff
+      const done = this.applied.get(o.id) ?? new Set<number>()
+      let hunks: number[]
+      if (o.hunk !== undefined) {
+        if (typeof o.hunk !== "number" || !Number.isInteger(o.hunk) || o.hunk < 1 || o.hunk > d.hunks) return err(`${pp}.hunk`, `"${o.id}" has no hunk ${JSON.stringify(o.hunk)}`, `hunks are numbered 1–${d.hunks}`)
+        if (done.has(o.hunk - 1)) return warn(pp, `hunk ${o.hunk} of "${o.id}" is already applied; apply has no effect`)
+        hunks = [o.hunk - 1]
+      } else {
+        hunks = Array.from({ length: d.hunks }, (_, h) => h).filter((h) => !done.has(h))
+        if (!hunks.length) return warn(pp, `"${o.id}" is already applied; apply has no effect`)
+      }
+      for (const h of hunks) done.add(h)
+      this.applied.set(o.id, done)
+      const cps = typeof o.cps === "number" && o.cps > 0 ? o.cps : APPLY_CPS
+      const typing = Math.min(4, Math.max(0.3, addedChars(d, hunks) / cps))
+      const dur = r4(Math.max(0.9, typing / 0.6))
+      this.push(this.out.applies, o.id, { t0, t1: r4(t0 + dur), hunks })
+      acts.push(`Apply ${name(r.node)}${o.hunk !== undefined ? ` hunk ${o.hunk}` : ""}`)
+      ends.push(t0 + dur)
     })
 
     // Levels: dim / undim (dim channel), hide / show (visibility channel).
@@ -396,10 +450,17 @@ export class Content {
         ends.push(t0 + springSettle(on ? LIT_RISE : LIT_FALL))
       })
 
-    let focus: string | undefined
+    let focus: string | string[] | undefined
     if (typeof st.focus === "string") {
       if (!boxOfRef(sc, st.focus) && !this.resolve(st.focus)) err(`${p}.focus`, `unknown id "${st.focus}"`, "focus takes node, group, edge, row or code line ids")
       else focus = st.focus
+    } else if (Array.isArray(st.focus)) {
+      const ok = st.focus.filter((id, k) => {
+        if (typeof id === "string" && (boxOfRef(sc, id) || this.resolve(id))) return true
+        err(`${p}.focus[${k}]`, `unknown id ${JSON.stringify(id)}`, "focus takes node, group, edge, row or code line ids")
+        return false
+      })
+      if (ok.length) focus = ok.map((id) => (boxOfRef(sc, id) ? id : this.resolve(id)!))
     }
     return { ends, acts, focus }
   }
@@ -441,11 +502,19 @@ export class Content {
       ...(has(o.wires) ? { wires: o.wires } : {}),
       ...(has(o.status) ? { status: o.status } : {}),
       ...(has(o.lit) ? { lit: o.lit } : {}),
+      ...(has(o.applies) ? { applies: o.applies } : {}),
     }
   }
 }
 
 const r4 = (x: number) => Math.round(x * 1e4) / 1e4
+/** Default typing speed of added lines during an `apply` (chars / s). */
+export const APPLY_CPS = 60
+type ApplyRef = string | { id: string; hunk?: number; cps?: number }
+const shownLines = (n: SceneNode, side: "+" | "-"): string => {
+  const ls = (n.diff?.rows ?? []).filter((r) => (side === "+" ? r.kind !== "del" && r.new !== undefined : r.kind !== "add" && r.old !== undefined)).map((r) => (side === "+" ? r.new! : r.old!))
+  return ls.length ? `${side}${ls[0]}…${side}${ls[ls.length - 1]}` : "none"
+}
 const name = (n: SceneNode) => n.label.join(" ")
 const rowName = (r: Extract<RefKind, { kind: "row" }>) => {
   const v = r.node.rows!.find((x) => x.id === r.row)!.versions[0]
@@ -470,8 +539,10 @@ export function rowText(r: { node: SceneNode; row: string }, v: number): { n: nu
 }
 
 /** "code#2", "code#2-4", or { id, lines?, off? } → id and inclusive range. */
-export function parseLine(ref: unknown): { id: string; a?: number; b?: number; off?: boolean } | undefined {
+export function parseLine(ref: unknown): { id: string; a?: number; b?: number; off?: boolean; signed?: string; hunk?: number } | undefined {
   if (typeof ref === "string") {
+    const sm = /^(.+)#([+-][1-9][0-9]*)$/.exec(ref)
+    if (sm) return { id: sm[1], signed: sm[2] }
     const m = /^(.+)#([1-9][0-9]*)(?:-([1-9][0-9]*))?$/.exec(ref)
     if (!m) return /#/.test(ref) ? undefined : { id: ref }
     return { id: m[1], a: Number(m[2]), b: Number(m[3] ?? m[2]) }
@@ -479,8 +550,9 @@ export function parseLine(ref: unknown): { id: string; a?: number; b?: number; o
   if (!ref || typeof ref !== "object") return undefined
   const o = ref as LineRef & object
   if (typeof (o as { id?: unknown }).id !== "string") return undefined
-  const obj = o as { id: string; lines?: number | [number, number]; off?: true }
+  const obj = o as { id: string; lines?: number | [number, number]; off?: true; hunk?: unknown }
   if (obj.off) return { id: obj.id, off: true }
+  if (obj.hunk !== undefined) return typeof obj.hunk === "number" && Number.isInteger(obj.hunk) && obj.hunk >= 1 ? { id: obj.id, hunk: obj.hunk } : undefined
   if (typeof obj.lines === "number") return { id: obj.id, a: obj.lines, b: obj.lines }
   if (Array.isArray(obj.lines) && obj.lines.length === 2) return { id: obj.id, a: obj.lines[0], b: obj.lines[1] }
   return { id: obj.id }

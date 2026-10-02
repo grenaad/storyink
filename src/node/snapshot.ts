@@ -31,6 +31,10 @@ export interface SnapshotOptions {
    * gates are unaffected.
    */
   camera?: "fit" | "follow"
+  /** `at` captures: show the narration rail (`#rail=1`). */
+  rail?: boolean
+  /** `at` captures: open the change drawer on this element id or file path (`#drawer=`). */
+  drawer?: string
   /** Reading-hold pace for every capture (`#pace=`; default: the HTML's author pace). */
   pace?: number
   /** Output directory (default: next to the HTML file). */
@@ -235,6 +239,10 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   const mq = opts.motion ? `&motion=${opts.motion}` : ""
   const follow = opts.camera === "follow" && !!tl
   const cq = follow ? "&camera=follow" : ""
+  // Narration rail / change drawer in the `at` captures (viewer chrome stays off otherwise).
+  const dq = `${opts.rail ? "&rail=1" : ""}${opts.drawer ? `&drawer=${encodeURIComponent(opts.drawer)}` : ""}`
+  /** Rail / drawer captures show the page viewport (stage + side column), 16:9 at the follow width. */
+  const panes = !!(opts.rail || opts.drawer)
   const sheetMode = opts.sheet === false ? false : opts.sheet === "beats" ? "beats" : "themes"
   const W = Math.round(Math.max(500, opts.width ?? Math.min(1600, vb.w + 64)))
   const s = Math.min(1, (W - 64) / vb.w)
@@ -365,10 +373,10 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   try {
     for (const theme of themes)
       for (const at of ats) {
-        const tag = `${at === "end" ? "" : `.t${+at.toFixed(2)}`}${opts.motion === "reduced" ? ".reduced" : ""}${follow ? ".follow" : ""}`
+        const tag = `${at === "end" ? "" : `.t${+at.toFixed(2)}`}${opts.motion === "reduced" ? ".reduced" : ""}${follow ? ".follow" : ""}${opts.rail ? ".rail" : ""}${opts.drawer ? ".drawer" : ""}`
         const png = path.join(outDir, `${base}.${theme}${tag}.png`)
-        const [cw, ch] = follow ? [FW, Math.round(FW * 0.5625)] : [W, H]
-        const ms = await shoot(`theme=${theme}&chrome=0${tq(at)}${mq}${cq}`, png, cw, ch)
+        const [cw, ch] = follow || panes ? [FW, Math.round(FW * 0.5625)] : [W, H]
+        const ms = await shoot(`theme=${theme}&chrome=0${tq(at)}${mq}${cq}${dq}`, png, cw, ch)
         captures.push({ theme, at, png, sha256: sha256(png), bytes: fs.statSync(png).size, width: cw * scale, height: ch * scale, ms })
       }
     // Determinism gate: same t twice, same pixels (a mid-story frame when there is a story).
@@ -376,8 +384,11 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
     const midT: number | "end" = tl ? (ats.find((a) => a !== "end") ?? +(tl.duration / 2).toFixed(3)) : "end"
     const a1 = path.join(tmpRoot, "same-1.png")
     const a2 = path.join(tmpRoot, "same-2.png")
-    await shoot(`theme=${first.theme}&chrome=0${tq(midT)}`, a1, W, H)
-    await shoot(`theme=${first.theme}&chrome=0${tq(midT)}`, a2, W, H)
+    // With a rail / drawer: the same page configuration and size as the captures.
+    const [GW, GH] = panes ? [FW, Math.round(FW * 0.5625)] : [W, H]
+    const gq = panes ? `${mq}${cq}${dq}` : ""
+    await shoot(`theme=${first.theme}&chrome=0${tq(midT)}${gq}`, a1, GW, GH)
+    await shoot(`theme=${first.theme}&chrome=0${tq(midT)}${gq}`, a2, GW, GH)
     const same = sha256(a1) === sha256(a2)
     gates.push({ name: "deterministic", pass: same, detail: same ? `${first.theme} at t=${midT} captured twice: identical` : `${first.theme} at t=${midT} differs between runs` })
     if (follow) {
@@ -385,7 +396,7 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
       const diff: string[] = []
       for (const c of captures.filter((x) => x.theme === first.theme)) {
         const f2 = path.join(tmpRoot, `follow-${diff.length}-${String(c.at)}.png`)
-        await shoot(`theme=${c.theme}&chrome=0${tq(c.at ?? "end")}${mq}${cq}`, f2, FW, Math.round(FW * 0.5625))
+        await shoot(`theme=${c.theme}&chrome=0${tq(c.at ?? "end")}${mq}${cq}${dq}`, f2, FW, Math.round(FW * 0.5625))
         if (sha256(f2) !== c.sha256) diff.push(String(c.at))
       }
       const at = captures.filter((x) => x.theme === first.theme).map((x) => x.at).join(",")
@@ -396,9 +407,11 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
       const stat = path.join(tmpRoot, "static.png")
       const end = path.join(tmpRoot, "end.png")
       const red = path.join(tmpRoot, "reduced.png")
-      await shoot(`theme=${first.theme}&chrome=0&static=1`, stat, W, H)
-      await shoot(`theme=${first.theme}&chrome=0&t=end`, end, W, H)
-      await shoot(`theme=${first.theme}&chrome=0&motion=reduced`, red, W, H)
+      // Like with like: a rail / drawer request applies to all three (fit camera, capture size).
+      const sq = panes ? dq : ""
+      await shoot(`theme=${first.theme}&chrome=0&static=1${sq}`, stat, GW, GH)
+      await shoot(`theme=${first.theme}&chrome=0&t=end${sq}`, end, GW, GH)
+      await shoot(`theme=${first.theme}&chrome=0&motion=reduced${sq}`, red, GW, GH)
       const sStat = sha256(stat)
       gates.push({ name: "end=static", pass: sha256(end) === sStat, detail: sha256(end) === sStat ? "t=end matches the static diagram" : "t=end differs from the static diagram" })
       gates.push({ name: "reduced=static", pass: sha256(red) === sStat, detail: sha256(red) === sStat ? "reduced motion shows the static diagram" : "reduced motion differs from the static diagram" })

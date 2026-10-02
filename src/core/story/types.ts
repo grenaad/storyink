@@ -10,8 +10,10 @@ export interface TimelineStep {
   caption?: string
   /** On the last step of a beat: its reading hold (s), inserted before the next beat in continuous play. */
   hold?: number
-  /** Camera / spotlight target override (`focus`). */
-  focus?: string
+  /** Camera / spotlight target override (`focus`): one id or several (union box). */
+  focus?: string | string[]
+  /** Narration (viewer rail); a narrated step without a caption gets a fallback caption. */
+  narrate?: import("../spec.ts").Narrate
   /** Title parts for beat tiles: pulse paths, revealed node names, counter changes. */
   parts?: { paths: string[]; reveals: string[]; counters: string[]; acts?: string[] }
 }
@@ -110,6 +112,20 @@ export interface Timeline {
    * draws it, else drawn. Repeated cycles are allowed.
    */
   wires?: Record<string, { t0: number; t1: number; on: boolean }[]>
+  /**
+   * Diff code nodes: story `apply` windows per node. `hunks` = 0-based hunk indices applied over
+   * [t0, t1]. Hunks no step applies show the diff from the start.
+   */
+  applies?: Record<string, { t0: number; t1: number; hunks: number[] }[]>
+  /**
+   * Change steps: elements whose after (delta) look is applied by a step, and the window over
+   * which the before look turns into it (removed / modified; added ones reveal or wire instead).
+   */
+  changes?: Record<string, { t0: number; t1: number; delta: "added" | "modified" | "removed" }>
+  /** Legend items whose every element is changed by a step: shown from this time. */
+  legendAt?: Record<string, number>
+  /** `spotlight: "veil"`: the focus box per step (diagram px, padded). */
+  veil?: { t: number; x: number; y: number; w: number; h: number }[]
   /** Spotlight targets per step (story.spotlight): centre and radius. */
   spot?: { t: number; x: number; y: number; r: number }[]
   rewind?: "tape" | "glitch"
@@ -204,5 +220,13 @@ export interface Frame {
   vis?: Record<string, number>
   /** Wire retract progress 0..1 (1 = gone). */
   undraw?: Record<string, number>
+  /** Change steps: before → after progress 0..1 per element; omitted = after look. */
+  delta?: Record<string, number>
+  /** Legend item opacity while it is still to appear; omitted = shown. */
+  legend?: Record<string, number>
+  /** Veil (spotlight "veil"): the cutout box and the veil strength 0..1. */
+  veil?: { x: number; y: number; w: number; h: number; a: number }
+  /** Diff code nodes mid-apply: per-hunk progress 0..1 (0 = base version, 1 = the diff); omitted = applied. */
+  diff?: Record<string, number[]>
   spot?: { x: number; y: number; r: number; a: number }
 }

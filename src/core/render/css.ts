@@ -1,4 +1,4 @@
-import { fonts, geometry as G, type as T, v, ACCENTS, type Palette } from "../../theme/tokens.ts"
+import { delta as DL, fonts, geometry as G, type as T, v, ACCENTS, type Palette } from "../../theme/tokens.ts"
 
 /** Rules for rich nodes (panel / code / chip, bare groups); only emitted for scenes that use them. */
 export function richCss(): string {
@@ -28,9 +28,71 @@ ${tk("kw", "codeKw")}${tk("op", "codeKw")}${tk("str", "codeStr")}${tk("num", "co
 `.trim()
 }
 
-/** Diagram rules. Colours come only from the `--si-*` variables. `rich` adds the rich-node rules. */
-export function diagramCss(rich = false): string {
-  return rich ? `${baseCss()}\n${richCss()}` : baseCss()
+/** Diagram rules. Colours come only from the `--si-*` variables. `rich` adds the rich-node rules, `changes` the change-diagram rules. */
+export function diagramCss(rich = false, changes = false): string {
+  const css = rich ? `${baseCss()}\n${richCss()}` : baseCss()
+  return changes ? `${css}\n${deltaCss()}` : css
+}
+
+/** Rules for change diagrams (delta / emphasis / stat / legend); only emitted for scenes that use them. */
+export function deltaCss(): string {
+  const D = [
+    ["added", "deltaAdded"],
+    ["modified", "deltaModified"],
+    ["removed", "deltaRemoved"],
+  ] as const
+  const per = D.map(([d, k]) => {
+    const fill = `${k}Fill` as const
+    return [
+      `.si-d-${d} .si-face,.si-d-${d} .si-win,.si-d-${d} .si-soft,.si-d-${d} .si-note,.si-d-${d} .si-ring{stroke:${v(k)};}`,
+      `.si-d-${d} .si-dotfill{fill:${v(k)};}`,
+      `.si-badge-${d}{fill:${v(fill)};stroke:${v(k)};stroke-width:1;}`,
+      `.storyink .si-badge-text-${d}{fill:${v(k)};}`,
+      `.si-edge.si-d-${d} .si-wire,.si-edge.si-d-${d} .si-hero-glow{stroke:${v(k)};}`,
+      `.si-edge.si-d-${d} .si-arrow{fill:${v(k)};stroke:${v(k)};}`,
+      `.si-edge.si-d-${d} .si-arrow-open{stroke:${v(k)};}`,
+      `.si-port.si-d-${d}{fill:${v(k)};}`,
+      `.storyink .si-lbl.si-d-${d} .si-edge-label,.storyink .si-grp.si-d-${d} .si-group-label,.storyink .si-grp.si-d-${d} .si-group-title,.storyink .si-group-badge-${d}{fill:${v(k)};}`,
+      `.si-sw-${d}{fill:${v(fill)};stroke:${v(k)};stroke-width:1;}`,
+    ].join("\n")
+  }).join("\n")
+  return `
+${per}
+.si-d-removed .si-face,.si-d-removed .si-win,.si-d-removed .si-soft,.si-d-removed .si-note,.si-grp.si-d-removed .si-group,.si-sw-removed{stroke-dasharray:5 3;}
+.si-edge.si-d-removed .si-wire{stroke-dasharray:5 4;}
+.si-life.si-d-removed{stroke:${v("deltaRemoved")};stroke-opacity:0.55;}
+.si-strike{stroke:${v("deltaRemoved")};stroke-width:1.2;stroke-linecap:round;}
+.storyink .si-badge-text{font-size:${DL.badgeFont}px;letter-spacing:${T.tagTracking}em;font-weight:700;}
+.storyink .si-stat{font-size:${DL.statFont}px;font-variant-numeric:tabular-nums;}
+.storyink .si-stat-add{fill:${v("deltaAdded")};}
+.storyink .si-stat-del{fill:${v("deltaRemoved")};}
+.si-edge.si-hero .si-wire{stroke-width:${DL.heroWidth};}
+.si-edge.si-hero:not(.si-d-added):not(.si-d-modified):not(.si-d-removed) .si-wire,.si-hero-glow{stroke:${v("deltaHero")};}
+.si-hero-glow{fill:none;stroke-width:${DL.heroGlow};stroke-opacity:${DL.heroGlowOpacity};stroke-linecap:round;stroke-linejoin:round;}
+svg[data-storyink="sequence"] .si-edge.si-d-added .si-wire{stroke-width:${DL.addedMessageWidth};}
+.si-sw-unchanged{fill:${v("panel")};stroke:${v("line")};stroke-width:1;}
+.storyink .si-legend-text{font-size:${T.tag}px;letter-spacing:${T.tagTracking}em;fill:${v("inkMuted")};}
+.storyink .si-legend-meta{font-size:${T.detail}px;fill:${v("inkMuted")};}
+.si-d-added .si-ink-bar{fill:${v("deltaAdded")};}
+.si-d-modified .si-ink-bar{fill:${v("deltaModified")};}
+.si-d-removed .si-ink-bar{fill:${v("deltaRemoved")};}
+.si-veil-shade{fill:${v("bg")};fill-opacity:0.68;}
+.si-veil-rim{fill:none;stroke:${v("line")};stroke-width:1;stroke-opacity:0.7;}
+.si-diff-bg-add{fill:${v("diffAddBg")};}
+.si-diff-bg-del{fill:${v("diffDelBg")};}
+.si-diff-mk-add{fill:${v("diffAddMark")};}
+.si-diff-mk-del{fill:${v("diffDelMark")};}
+.si-diff~.si-bar .si-code-bar{fill-opacity:0.55;}
+.si-diff-rule{stroke:${v("lineSoft")};stroke-width:1;}
+.si-diff-hunk-bg{fill:${v("panelAlt")};}
+.storyink .si-diff-num{font-size:${T.detail}px;fill:${v("inkFaint")};font-variant-numeric:tabular-nums;}
+.storyink .si-diff-hunk{font-size:${T.detail}px;fill:${v("inkFaint")};white-space:pre;}
+.storyink .si-diff-fold{font-size:${T.detail}px;fill:${v("inkFaint")};font-style:italic;}
+.storyink .si-diff-sign{font-size:${T.code}px;font-weight:700;}
+.storyink .si-diff-sign-add{fill:${v("deltaAdded")};}
+.storyink .si-diff-sign-del{fill:${v("deltaRemoved")};}
+.si-diff-strike{stroke:${v("deltaRemoved")};stroke-width:1;stroke-opacity:0.65;}
+`.trim()
 }
 
 function baseCss(): string {
@@ -98,8 +160,85 @@ export function fontFaceCss(b400: string, b700: string): string {
   )
 }
 
-/** Viewer page rules (chrome, header, stage). */
-export function viewerCss(): string {
+/** Viewer page rules (chrome, header, stage); narration rail / drawer rules only when used. */
+export function viewerCss(ui: { narrate?: boolean; drawer?: boolean } = {}): string {
+  return baseViewerCss() + (ui.narrate || ui.drawer ? `\n${sideCss()}` : "") + (ui.narrate ? `\n${railCss()}` : "") + (ui.drawer ? `\n${drawerCss()}` : "")
+}
+
+/**
+ * Stage + one side column (narration rail or drawer). Narrow screens: a bottom sheet whose height
+ * is clamped so the stage keeps at least 160 px.
+ */
+function sideCss(): string {
+  return `
+.si-main{flex:1;display:flex;min-height:0;}
+.si-main>.si-stage{flex:1;min-width:0;min-height:160px;}
+@media (max-width:760px){.si-main{flex-direction:column;}.si-main>.si-rail,.si-main>.si-drawer{width:auto;flex:0 1 auto;min-height:96px;max-height:min(50vh,max(96px,calc(100vh - 380px)));border-left:0;border-top:1px solid ${v("chromeLine")};}}
+`.trim()
+}
+
+/** Narration rail: a right column beside the stage, a bottom sheet on narrow screens. */
+function railCss(): string {
+  return `
+.si-rail{flex:none;width:340px;overflow:auto;padding:18px 24px 24px;border-left:1px solid ${v("chromeLine")};background:${v("bg")};font-size:13px;line-height:1.6;color:${v("ink")};}
+.si-rail-top{display:flex;align-items:center;justify-content:space-between;margin:0 0 10px;}
+.si-rail-n{font-size:${T.tag}px;letter-spacing:${T.tagTracking * 1.5}em;color:${v("inkFaint")};font-variant-numeric:tabular-nums;}
+.si-rail-x,.si-drawer-x{appearance:none;border:1px solid transparent;background:none;color:${v("inkMuted")};font:inherit;font-size:16px;line-height:1;width:24px;height:24px;border-radius:3px;cursor:pointer;}
+.si-rail-x:hover,.si-drawer-x:hover{color:${v("ink")};border-color:${v("chromeLine")};}
+.si-rail-h{font-family:${fonts.serif};font-weight:500;font-size:19px;line-height:1.25;margin:0 0 10px;color:${v("title")};}
+.si-rail-body{margin:0;white-space:pre-line;}
+.si-cite{border-bottom:1px solid ${v("inkFaint")};cursor:default;outline:none;}
+.si-cite:hover,.si-cite:focus-visible{background:color-mix(in srgb, ${v("ink")} 8%, transparent);border-bottom-color:${v("ink")};}
+.si-cite-file{cursor:pointer;border-bottom-style:dashed;}
+@media (max-width:760px){.si-rail{padding:12px 18px 16px;}.si-rail-h{font-size:16px;}}
+@media print{.si-rail{display:none!important}}
+`.trim()
+}
+
+/** Change drawer: fixed side panel with the element's change and its hunks (diff look, both themes). */
+function drawerCss(): string {
+  const tk = (k: string, c: Parameters<typeof v>[0]) => `.si-dk-${k}{color:${v(c)};}`
+  return `
+.si-drawer{flex:none;width:min(560px,48vw);min-height:0;display:flex;flex-direction:column;background:${v("bg")};color:${v("ink")};border-left:1px solid ${v("chromeLine")};font-size:12px;}
+.si-drawer-head{position:relative;padding:18px 52px 12px 22px;border-bottom:1px solid ${v("chromeLine")};flex:none;}
+.si-drawer-kind{margin:0 0 6px;font-size:${T.tag}px;letter-spacing:${T.tagTracking * 1.5}em;text-transform:uppercase;color:${v("inkFaint")};}
+.si-drawer-x{position:absolute;right:14px;top:14px;}
+.si-drawer-title{margin:0;font-family:${fonts.serif};font-weight:500;font-size:20px;line-height:1.25;color:${v("title")};overflow-wrap:anywhere;}
+.si-drawer-meta{display:flex;gap:10px;align-items:center;margin:8px 0 0;}
+.si-dbadge{font-size:${T.tag}px;letter-spacing:${T.tagTracking * 1.5}em;padding:2px 6px;border-radius:3px;}
+.si-dbadge-added{color:${v("deltaAdded")};background:${v("deltaAddedFill")};}
+.si-dbadge-modified{color:${v("deltaModified")};background:${v("deltaModifiedFill")};}
+.si-dbadge-removed{color:${v("deltaRemoved")};background:${v("deltaRemovedFill")};}
+.si-dbadge-unchanged{color:${v("inkMuted")};border:1px solid ${v("chromeLine")};}
+.si-dstat{display:inline-flex;gap:6px;font-variant-numeric:tabular-nums;}
+.si-dstat-add{color:${v("deltaAdded")};}
+.si-dstat-del{color:${v("deltaRemoved")};}
+.si-drawer-body{flex:1;overflow:auto;padding:14px 22px 28px;overscroll-behavior:contain;}
+.si-drawer-summary{margin:0 0 14px;font-size:13px;line-height:1.55;}
+.si-dfile{margin:0 0 18px;}
+.si-dpath{display:flex;gap:6px;align-items:baseline;margin:0 0 6px;color:${v("ink")};overflow-wrap:anywhere;}
+.si-dlines{color:${v("inkMuted")};}
+.si-dstatus{margin-left:auto;font-size:${T.tag}px;letter-spacing:${T.tagTracking * 1.5}em;text-transform:uppercase;color:${v("inkFaint")};}
+.si-dnote{margin:0 0 10px;color:${v("inkFaint")};}
+.si-diff{border:1px solid ${v("chromeLine")};border-radius:4px;overflow-x:auto;font-size:11.5px;line-height:18px;background:${v("panel")};}
+.si-drow{display:flex;min-width:max-content;white-space:pre;}
+.si-dno{flex:none;width:38px;padding:0 6px;text-align:right;color:${v("inkFaint")};user-select:none;font-variant-numeric:tabular-nums;}
+.si-dsign{flex:none;width:16px;text-align:center;color:${v("inkFaint")};user-select:none;}
+.si-dtext{flex:1;padding-right:12px;}
+.si-drow-add{background:color-mix(in srgb, ${v("deltaAdded")} 13%, transparent);}
+.si-drow-add .si-dsign{color:${v("deltaAdded")};}
+.si-drow-del{background:color-mix(in srgb, ${v("deltaRemoved")} 13%, transparent);}
+.si-drow-del .si-dsign{color:${v("deltaRemoved")};}
+.si-drow-add .si-dmark{background:color-mix(in srgb, ${v("deltaAdded")} 30%, transparent);border-radius:2px;}
+.si-drow-del .si-dmark{background:color-mix(in srgb, ${v("deltaRemoved")} 30%, transparent);border-radius:2px;}
+.si-drow-hunk,.si-drow-fold{color:${v("inkFaint")};background:color-mix(in srgb, ${v("ink")} 4%, transparent);padding:0 8px;}
+.si-drow-fold{font-style:italic;}
+${tk("kw", "codeKw")}${tk("op", "codeKw")}${tk("str", "codeStr")}${tk("num", "codeConst")}${tk("def", "codeConst")}${tk("type", "codeConst")}${tk("fn", "codeFn")}${tk("param", "codeParam")}${tk("com", "codeCom")}
+@media print{.si-drawer{display:none!important}}
+`.trim()
+}
+
+function baseViewerCss(): string {
   return `
 *{box-sizing:border-box;}
 html,body{margin:0;height:100%;}

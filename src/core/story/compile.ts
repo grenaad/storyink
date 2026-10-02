@@ -1,8 +1,11 @@
 import { story as S } from "../../theme/tokens.ts"
+import { narrateCaption, narrateReading, resolveCite } from "./narrate.ts"
 import type { Pt, Scene } from "../scene.ts"
 import type { PulseRef, Spec, Story, StoryStep } from "../spec.ts"
 import type { Diagnostic } from "../validate.ts"
 import { autoStory } from "./auto.ts"
+import { changesStory, changeWindow, expandChanges, wireDuration } from "./changes.ts"
+import { stepFocus } from "./camera.ts"
 import { springSettle } from "./ease.ts"
 import { flattenPath } from "../layout/paths.ts"
 import { beatGroups } from "./state.ts"
@@ -99,6 +102,8 @@ export function contentEvents(tl: Timeline): [number, number][] {
   for (const l of Object.values(tl.levels ?? {})) for (const e of l) out.push([e.t, e.t + REACT_SETTLE])
   for (const l of Object.values(tl.vis ?? {})) for (const e of l) out.push([e.t, e.t + REACT_SETTLE])
   for (const l of Object.values(tl.wires ?? {})) for (const e of l) out.push([e.t0, e.t1])
+  for (const l of Object.values(tl.applies ?? {})) for (const e of l) out.push([e.t0, e.t1])
+  for (const e of Object.values(tl.changes ?? {})) out.push([e.t0, e.t1])
   // Status glyph transitions (not the spinner / shimmer: ambient, never part of a settle).
   for (const l of Object.values(tl.status ?? {})) for (const e of l) out.push([e.t, e.t + Math.max(REACT_SETTLE, e.to === "done" || e.to === "error" ? STATUS_DRAW : 0)])
   for (const l of Object.values(tl.lit ?? {}))
@@ -144,7 +149,9 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
     const last = g[g.length - 1]
     const own = authored?.[last]?.hold
     if (typeof own === "number") return own
-    const cap = g.map((i) => tl1.steps[i].caption).filter((c) => c).pop()
+    // A narrated beat holds for its narration (heading + body), not only the fallback caption.
+    const narr = g.map((i) => tl1.steps[i].narrate).filter((n) => n).pop()
+    const cap = narr ? narrateReading(narr) : g.map((i) => tl1.steps[i].caption).filter((c) => c).pop()
     return readingHold(cap) * pace
   }
   const holds = groups.map(holdOf)
@@ -168,7 +175,7 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
  */
 function storySource(scene: Scene, spec: Spec): StorySource {
   const st = spec.story!
-  const steps = st === "auto" || st.steps === "auto" ? (autoStory(scene, spec).steps as StoryStep[]) : st.steps
+  const steps = derivedSteps(scene, spec) ?? (st as Story & { steps: StoryStep[] }).steps
   // Everything but the steps and the pace (a compile parameter, stored as `timeline.pace`).
   const opts = st === "auto" ? {} : (({ steps: _s, pace: _p, ...rest }) => rest)(st)
   const par = (xs: { id: string; parent?: string }[] | undefined) => (xs ?? []).map((x) => (x.parent ? { id: x.id, parent: x.parent } : { id: x.id }))
@@ -197,12 +204,16 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
   const err = (path: string, message: string, hint?: string) => diagnostics.push({ severity: "error", path, message, hint })
   const warn = (path: string, message: string, hint?: string) => diagnostics.push({ severity: "warning", path, message, hint })
   if (spec.story === undefined) return { diagnostics }
-  const story: Story & { steps: StoryStep[] } =
+  const derived = derivedSteps(scene, spec)
+  let story: Story & { steps: StoryStep[] } =
     spec.story === "auto"
       ? (autoStory(scene, spec) as Story & { steps: StoryStep[] })
-      : spec.story.steps === "auto"
-        ? { ...spec.story, steps: autoStory(scene, spec).steps as StoryStep[] }
+      : derived
+        ? { ...spec.story, steps: derived }
         : (spec.story as Story & { steps: StoryStep[] })
+  // A narrated step without a caption captions with its heading (or first sentence): the
+  // animated SVG, header captions and beat tiles agree. Steps without `narrate` are untouched.
+  if (story.steps.some((st) => st.narrate && !st.caption)) story = { ...story, steps: story.steps.map((st) => (st.narrate && !st.caption ? { ...st, caption: narrateCaption(st.narrate) } : st)) }
   const seq = scene.type === "sequence"
 
   const nodeIds = new Set(scene.nodes.map((n) => n.id))
@@ -223,6 +234,10 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
   const steps: Timeline["steps"] = []
 
   const nodeBox = (id: string) => scene.nodes.find((n) => n.id === id) ?? scene.groups.find((g) => g.id === id)
+  // Change steps become reveal / wire / unwire / apply / highlight plus delta-look windows.
+  const expanded = expandChanges(scene, story.steps, (ref) => resolveEdge(scene, ref).id, warn, err)
+  if (expanded.steps !== story.steps) story = { ...story, steps: expanded.steps }
+  const changes: NonNullable<Timeline["changes"]> = {}
   const content = new Content(scene, story.steps, (ref) => resolveEdge(scene, ref).id)
 
   let prevEnd = 0
@@ -276,6 +291,12 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
       })
     const cs = content.step(step, i, t0, p, appear, err, warn)
     ends.push(...cs.ends)
+    for (const op of expanded.ops[i]) {
+      const e = op.kind === "edge" ? edgeById.get(op.id) : undefined
+      const w = changeWindow(op, Math.round(t0 * 1000) / 1000, e ? wireDuration(e) : undefined)
+      changes[op.id] = { ...w, delta: op.delta }
+      ends.push(w.t1)
+    }
 
     // Pulses.
     asList(step.pulse as PulseRef | PulseRef[]).forEach((ref, k) => {
@@ -365,6 +386,12 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
       ends.push(t0 + REACT_SETTLE)
     }
 
+    // Narration cites must point at an element or a file.
+    step.narrate?.cites?.forEach((c, k) => {
+      if (c && typeof c.ref === "string" && !resolveCite(scene, c.ref))
+        err(`${p}.narrate.cites[${k}].ref`, `unknown cite ref "${c.ref}"`, "cite a node / edge / group id, \"node#row\", or a file path like \"src/x.ts#L12-20\"")
+    })
+
     // Caption.
     if (typeof step.caption === "string" && step.caption.trim()) {
       captions.push({ text: step.caption.trim(), t0, t1: 0, step: i, handoff: false })
@@ -392,7 +419,7 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
     if (cs.acts.length) parts.acts = cs.acts
     const label = step.stop ?? (step.caption ? truncate(step.caption, 40) : composeTitle([parts], 48, i > 0 && isEmptyStep(step) ? "Hold" : "Start"))
     const be = beatEnds?.get(i)
-    steps.push({ id: step.id ?? `step-${i + 1}`, label, t0, t1, parts, ...(cs.focus ? { focus: cs.focus } : {}), ...(step.stop ? { stop: step.stop } : {}), ...(step.caption ? { caption: step.caption } : {}), ...(be ? { hold: Math.round(be.hold * 1000) / 1000 } : {}) })
+    steps.push({ id: step.id ?? `step-${i + 1}`, label, t0, t1, parts, ...(cs.focus ? { focus: cs.focus } : {}), ...(step.stop ? { stop: step.stop } : {}), ...(step.caption ? { caption: step.caption } : {}), ...(step.narrate ? { narrate: step.narrate } : {}), ...(be ? { hold: Math.round(be.hold * 1000) / 1000 } : {}) })
     prevEnd = t1
     prevT0 = t0
 
@@ -478,7 +505,7 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
     ...Object.values(draw).map((d) => d.t1 + REACT_SETTLE),
     ...Object.values(appear).map((t) => t + REACT_SETTLE),
     ...Object.values(counters).flatMap((c) => c.events.map((e) => e.t + REACT_SETTLE)),
-    ...contentEvents(content.fields() as Timeline).map(([, e]) => e),
+    ...contentEvents({ ...content.fields(), changes } as Timeline).map(([, e]) => e),
     0,
   ]
   const lastEvent = Math.max(...events)
@@ -531,8 +558,14 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
     captions,
     counters,
     ...content.fields(),
-    ...(story.spotlight ? { spot: spotTargets(scene, steps, pulses, glows, content.fields() as Timeline, story.steps) } : {}),
+    ...(Object.keys(changes).length ? { changes } : {}),
+    ...legendTimes(scene, changes, appear, content.fields()),
+    ...(story.spotlight === true ? { spot: spotTargets(scene, steps, pulses, glows, content.fields() as Timeline, story.steps) } : {}),
     ...(story.rewind ? { rewind: story.rewind } : {}),
+  }
+  if (story.spotlight === "veil") {
+    const veil = veilTargets(scene, timeline)
+    if (veil.length) timeline.veil = veil
   }
   return { timeline, diagnostics }
 }
@@ -552,7 +585,8 @@ function spotTargets(scene: Scene, steps: Timeline["steps"], pulses: TimelinePul
     // Content events sit on the published (ms-rounded) step start.
     const t0 = r3(st.t0)
     let p: { x: number; y: number; r: number } | undefined
-    const f = st.focus ? box(st.focus) : undefined
+    const fs = st.focus === undefined ? [] : (Array.isArray(st.focus) ? st.focus : [st.focus]).map(box).filter((b): b is NonNullable<typeof b> => !!b)
+    const f = fs.length ? { x: Math.min(...fs.map((b) => b.x)), y: Math.min(...fs.map((b) => b.y)), w: Math.max(...fs.map((b) => b.x + b.w)) - Math.min(...fs.map((b) => b.x)), h: Math.max(...fs.map((b) => b.y + b.h)) - Math.min(...fs.map((b) => b.y)) } : undefined
     if (f) p = ofBox(f)
     if (!p)
       for (const [key, ev] of Object.entries(c.status ?? {}))
@@ -614,6 +648,47 @@ function spotTargets(scene: Scene, steps: Timeline["steps"], pulses: TimelinePul
     if (p) out.push({ t: r3(t0), x: r3(p.x), y: r3(p.y), r: r3(p.r) })
   })
   return out
+}
+
+/**
+ * Legend items whose every element (nodes, groups, edges with that delta) is changed by a step
+ * (or, for added ones, revealed / wired by a step) appear with the first of them.
+ */
+function legendTimes(scene: Scene, changes: NonNullable<Timeline["changes"]>, appear: Record<string, number>, c: Partial<Timeline>): { legendAt?: Record<string, number> } {
+  if (!scene.legend) return {}
+  const at = (id: string, kind: "edge" | "other"): number | undefined =>
+    changes[id]?.t0 ?? (kind === "edge" ? c.wires?.[id]?.find((w) => w.on)?.t0 : appear[id])
+  const out: Record<string, number> = {}
+  for (const d of scene.legend.items) {
+    if (d === "unchanged") continue
+    const els = [
+      ...scene.nodes.filter((n) => n.delta === d).map((n) => at(n.id, "other")),
+      ...scene.groups.filter((g) => g.delta === d).map((g) => at(g.id, "other")),
+      ...scene.edges.filter((e) => e.delta === d).map((e) => at(e.id, "edge")),
+    ]
+    if (els.length && els.every((t) => t !== undefined)) out[d] = Math.round(Math.min(...(els as number[])) * 1000) / 1000
+  }
+  return Object.keys(out).length ? { legendAt: out } : {}
+}
+
+/** Veil cutout per step: the step's focus box (stepFocus); steps with none keep the previous. */
+function veilTargets(scene: Scene, tl: Timeline): NonNullable<Timeline["veil"]> {
+  const r3 = (x: number) => Math.round(x * 1000) / 1000
+  const out: NonNullable<Timeline["veil"]> = []
+  tl.steps.forEach((st, i) => {
+    const b = stepFocus(scene, tl, i, 18)
+    if (b) out.push({ t: r3(st.t0), x: r3(b.x), y: r3(b.y), w: r3(b.w), h: r3(b.h) })
+  })
+  return out
+}
+
+/** `"auto"` / `"changes"` steps expanded; undefined for authored steps. */
+function derivedSteps(scene: Scene, spec: Spec): StoryStep[] | undefined {
+  const st = spec.story
+  if (st === undefined) return undefined
+  if (st === "auto" || st.steps === "auto") return autoStory(scene, spec).steps as StoryStep[]
+  if (st.steps === "changes") return changesStory(scene, spec).steps as StoryStep[]
+  return undefined
 }
 
 /** A step that does nothing (only id / at / hold): a held pause. */

@@ -2,8 +2,12 @@ import fs from "node:fs"
 import path from "node:path"
 import type { Plugin } from "@opencode/plugin"
 import { fromMermaid } from "./core/mermaid/index.ts"
+import { changesStoryOf } from "./core/story/changes.ts"
 import { formatDiagnostic, type Diagnostic } from "./core/validate.ts"
+import { resolveChanges } from "./core/diff/resolve.ts"
+import type { Spec } from "./core/spec.ts"
 import { readSkill, skillPath } from "./node/assets.ts"
+import { asDiffSet, diffSetFrom, diffSetJson, diffSummary, gitDiff } from "./node/git.ts"
 import { parseSource, setStoryCamera, setStoryMotion, setStoryPace, snapshot, writeAnimatedSvg, writeDiagram, type SnapshotReceipt } from "./node/index.ts"
 import type { ThemeName } from "./theme/tokens.ts"
 
@@ -100,7 +104,7 @@ const plugin = {
             output: { type: "string", description: "Output .html path (relative to the project directory)" },
             svg: { type: "string", description: "Optional output .svg path" },
             theme: { ...THEME, description: "Pin the theme; default follows the viewer's system preference" },
-            story: { type: "string", enum: ["auto"], description: "Add an auto-generated storyboard (only when the user asked for an animated diagram)" },
+            story: { type: "string", enum: ["auto", "changes"], description: 'Add an auto-generated storyboard (only when the user asked for an animated diagram); "changes" derives a change walkthrough from the deltas (replaces the spec\'s story)' },
             motion: {
               type: "string",
               enum: ["full", "reduced", "system"],
@@ -126,6 +130,11 @@ const plugin = {
             animatedSvgPath: { type: "string", description: "Animated SVG path (default: output with .animated.svg)" },
             once: { type: "boolean", description: "Animated SVG plays once and holds the final frame (default: loops)" },
             font: { type: "string", enum: ["system", "embed"], description: 'Animated SVG font: "system" mono stack (default, small) or "embed" Commit Mono (+~127 KB)' },
+            changes: {
+              type: ["string", "object"],
+              description:
+                "A changes.json from storyink_diff (path or object), or a .diff/.patch path: fills `stat` from element `files`, resolves `diff: { file, lines }` code nodes and embeds the referenced hunks. Coverage warnings are returned.",
+            },
           },
           required: ["output"],
           additionalProperties: false,
@@ -138,7 +147,7 @@ const plugin = {
             output: string
             svg?: string
             theme?: ThemeName
-            story?: "auto"
+            story?: "auto" | "changes"
             motion?: "full" | "reduced" | "system"
             camera?: "follow" | "fit"
             pace?: number
@@ -146,10 +155,34 @@ const plugin = {
             animatedSvgPath?: string
             once?: boolean
             font?: "system" | "embed"
+            changes?: string | object
           }
           if (context.signal.aborted) throw new Error("aborted")
+          let changeDiags: Diagnostic[] = []
+          if (i.changes !== undefined) {
+            let ds
+            try {
+              ds = typeof i.changes === "string" ? diffSetFrom(fs.readFileSync(abs(i.changes), "utf8"), i.changes) : asDiffSet(i.changes)
+            } catch (e) {
+              return { content: `storyink: could not read changes: ${(e as Error).message}`, metadata: { ok: false } }
+            }
+            let raw: unknown = i.spec
+            if (typeof raw === "string") {
+              try {
+                raw = JSON.parse(raw)
+              } catch {}
+            } else if (raw === undefined && i.mermaid) raw = fromMermaid(i.mermaid).spec
+            if (raw && typeof raw === "object") {
+              const r = resolveChanges(raw as Spec, ds)
+              changeDiags = r.diagnostics
+              i.spec = r.spec
+              delete i.mermaid
+            }
+          }
           const s = specFrom(i)
+          if (changeDiags.length) s.diagnostics = [...changeDiags, ...s.diagnostics]
           if (s.ok && s.spec && i.story === "auto" && s.spec.story === undefined) s.spec.story = "auto"
+          if (s.ok && s.spec && i.story === "changes") s.spec.story = changesStoryOf(s.spec.story)
           if (s.ok && s.spec && i.motion) setStoryMotion(s.spec, i.motion)
           if (s.ok && s.spec && i.camera) setStoryCamera(s.spec, i.camera)
           if (s.ok && s.spec && typeof i.pace === "number") setStoryPace(s.spec, i.pace)
@@ -179,6 +212,48 @@ const plugin = {
             "Next: run storyink_snapshot on the html and look at the sheet image before describing it.",
           ].filter(Boolean)
           return { content: lines.join("\n"), metadata: out }
+        },
+      })
+
+      editor.add({
+        name: "diff",
+        description:
+          "Parse a git diff (default: working tree vs the merge base with main/master; or a range / base+head / staged / patch text) into a storyink changes file. Returns a compact summary (per-file status, +/-, hunk headers; never full hunks). Reference the paths from elements' `files` (and `diff: { file, lines }` code nodes), then render with `changes`.",
+        input: {
+          type: "object",
+          properties: {
+            range: { type: "string", description: "Commit range: a..b, a...b (from the merge base), or one revision (vs the working tree)" },
+            base: { type: "string", description: "Base revision (alternative to range)" },
+            head: { type: "string", description: "Head revision (default: working tree)" },
+            staged: { type: "boolean", description: "Staged changes (git diff --cached)" },
+            patch: { type: "string", description: "Unified diff text to parse instead of running git" },
+            paths: { type: "array", items: { type: "string" }, description: "Limit to git pathspecs (e.g. src, :!docs/gallery)" },
+            output: { type: "string", description: "Write the changes JSON here (e.g. changes.json), for storyink_render `changes`" },
+          },
+          additionalProperties: false,
+        },
+        options: { namespace: "storyink" },
+        execute: async (input) => {
+          const i = input as { range?: string; base?: string; head?: string; staged?: boolean; patch?: string; paths?: string[]; output?: string }
+          let ds
+          try {
+            ds = gitDiff({ cwd: base, ...i })
+          } catch (e) {
+            return { content: `storyink: ${(e as Error).message}`, metadata: { ok: false } }
+          }
+          let written: string | undefined
+          if (i.output) {
+            written = abs(i.output)
+            fs.mkdirSync(path.dirname(written), { recursive: true })
+            fs.writeFileSync(written, diffSetJson(ds))
+          }
+          const lines = diffSummary(ds, { hunks: true })
+          const MAX = 200
+          const shown = lines.length > MAX ? [...lines.slice(0, MAX), `… ${lines.length - MAX} more lines`] : lines
+          return {
+            content: [`storyink diff: ${shown[0]}`, ...shown.slice(1), written ? `wrote ${written}` : "(not written: pass `output` to save a changes file)"].join("\n"),
+            metadata: { ok: true, path: written, base: ds.base, head: ds.head, title: ds.title, stats: ds.stats, files: ds.files.map((f) => ({ path: f.path, oldPath: f.oldPath, status: f.status, add: f.add, del: f.del, hunks: f.hunks.length })) },
+          }
         },
       })
 
@@ -263,6 +338,8 @@ const plugin = {
             motion: { type: "string", enum: ["full", "reduced"], description: 'Motion mode for `at` frames: "reduced" = stepped playback (settled step states)' },
             camera: { type: "string", enum: ["fit", "follow"], description: '`at` frames: "fit" (default, whole diagram) or "follow" (the follow camera\'s view at a 1280×720 stage)' },
             pace: { type: "number", minimum: 0, maximum: 10, description: "Reading-hold pace for the captures (default: the HTML's author pace, 0.6 unless set)" },
+            rail: { type: "boolean", description: "`at` frames: show the narration rail (specs with `narrate` steps)" },
+            drawer: { type: "string", description: "`at` frames: open the change drawer on this element id or file path" },
             maxImageSize: { type: "number", description: "Longest side of the returned image in px (default 1024, 256–2048)" },
           },
           required: ["html"],
@@ -282,6 +359,8 @@ const plugin = {
             motion?: "full" | "reduced"
             camera?: "fit" | "follow"
             pace?: number
+            rail?: boolean
+            drawer?: string
           }
           const image = i.image ?? "overview"
           const r = await snapshot(abs(i.html), {
@@ -292,6 +371,8 @@ const plugin = {
             ...(i.motion ? { motion: i.motion } : {}),
             ...(i.camera === "follow" ? { camera: "follow" as const } : {}),
             ...(typeof i.pace === "number" ? { pace: i.pace } : {}),
+            ...(i.rail ? { rail: true } : {}),
+            ...(i.drawer ? { drawer: i.drawer } : {}),
             ...(i.width ? { width: i.width } : {}),
             ...(i.outDir ? { outDir: abs(i.outDir) } : {}),
             signal: context.signal,

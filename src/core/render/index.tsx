@@ -10,6 +10,8 @@ import { validate, type Diagnostic } from "../validate.ts"
 import { App } from "./App.tsx"
 import { diagramCss, fontFaceCss, viewerCss } from "./css.ts"
 import { Diagram } from "./Diagram.tsx"
+import { hasDrawer } from "./Drawer.tsx"
+import { hasNarration } from "../story/narrate.ts"
 import { storyState } from "../story/state.ts"
 import { ROLLING_CSS } from "../../generated/rolling.ts"
 
@@ -40,6 +42,18 @@ export function isRichScene(scene: Scene): boolean {
   return scene.nodes.some((n) => n.shape === "window" || n.shape === "chip" || n.muted) || scene.groups.some((g) => g.bare)
 }
 
+/** Does the scene use change-diagram fields (their CSS / palette is only emitted then)? */
+export function isChangeScene(scene: Scene): boolean {
+  return (
+    !!scene.legend ||
+    !!scene.timeline?.veil ||
+    !!scene.change ||
+    scene.nodes.some((n) => n.delta || n.badge || n.diff) ||
+    scene.edges.some((e) => e.delta || e.emphasis) ||
+    scene.groups.some((g) => g.delta)
+  )
+}
+
 function isScene(x: unknown): x is Scene {
   return typeof x === "object" && x !== null && "viewBox" in x && "nodes" in x && "edges" in x && "ports" in x
 }
@@ -59,7 +73,8 @@ export interface SvgOptions {
 export function renderSvg(spec: Spec | Scene | unknown, opts: SvgOptions = {}): string {
   const scene = toScene(spec)
   const rich = isRichScene(scene)
-  const style = [opts.font === false ? "" : fontCss(), themeCss("svg.storyink", opts.theme, rich), diagramCss(rich)].filter(Boolean).join("\n")
+  const changes = isChangeScene(scene)
+  const style = [opts.font === false ? "" : fontCss(), themeCss("svg.storyink", opts.theme, rich, changes), diagramCss(rich, changes)].filter(Boolean).join("\n")
   const tl = scene.timeline
   const t = !tl || opts.t === undefined || opts.t === "end" ? (tl?.duration ?? 0) : opts.t
   const markup = renderToStaticMarkup(<Diagram scene={scene} style={style} frame={storyState(scene, tl, t)} />)
@@ -83,6 +98,8 @@ const BOOT = `(function(){try{var d=document.documentElement,h=new URLSearchPara
 export function renderHtml(spec: Spec | Scene | unknown, opts: HtmlOptions = {}): string {
   const scene = toScene(spec)
   const body = renderToString(<App scene={scene} />)
+  // Narration rail / change drawer rules (and the code + delta palette the drawer's diffs use).
+  const ui = { narrate: hasNarration(scene), drawer: hasNarration(scene) || hasDrawer(scene) }
   const data = escapeJson(JSON.stringify({ version: VERSION, scene }))
   const viewer = opts.viewer === false ? "" : `<script id="storyink-viewer">${VIEWER_JS.replace(/<\/script/gi, "<\\/script")}</script>`
   return `<!doctype html>
@@ -93,9 +110,9 @@ export function renderHtml(spec: Spec | Scene | unknown, opts: HtmlOptions = {})
 <meta name="generator" content="storyink ${VERSION}">
 <title>${escapeHtml(scene.title)}</title>
 <style id="storyink-font">${fontCss()}</style>
-<style id="storyink-theme">${themeCss(":root", undefined, isRichScene(scene))}</style>
-<style id="storyink-diagram-css">${diagramCss(isRichScene(scene))}</style>
-<style id="storyink-viewer-css">${viewerCss()}${scene.timeline && Object.keys(scene.timeline.counters).length ? ROLLING_CSS : ""}</style>
+<style id="storyink-theme">${themeCss(":root", undefined, isRichScene(scene) || ui.drawer, isChangeScene(scene) || ui.drawer)}</style>
+<style id="storyink-diagram-css">${diagramCss(isRichScene(scene), isChangeScene(scene))}</style>
+<style id="storyink-viewer-css">${viewerCss(ui)}${scene.timeline && Object.keys(scene.timeline.counters).length ? ROLLING_CSS : ""}</style>
 <script>${BOOT}</script>
 </head>
 <body>

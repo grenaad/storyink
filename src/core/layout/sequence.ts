@@ -3,6 +3,7 @@ import type { Box, Pt, Scene, SceneActivation, SceneBand, SceneBox, SceneEdge, S
 import type { SequenceSpec } from "../spec.ts"
 import { r2, snap, textWidth } from "./measure.ts"
 import { sizeNode } from "./nodes.ts"
+import { fitBadge } from "./delta.ts"
 import { roundedPolyline } from "./paths.ts"
 
 const LABEL_H = T.edgeLabel + 2 * G.pillPadY + 4
@@ -10,9 +11,11 @@ const ACT_W = 10
 
 export function layoutSequence(spec: SequenceSpec): Scene {
   const M = G.margin
-  const parts = spec.participants.map((p) =>
-    sizeNode({ id: p.id, kind: p.kind === "actor" ? "actor" : p.kind === "participant" ? "participant" : p.kind ?? "participant", label: p.label ?? p.id }, { tags: p.kind !== "participant" }),
-  )
+  const parts = spec.participants.map((p) => {
+    const s = sizeNode({ id: p.id, kind: p.kind === "actor" ? "actor" : p.kind === "participant" ? "participant" : p.kind ?? "participant", label: p.label ?? p.id }, { tags: p.kind !== "participant" })
+    if (p.delta) fitBadge(s, { delta: p.delta })
+    return s
+  })
   const col = new Map(spec.participants.map((p, i) => [p.id, i]))
   const n = parts.length
   const messages = spec.messages

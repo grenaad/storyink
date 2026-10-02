@@ -215,6 +215,81 @@ export const richPalettes: Record<ThemeName, RichPalette> = {
   },
 }
 
+/**
+ * Palette additions for change diagrams (`delta` / `emphasis` / `stat`): sage = added,
+ * gold = modified, rose = removed. Only emitted when a scene uses them (byte-identical otherwise).
+ * `<delta>` is the ink (badge text, accents, wires), `<delta>Fill` the badge face.
+ */
+export interface DeltaPalette {
+  deltaAdded: string
+  deltaAddedFill: string
+  deltaModified: string
+  deltaModifiedFill: string
+  deltaRemoved: string
+  deltaRemovedFill: string
+  /** Hero edge stroke when the edge has no delta of its own. */
+  deltaHero: string
+  /** Diff code nodes: added / removed row tints and their intra-line marks (opaque, on the panel face). */
+  diffAddBg: string
+  diffAddMark: string
+  diffDelBg: string
+  diffDelMark: string
+}
+
+export const deltaPalettes: Record<ThemeName, DeltaPalette> = {
+  light: {
+    deltaAdded: "#55703f",
+    deltaAddedFill: "#d6dccb",
+    deltaModified: "#8a7426",
+    deltaModifiedFill: "#e2dbc0",
+    deltaRemoved: "#a65a4b",
+    deltaRemovedFill: "#e4d3cc",
+    deltaHero: "#3d3a34",
+    diffAddBg: "#d6dece",
+    diffAddMark: "#bccdac",
+    diffDelBg: "#ead6d0",
+    diffDelMark: "#dfb8ad",
+  },
+  dark: {
+    deltaAdded: "#9fb98e",
+    deltaAddedFill: "#1d2619",
+    deltaModified: "#e2d29f",
+    deltaModifiedFill: "#2b2717",
+    deltaRemoved: "#e3a597",
+    deltaRemovedFill: "#2f1d19",
+    deltaHero: "#d8d4cc",
+    diffAddBg: "#16211a",
+    diffAddMark: "#26392a",
+    diffDelBg: "#261614",
+    diffDelMark: "#43241f",
+  },
+}
+
+/** Change-diagram geometry and levels. */
+export const delta = {
+  /** Removed elements: ghost level. */
+  ghost: 0.55,
+  /** Unchanged elements: receded context level. */
+  context: 0.82,
+  /** `emphasis: "muted"` edges / messages. */
+  mutedEdge: 0.35,
+  /** Hero edge stroke and its soft glow underlay. */
+  heroWidth: 2.2,
+  heroGlow: 8,
+  heroGlowOpacity: 0.16,
+  /** Added sequence messages draw a little heavier. */
+  addedMessageWidth: 1.6,
+  /** Badge pill: font size, height, horizontal padding, inset from the node edge. */
+  badgeFont: 9,
+  badgeH: 14,
+  badgePadX: 5,
+  badgeInset: 6,
+  /** `stat` text ("+38 −12"). */
+  statFont: 10,
+  /** Legend band above the diagram. */
+  legendH: 26,
+}
+
 /** Base step inks from the source look (reference values). */
 export const stepInks = {
   light: ["#b88f85", "#819eb8", "#b8a571"],
@@ -326,13 +401,13 @@ export const motion = {
 }
 
 /** CSS custom property name for a palette key. */
-export const cssVar = (key: keyof Palette | keyof RichPalette): string => `--si-${key}`
+export const cssVar = (key: keyof Palette | keyof RichPalette | keyof DeltaPalette): string => `--si-${key}`
 /** `var(--si-key)` reference. */
-export const v = (key: keyof Palette | keyof RichPalette): string => `var(${cssVar(key)})`
+export const v = (key: keyof Palette | keyof RichPalette | keyof DeltaPalette): string => `var(${cssVar(key)})`
 
-/** Custom properties for a theme; `rich` adds the rich-node palette. */
-export function paletteCss(theme: ThemeName, rich = false): string {
-  const p: Record<string, string> = rich ? { ...palettes[theme], ...richPalettes[theme] } : { ...palettes[theme] }
+/** Custom properties for a theme; `rich` adds the rich-node palette, `changes` the delta palette. */
+export function paletteCss(theme: ThemeName, rich = false, changes = false): string {
+  const p: Record<string, string> = { ...palettes[theme], ...(rich ? richPalettes[theme] : {}), ...(changes ? deltaPalettes[theme] : {}) }
   return Object.keys(p).map((k) => `${cssVar(k as keyof Palette)}:${p[k]};`).join("")
 }
 
@@ -340,13 +415,13 @@ export function paletteCss(theme: ThemeName, rich = false): string {
  * CSS for both themes. `scope` is the selector that carries the variables.
  * With `fixed`, only that theme is emitted (no media query).
  */
-export function themeCss(scope: string, fixed?: ThemeName, rich = false): string {
-  if (fixed) return `${scope}{${paletteCss(fixed, rich)}color-scheme:${fixed};}`
+export function themeCss(scope: string, fixed?: ThemeName, rich = false, changes = false): string {
+  if (fixed) return `${scope}{${paletteCss(fixed, rich, changes)}color-scheme:${fixed};}`
   // Custom properties inherit, so the nearest `[data-theme]` ancestor wins.
   return [
-    `${scope}{${paletteCss("light", rich)}color-scheme:light;}`,
-    `@media (prefers-color-scheme: dark){${scope}{${paletteCss("dark", rich)}color-scheme:dark;}}`,
-    `${scope}[data-theme="light"],${scope} [data-theme="light"]{${paletteCss("light", rich)}color-scheme:light;}`,
-    `${scope}[data-theme="dark"],${scope} [data-theme="dark"]{${paletteCss("dark", rich)}color-scheme:dark;}`,
+    `${scope}{${paletteCss("light", rich, changes)}color-scheme:light;}`,
+    `@media (prefers-color-scheme: dark){${scope}{${paletteCss("dark", rich, changes)}color-scheme:dark;}}`,
+    `${scope}[data-theme="light"],${scope} [data-theme="light"]{${paletteCss("light", rich, changes)}color-scheme:light;}`,
+    `${scope}[data-theme="dark"],${scope} [data-theme="dark"]{${paletteCss("dark", rich, changes)}color-scheme:dark;}`,
   ].join("\n")
 }

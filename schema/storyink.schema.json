@@ -28,6 +28,80 @@
     "subtitle": {
       "type": "string"
     },
+    "change": {
+      "description": "Change metadata shown small above the diagram (\"main → feat/batch\").",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "base": { "type": "string" },
+        "head": { "type": "string" },
+        "title": { "type": "string" },
+        "url": { "type": "string" }
+      }
+    },
+    "changes": {
+      "description": "Written by resolveChanges / --changes (not hand-written): only the diff hunks the spec's elements reference (a DiffFile list from storyink diff, capped per file with a \"… N more lines\" row).",
+      "type": "object",
+      "required": [
+        "files"
+      ],
+      "properties": {
+        "base": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "status",
+              "hunks"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "oldPath": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "added",
+                  "modified",
+                  "removed",
+                  "renamed",
+                  "copied"
+                ]
+              },
+              "binary": {
+                "const": true
+              },
+              "add": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "del": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "lang": {
+                "type": "string"
+              },
+              "hunks": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "direction": {
       "enum": [
         "TB",
@@ -39,10 +113,13 @@
       "description": "Graph types only. Omit to auto-pick TB or LR by aspect ratio (closest to 16:10)."
     },
     "story": {
-      "description": "Storyboard (opt-in). \"auto\" derives steps from graph / message order.",
+      "description": "Storyboard (opt-in). \"auto\" derives steps from graph / message order; \"changes\" derives a change walkthrough from the deltas.",
       "oneOf": [
         {
           "const": "auto"
+        },
+        {
+          "const": "changes"
         },
         {
           "type": "object",
@@ -339,8 +416,23 @@
                       "unglow": {
                         "$ref": "#/$defs/refs"
                       },
+                      "apply": {
+                        "description": "Diff code nodes: play the change (base version → diff), all remaining hunks or one (1-based).",
+                        "oneOf": [
+                          { "$ref": "#/$defs/applyRef" },
+                          { "type": "array", "items": { "$ref": "#/$defs/applyRef" } }
+                        ]
+                      },
                       "focus": {
-                        "$ref": "#/$defs/ref"
+                        "$ref": "#/$defs/refs",
+                        "description": "Camera / spotlight / veil target: an id, or several (their union box)."
+                      },
+                      "change": {
+                        "$ref": "#/$defs/refs",
+                        "description": "Apply these elements' delta look with motion (they show their before look until then)."
+                      },
+                      "narrate": {
+                        "$ref": "#/$defs/narrate"
                       }
                     }
                   }
@@ -348,12 +440,16 @@
                 {
                   "const": "auto",
                   "description": "Derive the steps (like \"story\": \"auto\")"
+                },
+                {
+                  "const": "changes",
+                  "description": "Derive a change walkthrough: before state, one beat per changed node (with its changed edges and attached diff), hero pulses, overview"
                 }
               ]
             },
             "spotlight": {
-              "type": "boolean",
-              "description": "A soft light that follows the action."
+              "oneOf": [{ "type": "boolean" }, { "const": "veil" }],
+              "description": "true: a soft light that follows the action. \"veil\": dim everything outside the step's focus (a soft rounded cutout that glides between steps)."
             },
             "rewind": {
               "enum": [
@@ -373,6 +469,10 @@
         "arrowheads": {
           "type": "boolean",
           "description": "Draw arrowheads on graph edges (default false; sequences always have heads)."
+        },
+        "legend": {
+          "type": "boolean",
+          "description": "Change legend (default: shown when any element has a delta other than unchanged; false hides it)."
         }
       }
     }
@@ -464,6 +564,106 @@
     }
   ],
   "$defs": {
+    "narrate": {
+      "type": "object",
+      "description": "Step narration for the HTML viewer's rail. heading defaults to the step's stop; a narrated step without a caption captions with its heading (or the body's first sentence).",
+      "required": ["body"],
+      "additionalProperties": false,
+      "properties": {
+        "heading": { "type": "string" },
+        "body": { "type": "string", "minLength": 1 },
+        "cites": {
+          "type": "array",
+          "description": "Spans of the body (exact text, in order) linked to an element id, \"node#row\", or a file path / path#L12 / path#L12-20.",
+          "items": {
+            "type": "object",
+            "required": ["text", "ref"],
+            "additionalProperties": false,
+            "properties": { "text": { "type": "string", "minLength": 1 }, "ref": { "type": "string", "minLength": 1 } }
+          }
+        }
+      }
+    },
+    "delta": {
+      "enum": ["added", "modified", "removed", "unchanged"],
+      "description": "What the change did to this element (added = sage NEW, modified = gold CHANGED, removed = rose ghost, unchanged = receded context)."
+    },
+    "emphasis": {
+      "enum": ["hero", "muted"],
+      "description": "hero: thicker stroke + glow (keep to 1–2 per diagram); muted: low opacity."
+    },
+    "applyRef": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "required": ["id"],
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": "string" },
+            "hunk": { "type": "integer", "minimum": 1 },
+            "cps": { "type": "number", "exclusiveMinimum": 0, "description": "Typing speed of added lines (default 60)." }
+          }
+        }
+      ]
+    },
+    "diff": {
+      "description": "code nodes: a diff shown with gutter and +/− rows. Unified hunk text, { file, lines?, context?, max? } (resolved by --changes), or resolved { file?, hunks }.",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "file": { "type": "string", "minLength": 1 },
+            "lines": {
+              "oneOf": [
+                { "type": "integer", "minimum": 1 },
+                { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "integer", "minimum": 1 } }
+              ]
+            },
+            "context": { "type": "integer", "minimum": 0, "maximum": 20, "description": "Context lines around the range (default 3)." },
+            "max": { "type": "integer", "minimum": 4, "maximum": 200, "description": "Fold after this many rows with \"… N more lines\" (default 24)." },
+            "hunks": { "type": "array", "items": { "type": "object", "required": ["lines"] } }
+          }
+        }
+      ]
+    },
+    "fileRef": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "required": ["path"],
+          "additionalProperties": false,
+          "properties": {
+            "path": { "type": "string", "minLength": 1 },
+            "lines": {
+              "oneOf": [
+                { "type": "integer", "minimum": 1 },
+                { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "integer", "minimum": 1 } }
+              ],
+              "description": "1-based inclusive line or [first, last]; head side unless removed / revision base."
+            },
+            "revision": { "enum": ["head", "base"] }
+          }
+        }
+      ]
+    },
+    "files": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/fileRef" },
+      "description": "Source locations behind this element."
+    },
+    "stat": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "add": { "type": "integer", "minimum": 0 },
+        "del": { "type": "integer", "minimum": 0 }
+      },
+      "description": "Added / deleted lines, shown as \"+38 −12\"."
+    },
     "id": {
       "type": "string",
       "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:\\-]*$"
@@ -607,9 +807,26 @@
                   "ts",
                   "js",
                   "json",
-                  "text"
+                  "text",
+                  "py",
+                  "go",
+                  "rust",
+                  "sql",
+                  "yaml",
+                  "sh",
+                  "python",
+                  "golang",
+                  "rs",
+                  "yml",
+                  "bash",
+                  "shell",
+                  "zsh",
+                  "typescript",
+                  "tsx",
+                  "javascript",
+                  "jsx"
                 ],
-                "description": "code only (default ts)."
+                "description": "code only (default ts; aliases python, golang, rs, yml, bash, shell, zsh, typescript, tsx, javascript, jsx are normalized)."
               },
               "size": {
                 "type": "object",
@@ -637,7 +854,12 @@
                 "minimum": 1,
                 "maximum": 3,
                 "description": "chip: sheets peeking below."
-              }
+              },
+              "delta": { "$ref": "#/$defs/delta" },
+              "files": { "$ref": "#/$defs/files" },
+              "stat": { "$ref": "#/$defs/stat" },
+              "diff": { "$ref": "#/$defs/diff" },
+              "summary": { "type": "string", "description": "One line: what changed and why." }
             }
           }
         },
@@ -679,7 +901,11 @@
                   "none",
                   "both"
                 ]
-              }
+              },
+              "delta": { "$ref": "#/$defs/delta" },
+              "emphasis": { "$ref": "#/$defs/emphasis" },
+              "files": { "$ref": "#/$defs/files" },
+              "summary": { "type": "string", "description": "One line: what changed and why." }
             }
           }
         },
@@ -719,7 +945,8 @@
               "bare": {
                 "type": "boolean",
                 "description": "Label only, no box (a column heading)."
-              }
+              },
+              "delta": { "$ref": "#/$defs/delta" }
             }
           }
         }
@@ -772,7 +999,8 @@
                   "queue",
                   "external"
                 ]
-              }
+              },
+              "delta": { "$ref": "#/$defs/delta" }
             }
           }
         },
@@ -805,7 +1033,11 @@
                   "return",
                   "self"
                 ]
-              }
+              },
+              "delta": { "$ref": "#/$defs/delta" },
+              "emphasis": { "$ref": "#/$defs/emphasis" },
+              "files": { "$ref": "#/$defs/files" },
+              "summary": { "type": "string", "description": "One line: what changed and why." }
             }
           }
         },
@@ -1142,7 +1374,8 @@
       "oneOf": [
         {
           "type": "string",
-          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:\\-]*#[1-9][0-9]*(-[1-9][0-9]*)?$"
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:\\-]*#([1-9][0-9]*(-[1-9][0-9]*)?|[+-][1-9][0-9]*)$",
+      "description": "\"code#3\" / \"code#2-4\" (display lines); diff nodes also \"code#+14\" (head line) / \"code#-13\" (base line)."
         },
         {
           "type": "object",
@@ -1173,7 +1406,8 @@
             },
             "off": {
               "const": true
-            }
+            },
+            "hunk": { "type": "integer", "minimum": 1, "description": "Diff nodes: light hunk n's rows (1-based)." }
           }
         }
       ]

@@ -17,7 +17,7 @@
 import { Fragment, type ReactElement, type ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { COMMIT_MONO_400, COMMIT_MONO_700 } from "../../generated/font.ts"
-import { ACCENTS, fonts, geometry as G, palettes, richPalettes, story as S, type as T, type Palette, type ThemeName } from "../../theme/tokens.ts"
+import { ACCENTS, delta as DL, deltaPalettes, fonts, geometry as G, palettes, richPalettes, story as S, type as T, type Palette, type ThemeName } from "../../theme/tokens.ts"
 import { CARET_LINGER, SHIMMER_PERIOD, SPIN_PERIOD } from "../story/content.ts"
 import { SHIMMER, SPOT } from "../story/content-state.ts"
 import { STATUS_PATHS } from "./icons.ts"
@@ -26,8 +26,9 @@ import type { Spec } from "../spec.ts"
 import { storyState } from "../story/state.ts"
 import type { Frame } from "../story/types.ts"
 import { diagramCss, fontFaceCss } from "./css.ts"
-import { Diagram } from "./Diagram.tsx"
-import { isRichScene, toScene } from "./index.tsx"
+import { dashedLook, Diagram } from "./Diagram.tsx"
+import { diffGeom } from "../layout/diffnode.ts"
+import { isChangeScene, isRichScene, toScene } from "./index.tsx"
 
 export interface AnimatedSvgOptions {
   /** Pinned theme (SVG-as-image never follows the page). Default "light". */
@@ -330,11 +331,25 @@ function richTracks(scene: Scene, c: Clock, add: (key: string, ...els: (ReactNod
           O,
         ),
       )
-    if (tl.wires?.[e.id] && e.style !== "dashed") {
+    if (tl.wires?.[e.id] && !dashedLook(e)) {
       const L = (e.length ?? 0) + 24
       const off = anim(c, "stroke-dashoffset", series((f) => [f.undraw?.[e.id] !== undefined ? -L * f.undraw[e.id] : f.draw[e.id] !== undefined ? L * (1 - f.draw[e.id]) : 0]), 0.5)
       if (off) add(`wire:${e.id}`, <set attributeName="stroke-dasharray" to={`${num(L)} ${num(L)}`} begin="0s" />, off)
       add(`wire:${e.id}`, anim(c, "opacity", series((f) => [(f.draw[e.id] !== undefined && f.draw[e.id] <= 0) || (f.undraw?.[e.id] ?? 0) >= 1 ? 0 : 1]), O))
+    }
+    // Dashed wires (and removed edges) fade on / off; labels of wired edges follow the draw (as the HTML).
+    if (tl.wires?.[e.id] && !tl.draw[e.id]) {
+      if (dashedLook(e))
+        add(
+          `wire:${e.id}`,
+          anim(c, "opacity", series((f) => {
+            const u = f.undraw?.[e.id]
+            if (u !== undefined) return [u >= 1 ? 0 : Math.max(0, 1 - u * 1.4)]
+            const d = f.draw[e.id]
+            return [d === undefined ? 1 : d <= 0 ? 0 : Math.min(1, d * 1.4)]
+          }), O),
+        )
+      if (e.label) add(`elabel:${e.id}`, anim(c, "opacity", series((f) => [f.draw[e.id] === undefined ? 1 : Math.max(0, Math.min(1, (f.draw[e.id] - 0.35) / 0.4))]), O))
     }
   }
 
@@ -505,6 +520,65 @@ function richTracks(scene: Scene, c: Clock, add: (key: string, ...els: (ReactNod
   void ts
 }
 
+/** Change steps (delta-look fades, levels, legend items) and the veil. */
+function changeTracks(scene: Scene, c: Clock, add: (key: string, ...els: (ReactNode | null)[]) => void): void {
+  const tl = scene.timeline!
+  const O = 0.01
+  const series = (get: (f: Frame) => number) => c.frames.map((f) => [get(f)] as Vec)
+  const lvlOf = (d?: string, em?: string) => (d === "removed" ? DL.ghost : d === "unchanged" ? DL.context : 1) * (em === "muted" ? DL.mutedEdge : 1)
+  for (const [id, ch] of Object.entries(tl.changes ?? {})) {
+    const p = series((f) => f.delta?.[id] ?? 1)
+    const n = scene.nodes.find((x) => x.id === id)
+    const e = n ? undefined : scene.edges.find((x) => x.id === id)
+    const g = n || e ? undefined : scene.groups.find((x) => x.id === id)
+    if (n) {
+      const after = lvlOf(n.delta)
+      add(`dlvl:${id}`, anim(c, "opacity", p.map((v) => [1 + (after - 1) * v[0]]), O))
+      for (const k of ["dface", "dstrike", "dbadge", "lifeafter"]) add(`${k}:${id}`, anim(c, "opacity", p, O))
+    } else if (e) {
+      add(`eafter:${id}`, anim(c, "opacity", p, O))
+      const after = lvlOf(e.delta, e.emphasis)
+      add(`llvl:${id}`, anim(c, "opacity", p.map((v) => [1 + (after - 1) * v[0]]), O))
+      add(`lstrike:${id}`, anim(c, "opacity", p, O))
+    } else if (g) add(`gbadge:${id}`, anim(c, "fill-opacity", p, O))
+    void ch
+  }
+  for (const d of Object.keys(tl.legendAt ?? {})) add(`legend:${d}`, anim(c, "opacity", series((f) => f.legend?.[d] ?? 1), O))
+  if (tl.veil?.length) {
+    add("veil", anim(c, "opacity", series((f) => f.veil?.a ?? 0), O))
+    let last = tl.veil[0]
+    const box = c.frames.map((f): Vec => {
+      if (f.veil) last = { ...last, ...f.veil }
+      return [last.x, last.y, last.w, last.h]
+    })
+    add("veilr", ...(["x", "y", "width", "height"] as const).map((attr, k) => anim(c, attr, box.map((b) => [b[k]]), 0.5)))
+  }
+}
+
+/** Diff code nodes (story `apply`): row slide, tint / gutter fades, added rows opening and typing. */
+function diffTracks(scene: Scene, c: Clock, add: (key: string, ...els: (ReactNode | null)[]) => void): void {
+  const tl = scene.timeline!
+  const ADV = T.code * 0.6
+  for (const n of scene.nodes) {
+    const d = n.diff
+    if (!d || !tl.applies?.[n.id]) continue
+    const looks = c.frames.map((f) => diffGeom(d, f.diff?.[n.id]))
+    d.rows.forEach((r, k) => {
+      const key = `${n.id}:${k}`
+      const L = looks.map((x) => x[k])
+      // Tight tolerance: a 0.1 px rest offset (a long simplified tail) shifts every glyph's
+      // anti-aliasing, which the parity check reads as a real difference.
+      add(`drow:${key}`, translate(c, L.map((l) => [0, l.y]), 0.02))
+      if (r.kind === "add" || r.kind === "del") add(`dtint:${key}`, anim(c, "opacity", L.map((l) => [l.tint]), 0.01))
+      if (r.kind !== "fold") add(`dnum:${key}`, anim(c, "opacity", L.map((l) => [l.num]), 0.01))
+      if (r.kind === "add") {
+        add(`dh:${key}`, anim(c, "height", L.map((l) => [l.h]), 0.02))
+        add(`dclip:${key}`, anim(c, "width", L.map((l) => [l.chars !== undefined ? l.chars * ADV + 2 : n.w - d.codeX]), 0.5))
+      }
+    })
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Theme pinning: resolve every var(--si-*) to a literal colour.
 
@@ -515,15 +589,15 @@ function hex(c: string): [number, number, number] {
 const toHex = (v: Vec) => `#${v.map((x) => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, "0")).join("")}`
 
 /** Diagram CSS with the theme's literal colours (no custom properties, no media queries). */
-export function pinnedCss(theme: ThemeName, rich = false): string {
-  const p = (rich ? { ...palettes[theme], ...richPalettes[theme] } : palettes[theme]) as Palette
+export function pinnedCss(theme: ThemeName, rich = false, changes = false): string {
+  const p = { ...palettes[theme], ...(rich ? richPalettes[theme] : {}), ...(changes ? deltaPalettes[theme] : {}) } as Palette
   const sub = (s: string, accent?: string) =>
     s
       .replace(/var\(--si-accentFill\)/g, accent ? p[`${accent}Fill` as keyof Palette] : "")
       .replace(/var\(--si-accent\)/g, accent ? p[accent as keyof Palette] : "")
       .replace(/var\(--si-(\w+)\)/g, (_, k: string) => p[k as keyof Palette] ?? "")
   const out: string[] = []
-  for (const m of diagramCss(rich).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+  for (const m of diagramCss(rich, changes).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     const sel = m[1].trim()
     const body = m[2]
     if (body.trim().startsWith("--")) continue
@@ -558,7 +632,7 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
   const pal = palettes[theme]
   const tl = scene.timeline
   const vb = scene.viewBox
-  const style = [opts.font === "embed" ? fontFaceCss(COMMIT_MONO_400, COMMIT_MONO_700) : "", pinnedCss(theme, isRichScene(scene))].filter(Boolean).join("\n")
+  const style = [opts.font === "embed" ? fontFaceCss(COMMIT_MONO_400, COMMIT_MONO_700) : "", pinnedCss(theme, isRichScene(scene), isChangeScene(scene))].filter(Boolean).join("\n")
 
   // Header: title, subtitle, caption slot (there is no HTML around an <img>).
   const hasCaptions = !!tl?.captions.length
@@ -594,7 +668,8 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
     const O = 0.01
     const PX = 0.3
 
-    const rich = isRichScene(scene)
+    // Change scenes use the union mode too (their stories mix 0.4 steps: wire, dim, undim...).
+    const rich = isRichScene(scene) || isChangeScene(scene)
     // Reveals.
     const nodes = new Map(scene.nodes.map((n) => [n.id, n]))
     const groups = new Set(scene.groups.map((g) => g.id))
@@ -620,7 +695,7 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
       const e = edges.get(id)
       if (!e) continue
       const d = series((f) => f.draw[id] ?? 1)
-      if (e.style === "dashed") add(`wire:${id}`, anim(c, "opacity", d.map((x) => [x <= 0 ? 0 : Math.min(1, x * 1.4)]), O))
+      if (dashedLook(e)) add(`wire:${id}`, anim(c, "opacity", d.map((x) => [x <= 0 ? 0 : Math.min(1, x * 1.4)]), O))
       else {
         const L = (e.length ?? 0) + 24
         const off = anim(c, "stroke-dashoffset", d.map((x) => [L * (1 - x)]), 0.5)
@@ -712,6 +787,8 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
     }
 
     if (rich) richTracks(scene, c, add, { ...pal, ...richPalettes[theme] } as Palette)
+    if (rich) diffTracks(scene, c, add)
+    if (rich) changeTracks(scene, c, add)
 
     // Pulses: dot + halo + arrival ring + a three-segment cooling trail (dash window on the route).
     const overlay: ReactNode[] = []
@@ -836,7 +913,7 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
       {smil?.(key)}
     </>
   ) : smil?.(key))
-  const richScene = isRichScene(scene)
+  const richScene = isRichScene(scene) || isChangeScene(scene)
   const union = richScene ? { pin: { ...pal, ...richPalettes[theme] } as unknown as Record<string, string> } : undefined
   let markup = renderToStaticMarkup(<Diagram scene={scene} style={`${style}\n${extraCss}`} frame={base} smil={smilWithHead} {...(union ? { union } : {})} />)
   // Rich scenes animate opacity on elements whose base opacity is inline style; SMIL animates the

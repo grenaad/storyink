@@ -3,6 +3,7 @@ import type { Arrowhead, Box, Pt, Scene, SceneEdge, SceneGroup, SceneLabel, Scen
 import type { Direction, GraphSpec } from "../spec.ts"
 import { r2, snap, textWidth } from "./measure.ts"
 import { sizeNode } from "./nodes.ts"
+import { fitBadge, groupBadgeW } from "./delta.ts"
 import { faceH, isRichKind, sizeRich } from "./panels.ts"
 import { anchorOffsetY, parseRef } from "../anchor.ts"
 import { wirePath } from "./paths.ts"
@@ -354,7 +355,7 @@ function layoutLevel(members: Member[], edges: LevelEdge[], dir: "TB" | "LR"): L
 /** Counter slot sizing: the widest value the story will show. */
 function counterSlot(spec: GraphSpec, c: NonNullable<GraphSpec["nodes"][number]["counter"]>) {
   const values = [c.value ?? 0]
-  if (spec.story && spec.story !== "auto" && spec.story.steps !== "auto")
+  if (spec.story && spec.story !== "auto" && Array.isArray(spec.story.steps))
     for (const st of spec.story.steps) for (const x of Array.isArray(st.counter) ? st.counter : st.counter ? [st.counter] : []) if (x.id === c.id && typeof x.to === "number") values.push(x.to)
   const dec = Math.max(...values.map((v) => (Number.isInteger(v) ? 0 : Math.min(3, String(v).split(".")[1]?.length ?? 0))))
   const fmt = (v: number) => `${c.prefix ?? ""}${v.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec })}${c.suffix ?? ""}`
@@ -407,6 +408,7 @@ function layoutGraphDir(spec: GraphSpec, direction: Direction): Scene {
         ? sizeRich(spec, n)
         : sizeNode({ id: n.id, kind: n.kind ?? "service", label: n.label ?? n.id, detail: n.detail, tag: n.tag, ...(n.counter ? { counter: counterSlot(spec, n.counter) } : {}) }, { tags })
       if (n.muted) s.muted = true
+      if (n.delta || n.stat || n.summary || n.files) fitBadge(s, n)
       sized.set(n.id, s)
     }
   // Chips under the same parent share the widest width.
@@ -473,7 +475,8 @@ function layoutGraphDir(spec: GraphSpec, direction: Direction): Scene {
     const lay = layoutLevel(members, lifted, baseOf(own))
     levelOf.set(container ?? "", lay)
     if (container === undefined) return { w: lay.w, h: lay.h }
-    const labelW = textWidth(groupLabelOf(container).toUpperCase(), T.groupLabel, T.tagTracking) + 2 * G.groupPad
+    const gDelta = groupsById.get(container)?.delta
+    const labelW = textWidth(groupLabelOf(container).toUpperCase(), T.groupLabel, T.tagTracking) + 2 * G.groupPad + (gDelta && gDelta !== "unchanged" ? groupBadgeW(gDelta) : 0)
     const size = {
       w: snap(Math.max(lay.w + 2 * G.groupPad, labelW, 120), 2),
       h: snap(Math.max(lay.h, kids.length ? 0 : 40) + 2 * G.groupPad + G.groupLabelBand - 6, 2),

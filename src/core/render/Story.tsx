@@ -36,6 +36,8 @@ export interface StoryControls {
   ungate: () => void
   /** Render synchronously at another time (for exporting a specific frame). */
   frameAt: (t: number) => Frame
+  /** The beat the header caption belongs to (step moves pin it; -1 before the first beat). */
+  beat: number
 }
 
 export interface StoryOptions {
@@ -442,7 +444,7 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
   const dim = mode === "gate" ? (opts.reduced ? 1 : S.gateDim) : mode === "ended" && settled ? S.endedDim : 1
   // Glitch rewind (HTML only): the same velocity envelope as the blur, only while rewinding.
   const glitch = tl?.rewind === "glitch" && mode === "rewinding" && !opts.reduced ? Math.min(1, blur / S.rewind.blur) : 0
-  return { t, frame, mode, dim, blur, glitch, reduced: opts.reduced, play, pause, toggle, seek, replay, step, moving, now: () => clock.get(), modeNow: () => modeRef.current, ungate, frameAt }
+  return { t, frame, mode, dim, blur, glitch, reduced: opts.reduced, play, pause, toggle, seek, replay, step, moving, now: () => clock.get(), modeNow: () => modeRef.current, ungate, frameAt, beat: captionBeat ?? beatIndexAt(tl, t) }
 }
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}.${Math.floor((s % 1) * 10)}`

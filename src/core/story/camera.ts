@@ -106,7 +106,8 @@ export function stepFocus(scene: Scene, tl: Timeline, i: number, pad: number = C
   }
   const pad1 = (b: Box) => ({ x: b.x - pad, y: b.y - pad, w: b.w + 2 * pad, h: b.h + 2 * pad })
   if (st.focus) {
-    const b = boxOf(st.focus)
+    // One id, or the union box of several.
+    const b = union((Array.isArray(st.focus) ? st.focus : [st.focus]).map(boxOf).filter((x): x is Box => !!x))
     if (b) return pad1(b)
   }
   const boxes: Box[] = []
@@ -128,6 +129,8 @@ export function stepFocus(scene: Scene, tl: Timeline, i: number, pad: number = C
       }
   for (const rec of [tl.levels, tl.vis]) for (const [id, ev] of Object.entries(rec ?? {})) if (ev.some((e) => inStep(e.t))) add(boxOf(id))
   for (const [id, ev] of Object.entries(tl.wires ?? {})) if (ev.some((e) => inStep(e.t0))) add(boxOf(id))
+  for (const [id, e] of Object.entries(tl.changes ?? {})) if (inStep(e.t0)) add(boxOf(id))
+  for (const [id, ev] of Object.entries(tl.applies ?? {})) if (ev.some((e) => inStep(e.t0))) add(boxOf(id))
   const u = union(boxes)
   if (!u) return undefined
   return pad1(u)
