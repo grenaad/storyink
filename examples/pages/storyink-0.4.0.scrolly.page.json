@@ -1,0 +1,32 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "page",
+  "eyebrow": "Commit walkthrough",
+  "title": "storyink 0.4.0, told by its own diff",
+  "subtitle": "Commit b526d50. Render with --changes ../changes/storyink-0.4.0.changes.json",
+  "change": { "base": "b526d50~1", "head": "b526d50", "title": "feat: rich panels, code animation and SVG parity (0.4.0)" },
+  "summary": "0.4.0 teaches the spec rich panels, code and chips, adds a content pass to the story engine and brings the animated SVG up to parity. The walkthrough below follows the commit's narrated change story; scroll and the diagram steps with you.",
+  "sections": [
+    {
+      "id": "walkthrough",
+      "title": "Where the spec flows",
+      "blocks": [
+        { "prose": "50 files changed (+5,556 −174). The figure is the commit's change diagram; each card is one of its narrated steps." },
+        { "scrolly": { "id": "commit", "figure": { "id": "pr", "spec": "../changes/storyink-0.4.0.pr.json", "claim": "The content pass sits beside layout and story; every renderer reads the same scene." }, "steps": "auto" } }
+      ]
+    },
+    {
+      "id": "files",
+      "title": "Files",
+      "blocks": [
+        { "filemap": { "from": "changes", "notes": { "src/core/story/content.ts": "the content pass", "test/compat.test.ts": "pre-0.4 goldens" } } },
+        {
+          "evidence": [
+            { "claim": "Rich CSS / palette are only emitted for scenes that use rich nodes.", "source": "src/core/render/index.tsx#L38-41", "status": "verified" },
+            { "claim": "A golden test pins pre-0.4 output.", "source": "test/compat.test.ts#L6", "status": "verified" }
+          ]
+        }
+      ]
+    }
+  ]
+}

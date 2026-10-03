@@ -230,8 +230,19 @@ storyink render examples/pages/pr-review.page.json -o pr-review.html
 storyink render review.page.json --changes changes.json   # filemap / diff blocks from a real diff
 ```
 
-Figure specs can be paths relative to the page. See [docs/spec.md](docs/spec.md#pages) and
+Figure specs can be paths relative to the page. A `scrolly` block pins a figure while step cards
+scroll past and drive its story; any page presents as 16:9 slides (Present, `P`, `#present=1`,
+or `"layout": "slides"`), stepping through each figure's beats. See
+[docs/spec.md](docs/spec.md#scrollytelling). See [docs/spec.md](docs/spec.md#pages) and
 [`examples/pages/`](examples/pages/).
+
+### Scrollytelling and slides
+
+Pages can pin a figure beside prose steps that drive its story as you scroll (`scrolly`), and any
+page can be presented as 16:9 slides (`P`, Present, or `layout: "slides"`): → steps through a
+slide's builds (its figure's beats) before the next slide. `storyink snapshot page.html --slides
+--builds` and `--scrolly all` capture every frame plus a sheet. See
+[docs/spec.md](docs/spec.md#scrollytelling-and-slides-viewer).
 
 ### Pages: interactive figures
 

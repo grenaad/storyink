@@ -1,0 +1,98 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "page",
+  "layout": "slides",
+  "eyebrow": "Diff review",
+  "title": "Payment retries move off the request path",
+  "subtitle": "A soft card decline now queues a retry instead of failing the checkout.",
+  "change": { "base": "main", "head": "payments/retry-queue", "title": "Illustrative example" },
+  "summary": "Recommendation: **approve once the idempotency key lands.**",
+  "sections": [
+    {
+      "id": "impact",
+      "title": "Fewer lost checkouts, one new queue",
+      "eyebrow": "Impact",
+      "blocks": [
+        {
+          "kpis": [
+            { "label": "Files", "value": 3, "detail": "1 modified, 2 added" },
+            { "label": "Lines", "value": "+23 \u22122", "tone": "good" },
+            { "label": "New infra", "value": 1, "detail": "SQS `payment-retries`", "tone": "warn" },
+            { "label": "Max attempts", "value": 3, "tone": "note" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "context",
+      "title": "Declines now loop through a queue",
+      "eyebrow": "Context",
+      "slide": { "layout": "full" },
+      "blocks": [
+        { "figure": { "id": "flow", "spec": "../changes/payment-retry.architecture.json", "claim": "Step through the change with \u2192: before, the new branch, the worker." } }
+      ]
+    },
+    {
+      "id": "branch",
+      "title": "One branch in charge()",
+      "eyebrow": "Deep dive",
+      "blocks": [
+        { "prose": "Hard declines keep throwing. Soft ones enqueue attempt 1 and return `pending`, so checkout answers immediately." },
+        {
+          "diff": {
+            "file": "src/payments/charge.ts",
+            "text": "@@ -12,7 +12,12 @@ export async function charge(order: Order)\n   const res = await stripe.charges.create(order.payment)\n-  if (!res.paid) throw new PaymentError(res.failure_code)\n+  if (!res.paid) {\n+    if (!SOFT.has(res.failure_code)) throw new PaymentError(res.failure_code)\n+    await retries.enqueue({ order: order.id, attempt: 1 })\n+    return { status: \"pending\" }\n+  }\n   await db.orders.update(order.id, { status: \"paid\" })\n   return { status: \"paid\" }"
+          }
+        }
+      ]
+    },
+    {
+      "id": "walkthrough",
+      "title": "The worker's loop",
+      "eyebrow": "Deep dive",
+      "blocks": [
+        {
+          "scrolly": {
+            "id": "loop",
+            "figure": { "id": "loop-fig", "spec": "../changes/payment-retry.architecture.json", "builds": false },
+            "steps": [
+              { "at": "Change", "title": "Queue", "body": "A soft decline lands on payment-retries.", "cites": [{ "text": "payment-retries", "ref": "retries" }] },
+              { "at": "Worker", "title": "Consume", "body": "The worker picks it up and charges again." },
+              { "at": "end", "title": "Settle", "body": "Paid, re-queued with backoff, or failed after the third attempt." }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "risks",
+      "title": "Risks",
+      "eyebrow": "Resolution",
+      "blocks": [
+        {
+          "risks": [
+            { "risk": "A retried charge can double-bill if Stripe succeeded but the response was lost.", "severity": "high", "area": "payments", "mitigation": "Idempotency key from `order.id` + attempt.", "refs": ["src/payments/charge.ts#L13"] },
+            { "risk": "Orders can sit in `pending` for up to ~3 minutes.", "severity": "medium", "area": "UX", "mitigation": "Show \"payment processing\"." }
+          ]
+        },
+        { "break": { "title": "Before merging", "layout": "flow" } },
+        {
+          "checklist": [
+            { "text": "Hard declines still throw synchronously", "done": true },
+            { "text": "Worker caps attempts at 3", "done": true },
+            { "text": "Idempotency key on the retried charge", "note": "blocking" },
+            { "text": "Retry outcome metric and alert" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "verdict",
+      "title": "Approve with one blocker",
+      "eyebrow": "Recommendation",
+      "blocks": [
+        { "callout": { "tone": "good", "title": "Recommendation", "body": "Approve once the idempotency key lands. The request path gets simpler and the retry policy lives in one worker." } }
+      ]
+    }
+  ]
+}

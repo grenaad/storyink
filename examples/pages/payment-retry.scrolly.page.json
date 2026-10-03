@@ -1,0 +1,32 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "page",
+  "eyebrow": "Walkthrough",
+  "title": "How a declined card stops failing checkout",
+  "subtitle": "Scroll: the diagram follows the text.",
+  "change": { "base": "main", "head": "payments/retry-queue", "title": "Illustrative example" },
+  "summary": "A soft card decline used to fail the whole checkout. This change parks it on a queue and lets a worker retry it. Scroll through the four steps below; the figure on the right moves with you.",
+  "sections": [
+    {
+      "id": "walkthrough",
+      "title": "The change, step by step",
+      "blocks": [
+        {
+          "scrolly": {
+            "id": "retry",
+            "side": "right",
+            "figure": { "id": "retry-flow", "spec": "../changes/payment-retry.architecture.json", "claim": "Declines loop back through Payments via a queue and a worker." },
+            "steps": [
+              { "at": "Before", "title": "Before", "body": "Checkout charges the card through **Payments**, which calls Stripe and writes the order.", "cites": [{ "text": "Payments", "ref": "payments" }] },
+              { "at": 2, "body": "Any decline threw a `PaymentError` straight back to checkout, so a temporary `insufficient_funds` lost the sale.", "cites": [{ "text": "threw", "ref": "pay-ts" }] },
+              { "at": "Change", "title": "Soft declines wait", "body": "Now a soft decline is put on the new payment-retries queue and the order stays `pending`.", "cites": [{ "text": "payment-retries queue", "ref": "retries" }] },
+              { "at": "Worker", "title": "A worker retries", "body": "A retry worker consumes the queue and charges again, up to three times with backoff.", "cites": [{ "text": "retry worker", "ref": "worker" }] },
+              { "at": "end", "title": "Off the request path", "body": "Declines now loop back through Payments without holding the checkout request open." }
+            ]
+          }
+        },
+        { "callout": { "tone": "warn", "title": "Still open", "body": "A retried charge needs an idempotency key so a lost response can't bill twice." } }
+      ]
+    }
+  ]
+}

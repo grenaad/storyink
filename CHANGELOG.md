@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **Scrollytelling and slides: viewer** — figure API `beats()` and `moveTo({ beat } | { t },
+  { animate })` (forward plays, 2.5× across two or more beats; backward rewinds like ←; reduced
+  motion / `animate: false` jump to the settled state with a pure follow camera). Scrolly
+  controller: `sp-scrolly-live`, the step crossing a 55 % trigger line is `.is-active` and moves
+  the figure; figure transport / gate / rail hidden in scrolly (zoom, Fit, Expand stay); cite hover
+  highlights and file cites open the drawer; `#scrolly=<id>&step=<n>` (settled, for snapshots).
+  Deck (present mode): `html.sp-presenting`, `.is-current` slide in a 1280×720 frame scaled to fit
+  (`--sp-slide-scale`), builds from page data (entry forward = start, backward = end), keys →
+  Space PgDn Enter / ← PgUp Backspace / Home End / O outline / ? help / Esc / P, Present button,
+  chrome (progress, `n / N`, prev / next), figure keys off while presenting, `#present=1|0`,
+  `#slide=n`, `#build=k`, `layout: "slides"` opens presenting; `slide-overflow` lint (content
+  needing a scale under 0.7). `__storyink.deck = { present, exit, next, prev, state }`. Snapshot
+  `--slides [--builds]`, `--scrolly <id|all>` (plugin `slides`, `builds`, `scrolly`): frames +
+  labelled sheets per theme, gates ready / lint / deterministic, `--preview`.
+  `scripts/deck-verify.ts` (`bun run verify:deck`).
+- **Scrollytelling and slides (pages)**: `scrolly` block (a figure pinned beside prose step
+  cards; each step's `at` names a story step id, chapter stop, beat number, `start` or `end`;
+  `steps: "auto"` from narrated steps or stops; cites; decreasing targets warn), static / no-JS /
+  print fallback and live CSS (sticky graphic, `.is-active` steps, narrow stacking). Slides from
+  the same DOM: `layout: "slides"`, `present`, section `slide: { layout }`, `break` blocks, figure
+  `builds`; title slide + one slide per section, layouts `title` / `full` / `split` / `center` /
+  `flow` (auto inferred; `data-fig-shape="tall|wide"` gives tall figures the full slide height),
+slide content CSS inside the viewer's 1280×720 frame, Present button. Figure `spec` paths may be
+relative, absolute, `file://` or `~/`. Page data gains
+  `scrolly` and `slides` (targets `{ beat, t }` resolved from the figure timelines). Pages markup
+  gains `.sp-slide` wrappers (`display: contents` in the article) and `data-layout` /
+  `data-present`. Examples: `payment-retry.scrolly`, `storyink-0.4.0.scrolly`, `pr-review.deck`.
 - **Pages** (`"type": "page"`): offline single-file explainer documents (PR / diff reviews, plan
   reviews, recaps) rendered from JSON: header (eyebrow, title, subtitle, `change` meta, summary,
   theme toggle), sticky contents sidebar with scroll-spy (auto at ≥ 4 sections; a top list on

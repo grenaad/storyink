@@ -269,6 +269,32 @@ Rules:
 - Put long detail in `details`; a long `filemap` collapses on its own.
 - Then look: `storyink_snapshot` on the page HTML (full page) and fix what reads badly.
 
+### Article, scrolly or slides?
+
+- **Article** (default): the reader skims and jumps; reviews, plans and recaps you read alone.
+- **Scrolly** (`{ "scrolly": { "figure": …, "steps": … } }`): one figure carries the story and the
+  reader should watch it change step by step (a walkthrough of a change or a flow). Use one per
+  page at most. `"steps": "auto"` works when the figure's story is narrated (or `"changes"`).
+  Each step = **one** change, 1–3 sentences, `at` = a stop label, step id or beat number, in story
+  order; cite the element the sentence is about.
+- **Slides** (`"layout": "slides"`, or present any page with `P`): you will *show* it to people.
+  Every article page can be presented, so write sections that work as slides anyway.
+
+Slides:
+
+- Narrative arc: **impact** (what it means, KPIs) → **context** (the figure) → **deep dive**
+  (diff, scrolly) → **resolution** (risks, checklist, recommendation).
+- **One focal point per slide.** A section = a slide; split long sections with
+  `{ "break": { "title": "…, continued" } }`. Density limits per slide: one figure, or ≤ ~6 list
+  items / table rows, or one diff of ≤ ~15 lines, or ≤ ~60 words of prose.
+- **Alternate dense and sparse**: follow a dense diff or risk list with a `center` slide (a
+  statement, KPIs or a callout).
+- Layout is inferred (`full` = only a figure, `split` = figure + text, `center` = ≤ 2 short
+  blocks, `flow` otherwise); override with `"slide": { "layout": "…" }` on the section.
+- A story figure's beats become the slide's builds (→ steps through them); set
+  `"builds": false` on figures that should just sit there.
+- Check with `storyink_snapshot` (`slides: true`) and fix every `slide-overflow`.
+
 ## Images and context
 
 - `storyink_snapshot` returns **one compact preview** (JPEG, ≤ 1024 px, a few hundred KB at most)

@@ -760,6 +760,8 @@ for PR / diff reviews, plan reviews, project recaps and explainers. Examples:
   "summary": "Lead paragraph …",     // prose (see below), shown large in the header
   "change": { "base": "main", "head": "feat/batch", "title": "…", "url": "https://…" },
   "toc": true,                       // default: a contents sidebar when there are ≥ 4 sections
+  "layout": "article",               // or "slides": opens presenting (see Slides)
+  "present": true,                   // false: no Present button / P / #present=1
   "sections": [
     { "id": "what", "title": "What changed", "eyebrow": "…", "blocks": [ { "prose": "…" } ] }
   ]
@@ -772,7 +774,7 @@ key, plus an optional anchor `id`; an unknown key or two type keys in one block 
 | Block | Shape | Renders |
 | --- | --- | --- |
 | `prose` | string | Markdown subset (below) |
-| `figure` | `{ spec, claim?, id?, wide? }` | an embedded diagram; `spec` is a diagram spec object or a path relative to the page file; `claim` is the caption (inline prose); `id` defaults to `fig-1`, `fig-2` … |
+| `figure` | `{ spec, claim?, id?, wide?, builds? }` | an embedded diagram; `spec` is a diagram spec object or a file path (relative to the page file, or absolute); `claim` is the caption (inline prose); `id` defaults to `fig-1`, `fig-2` … |
 | `kpis` | `[{ label, value, detail?, tone? }]` | a row of number tiles |
 | `table` | `{ columns: (string \| { label, align? })[], rows: Cell[][], caption? }` | a table; Cell = string \| number \| `{ text, tone?, badge?, code? }` |
 | `cards` | `[{ title, body, tag?, tone?, delta? }]` | a card grid (`delta` adds a NEW / CHANGED / REMOVED chip) |
@@ -787,6 +789,8 @@ key, plus an optional anchor `id`; an unknown key or two type keys in one block 
 | `checklist` | `[{ text, done?, note? }]` | a checklist |
 | `details` | `{ summary, blocks }` | a native `<details>` (collapsed; opened for print) |
 | `columns` | `Block[][]` (2–3) | side-by-side columns (before / after); stacked on narrow screens |
+| `scrolly` | `{ id?, figure, steps: "auto" \| [{ at, title?, body, cites? }], side? }` | scrollytelling (see below) |
+| `break` | `true` \| `{ title?, layout? }` | a new slide (nothing in the article) |
 
 Tones (`tone`) are semantic and match the change palette: `good` = sage, `warn` = gold, `risk` =
 rose, `note` = blue, `neutral` = ink. `refs` / `source` strings that look like file refs
@@ -839,7 +843,7 @@ list). The theme toggle uses the viewer's `localStorage["storyink-theme"]` and
 `documentElement.dataset.theme`. Print hides the chrome and opens every `<details>`.
 
 **CLI / plugin**: `storyink render page.json -o page.html [--theme light|dark] [--changes …]`
-detects pages; figure `spec` paths (JSON, or `.mmd` Mermaid) resolve relative to the page file.
+detects pages; figure `spec` paths (JSON, or `.mmd` Mermaid) resolve relative to the page file (absolute, `file://` and `~/` paths work too).
 `--svg` / `--animated-svg` are errors for a page (render a figure's own spec for its SVG);
 `--story` / `--motion` / `--camera` / `--pace` are ignored with a warning (set them in each
 figure's spec). `storyink validate page.json` validates the page and every figure. The plugin's
@@ -848,6 +852,71 @@ resolve against the project directory) or `path` (resolved against the page file
 Core API: `isPageSpec`, `validatePage`, `renderPageHtml(page, { theme?, viewer? })`,
 `resolvePageChanges`, `layoutPage`, `pageFigures`; Node: `loadPage(input, dir, diffset?)`,
 `writePage`.
+
+### Scrollytelling
+
+A `scrolly` block pins a figure beside prose step cards; scrolling to a card moves the figure's
+story to that card's beat (forward plays, backward rewinds).
+
+```jsonc
+{ "scrolly": {
+    "id": "retry",                         // default scrolly-1, scrolly-2 …
+    "side": "right",                       // where the figure sits (default right)
+    "figure": { "spec": "flow.json", "claim": "…" },   // a figure block; its spec needs a story
+    "steps": [
+      { "at": "Change", "title": "Soft declines wait", "body": "Now the order stays `pending` on the queue.",
+        "cites": [{ "text": "queue", "ref": "retries" }] }
+    ] } }                                  // or "steps": "auto"
+```
+
+- `at`: a story step `id`, a chapter `stop` label, a 1-based beat number, `"start"` (before the
+  first beat) or `"end"`. It resolves at render time against the figure's compiled story with the
+  viewer's beat model: target `{ beat, t }` = the beat (0-based, -1 = start) holding that step and
+  its settled stop time (the state → lands on); `"end"` = the story's duration.
+- `"auto"`: one step per narrated story step (title = `narrate.heading` or the step's `stop`,
+  body = `narrate.body`, its cites); without narration, one step per chapter `stop` with the beat's
+  caption as body. An error when the story has neither. So `story: "changes"` or a narrated figure
+  becomes a scrolly for free.
+- `cites` follow the `narrate` rules (text occurs in the body, in order; ref = element id,
+  `node#row` or a file path). Steps whose targets go backwards warn.
+- `body` is prose. Keep a step to one change and 1–3 sentences.
+- Without JavaScript, in print and with `#static=1` the steps are listed beside the figure at its
+  final frame. Live, the viewer pins the figure (sticky, vertically centred), spaces the steps
+  (one active at a time, `.is-active`; others dimmed) and drives the figure. On narrow screens the
+  figure sits above the steps.
+- Only directly in a section's `blocks` (not inside `details` / `columns`).
+
+### Slides
+
+Any page can be presented as 16:9 slides from the same DOM (`Present` button, `P`, `#present=1`);
+`"layout": "slides"` opens presenting (`#present=0` forces the article); `"present": false`
+disables it. Slides: a title slide (the header), one per section, and a new one at every
+`{ "break": true }` / `{ "break": { "title"?, "layout"? } }` (renders nothing in the article; a
+continuation slide's title defaults to the section's). A section's `"slide": { "layout" }` hint and
+a break's `layout` pick the content layout:
+
+| layout | for | default when |
+| --- | --- | --- |
+| `title` | the title slide | slide 0 |
+| `full` | one figure filling the slide (a tall figure: title + caption in a left column, figure full height) | the slide is only a figure (± claim) |
+| `split` | text left (~40 %), figure right (~60 %; a tall figure takes the full slide height and ~2/3 of the width) | a figure or scrolly with other blocks |
+| `center` | a statement, KPIs, a callout, centred and large | no figure and ≤ 2 short blocks |
+| `flow` | everything else, top to bottom | otherwise |
+
+**Builds**: → steps through a slide's builds before the next slide: the beats of the slide's first
+story figure (unless that figure has `"builds": false`), or its scrolly's steps. Keep one focal
+point per slide; long slides that still overflow the frame at the minimum content scale are
+reported by the snapshot lint (`slide-overflow`).
+
+Markup (for the viewer and snapshots): each slide is a `.sp-slide[data-slide][data-slide-layout]
+[data-builds][data-fig-shape]` wrapper (`display: contents` in the article; `data-fig-shape` is
+`tall` or `wide` from the build / first figure's aspect, absent without a figure), the title slide wraps the header
+(`.sp-slide-title`), `#storyink-page[data-layout][data-present]`, and the page data gains
+`scrolly: { id: { fig, steps: [{ beat, t }] } }` and `slides: [{ id, title, layout, figs, scrolly?,
+builds, build?: { fig, targets: [{ beat, t }] } }]`. Present-mode content layouts are CSS on
+`html.sp-presenting .sp-slide.is-current[data-slide-layout=…]`; the frame itself (fixed 1280×720
+box, centring, `--sp-slide-scale`) is the viewer's, and dense slides shrink their content by the
+viewer-measured `--sp-content-scale` (≥ 0.7).
 
 ## Pages: viewer & page contract
 
@@ -889,3 +958,42 @@ in `src/core/render/figure.tsx`, server-rendered so it reads without JavaScript 
   `--preview` gives a compact JPEG, split into up to 3 parts for tall pages (`#scroll=<px>`).
   `--figure <id>` (plugin `figure`) runs the single-diagram pipeline on that figure through
   `#fig=<id>&solo=1`: beat sheets, `--at`, `--rail`, `--drawer`, `--camera follow` and every gate.
+
+## Scrollytelling and slides: viewer
+
+**Figure API** (`__storyink.figures[id]`, and the standalone / solo contract): `beats()` → each
+beat's settled stop time; `moveTo(target, { animate? })` → Promise, where `target` is `{ beat }`
+(0-based; −1 = start, past the last beat = end) or `{ t }`. Animated moves play forward like →
+(2.5× when crossing two or more beats) and rewind like ← (2×); reduced motion or `animate: false`
+jumps to the settled state, with the follow camera placed as a pure function of that time (as for
+`#camera=follow&t=`). The end lands just before `duration` (paused, not the dimmed "ended" look).
+
+**Scrolly** (page mode, not `#static=1`): the viewer adds `sp-scrolly-live` to each `[data-scrolly]`
+block; the active step is the last `.sp-scrolly-step` whose top has crossed a trigger line at 55 % of
+the viewport (from scroll position only); it gets `.is-active` and the figure `moveTo`s its target
+(page data `scrolly[id].steps`, by beat). Inside scrolly the figure's transport, gate and rail are
+hidden (zoom, Fit, Expand stay). Hovering a `.sp-cite[data-ref]` highlights the element; clicking a
+file cite opens the drawer. `#scrolly=<id>&step=<n>` (1-based) scrolls step n to the trigger line,
+settled and paused (the page then scrolls inside a wrapper, so headless captures keep the offset).
+
+**Deck** (present mode): `P`, the header's Present button, `#present=1`, or `layout: "slides"`
+(unless `#present=0`). `html.sp-presenting`; only `.sp-slide.is-current` shows, as a 1280×720 frame
+centred above a 44 px bar and scaled to fit (`--sp-slide-scale`); figures refit. Builds come from
+page data `slides[i].build` (`fig` + `targets`): entering a slide forward puts the build figure at
+the start, backward at its last build; other figures on the slide show their final frame; a scrolly
+slide also marks step k as active. Keys: → / Space / PgDn / Enter next build → next slide;
+← / PgUp / Backspace previous; Home / End; O outline (click to jump); ? help; Esc closes an overlay,
+else returns to the article scrolled to the slide's section; P toggles. Figure keys are off while
+presenting. Chrome: progress bar, `n / N`, prev / next, slide title, O / ? / Esc buttons. Hash:
+`#present=1|0`, `#slide=<n>` (1 = title slide), `#build=<k>` (0 = entry; settled, paused).
+`__storyink.deck = { present(n?, k?), exit(), next(), prev(), state() }`. Lint (while presenting):
+`slide-overflow` for slides whose content needs a scale under 0.7 to fit the frame (the viewer
+also sets `--sp-content-scale` on each slide, clamped to ≥ 0.7, for the slide CSS to use).
+
+**Snapshot**: `storyink snapshot page.html --slides` → one 1280×720 frame per slide (entry state)
+per theme (`<base>.<theme>.slideNN.png`) plus a labelled sheet (`<base>.slides.<theme>.png`);
+`--builds` adds every build state (`slideNN.bK`); `--scrolly <id|all>` → one 1280×800 viewport per
+scrolly step (`scrolly-<id>.sNN`) plus a sheet. Gates `ready`, `lint` (incl. `slide-overflow`),
+`deterministic` (a middle frame re-captured; scrolly frames get one re-capture for Chrome's
+sticky-layer raster). `--preview` is a compact JPEG of the first sheet. Plugin `storyink_snapshot`:
+`slides`, `builds`, `scrolly`.
