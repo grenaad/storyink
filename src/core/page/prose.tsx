@@ -17,12 +17,31 @@ export function safeHref(url: string): string | undefined {
   return u
 }
 
+/** Cites matched in order across a prose body: plain text containing the next cite's text becomes a `.sp-cite`. */
+export interface CiteCursor {
+  list: { text: string; ref: string }[]
+  i: number
+}
+
 /** Inline spans. */
-export function inline(text: string, key = "i"): ReactNode[] {
+export function inline(text: string, key = "i", cx?: CiteCursor): ReactNode[] {
   const out: ReactNode[] = []
   let buf = ""
   let n = 0
   const flush = () => {
+    while (buf && cx && cx.i < cx.list.length) {
+      const c = cx.list[cx.i]
+      const at = buf.indexOf(c.text)
+      if (at < 0) break
+      if (at) out.push(buf.slice(0, at))
+      out.push(
+        <span key={`${key}c${n++}`} className="sp-cite" data-ref={c.ref} tabIndex={0}>
+          {c.text}
+        </span>,
+      )
+      buf = buf.slice(at + c.text.length)
+      cx.i++
+    }
     if (buf) out.push(buf)
     buf = ""
   }
@@ -47,7 +66,7 @@ export function inline(text: string, key = "i"): ReactNode[] {
       const j = text.indexOf("**", i + 2)
       if (j > i + 2) {
         flush()
-        out.push(<strong key={`${key}${n++}`}>{inline(text.slice(i + 2, j), `${key}${n}.`)}</strong>)
+        out.push(<strong key={`${key}${n++}`}>{inline(text.slice(i + 2, j), `${key}${n}.`, cx)}</strong>)
         i = j + 2
         continue
       }
@@ -56,7 +75,7 @@ export function inline(text: string, key = "i"): ReactNode[] {
       const j = text.indexOf("*", i + 1)
       if (j > i + 1 && text[j - 1] !== " ") {
         flush()
-        out.push(<em key={`${key}${n++}`}>{inline(text.slice(i + 1, j), `${key}${n}.`)}</em>)
+        out.push(<em key={`${key}${n++}`}>{inline(text.slice(i + 1, j), `${key}${n}.`, cx)}</em>)
         i = j + 1
         continue
       }
@@ -137,25 +156,26 @@ function parse(src: string): Blk[] {
 }
 
 /** Block prose (paragraphs, lists, headings, quotes). */
-export function Prose({ text, className }: { text: string; className?: string }): ReactNode {
+export function Prose({ text, className, cites }: { text: string; className?: string; cites?: { text: string; ref: string }[] }): ReactNode {
   const blocks = parse(text)
+  const cx: CiteCursor | undefined = cites?.length ? { list: cites, i: 0 } : undefined
   return (
     <div className={className ?? "sp-prose"}>
       {blocks.map((b, i) => {
         const k = `b${i}`
-        if (b.k === "p") return <p key={k}>{inline(b.text, `${k}.`)}</p>
-        if (b.k === "h3") return <h3 key={k}>{inline(b.text, `${k}.`)}</h3>
-        if (b.k === "h4") return <h4 key={k}>{inline(b.text, `${k}.`)}</h4>
+        if (b.k === "p") return <p key={k}>{inline(b.text, `${k}.`, cx)}</p>
+        if (b.k === "h3") return <h3 key={k}>{inline(b.text, `${k}.`, cx)}</h3>
+        if (b.k === "h4") return <h4 key={k}>{inline(b.text, `${k}.`, cx)}</h4>
         if (b.k === "quote")
           return (
             <blockquote key={k}>
               {b.text.split(/\n{1,}/).map((l, j) => (
-                <p key={j}>{inline(l, `${k}.${j}.`)}</p>
+                <p key={j}>{inline(l, `${k}.${j}.`, cx)}</p>
               ))}
             </blockquote>
           )
         const l = b as Extract<Blk, { items: string[] }>
-        const items = l.items.map((it, j) => <li key={j}>{inline(it, `${k}.${j}.`)}</li>)
+        const items = l.items.map((it, j) => <li key={j}>{inline(it, `${k}.${j}.`, cx)}</li>)
         return l.k === "ul" ? <ul key={k}>{items}</ul> : <ol key={k} {...(l.start !== 1 ? { start: l.start } : {})}>{items}</ol>
       })}
     </div>

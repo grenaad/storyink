@@ -40,6 +40,12 @@ export interface SnapshotOptions {
    * page gets full-page captures per theme.
    */
   figure?: string
+  /** Page HTML: one 1280×720 PNG per slide (entry state) per theme + a slides sheet (`#present=1&slide=n`). */
+  slides?: boolean
+  /** With `slides`: every build state too (`#build=k`). */
+  builds?: boolean
+  /** Page HTML: one viewport PNG per step of this scrolly block (or "all") + a sheet (`#scrolly=<id>&step=n`). */
+  scrolly?: string
   /** Reading-hold pace for every capture (`#pace=`; default: the HTML's author pace). */
   pace?: number
   /** Output directory (default: next to the HTML file). */
@@ -121,6 +127,18 @@ const HARD_TIMEOUT = 15_000
 type SnapScene = { viewBox: Box; title: string; subtitle?: string; timeline?: { duration: number; steps: unknown[] } }
 
 /** Page HTML (`type: "page"`): its figures' scenes, or undefined for a single-diagram page. */
+/** Page HTML: the whole `#storyink-page-data` (slides / scrolly for storytelling captures). */
+export function readPageData(html: string): { slides?: unknown[]; scrolly?: Record<string, unknown> } | undefined {
+  const m = /<script type="application\/json" id="storyink-page-data">([\s\S]*?)<\/script>/.exec(html)
+  return m ? JSON.parse(m[1]) : undefined
+}
+
+/** Width / height of a PNG file (IHDR). */
+function pngSize(file: string): { w: number; h: number } {
+  const b = fs.readFileSync(file)
+  return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) }
+}
+
 export function readPageFigures(html: string): Record<string, { scene: SnapScene }> | undefined {
   const m = /<script type="application\/json" id="storyink-page-data">([\s\S]*?)<\/script>/.exec(html)
   return m ? (JSON.parse(m[1]).figures as Record<string, { scene: SnapScene }>) : undefined
@@ -397,6 +415,7 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
     }
     return out
   }
+  if (pageFigs && !opts.figure && (opts.slides || opts.scrolly)) return snapshotTell()
   if (pageFigs && !opts.figure) return snapshotPage()
   let lint: unknown
   try {
@@ -536,6 +555,141 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
    * (tall pages split into ≤ 3 parts). Figures are capped at a fixed height (`#figmax=`) so the
    * page lays out the same whatever the window height.
    */
+  /**
+   * Page storytelling captures: slides (`--slides`, `--builds`: 1280×720 frames per slide / build
+   * state) and scrolly steps (`--scrolly <id|all>`: a 1280×800 viewport per step, settled), one set
+   * per theme, plus a labelled contact sheet per set; gates ready / lint (incl. `slide-overflow`) /
+   * deterministic; `--preview` is a compact JPEG of the first sheet.
+   */
+  async function snapshotTell(): Promise<SnapshotResult> {
+    const data = readPageData(html) ?? {}
+    const tgates: Gate[] = []
+    const tcaps: Capture[] = []
+    const sheets: Capture[] = []
+    const tprev: Preview[] = []
+    let tlint: unknown
+    type Shot = { hash: string; label: string; tag: string; w: number; h: number }
+    const shots: Shot[] = []
+    if (opts.slides) {
+      const list = (data.slides ?? []) as { title?: string; builds?: number; build?: { targets: unknown[] } }[]
+      list.forEach((sl, i) => {
+        const n = opts.builds ? (sl.build?.targets.length ?? sl.builds ?? 0) : 0
+        for (let b = 0; b <= n; b++)
+          shots.push({ hash: `present=1&slide=${i + 1}&build=${b}`, label: `${i + 1}${n ? `.${b}` : ""} ${sl.title ?? ""}`, tag: `slide${String(i + 1).padStart(2, "0")}${opts.builds && n ? `.b${b}` : ""}`, w: 1280, h: 764 })
+      })
+    }
+    if (opts.scrolly) {
+      const sc = (data.scrolly ?? {}) as Record<string, { steps: unknown[] }>
+      const ids = opts.scrolly === "all" ? Object.keys(sc) : [opts.scrolly]
+      for (const id of ids) {
+        if (!sc[id]) {
+          tgates.push({ name: "scrolly", pass: false, detail: `no scrolly "${id}" (have: ${Object.keys(sc).join(", ") || "none"})` })
+          continue
+        }
+        sc[id].steps.forEach((_, i) => shots.push({ hash: `scrolly=${encodeURIComponent(id)}&step=${i + 1}`, label: `${id} · step ${i + 1}`, tag: `scrolly-${id.replace(/[^\w-]/g, "_")}.s${String(i + 1).padStart(2, "0")}`, w: 1280, h: 800 }))
+      }
+    }
+    try {
+      if (!shots.length) throw new Error(opts.slides ? "this page has no slides" : "no scrolly steps to capture")
+      for (const theme of themes) {
+        const mine: Capture[] = []
+        for (const sh of shots) {
+          const png = path.join(outDir, `${base}.${theme}.${sh.tag}.png`)
+          const ms = await shoot(`theme=${theme}&${sh.hash}`, png, sh.w, sh.h)
+          const c = { theme, png, sha256: sha256(png), bytes: fs.statSync(png).size, width: sh.w * scale, height: sh.h * scale, ms }
+          tcaps.push(c)
+          mine.push(c)
+        }
+        const kind = opts.slides ? "slides" : "scrolly"
+        const sheet = path.join(outDir, `${base}.${kind}.${theme}.png`)
+        const cols = Math.min(4, mine.length)
+        const r = await sheetShot(mine.map((c, i) => ({ png: c.png, label: shots[i].label })), cols, 400, sheet)
+        sheets.push({ theme: "sheet", png: sheet, sha256: sha256(sheet), bytes: fs.statSync(sheet).size, width: r.w * scale, height: r.h * scale, ms: r.ms })
+      }
+      // Determinism: a middle capture again.
+      const mid = shots[Math.floor(shots.length / 2)]
+      const c0 = tcaps[Math.floor(shots.length / 2)]
+      const again = path.join(tmpRoot, "tell-again.png")
+      await shoot(`theme=${themes[0]}&${mid.hash}`, again, mid.w, mid.h)
+      let same = sha256(again) === c0.sha256
+      // Scrolly frames scroll a sticky graphic: Chrome's raster of its 1 px border can differ
+      // between processes; one re-capture separates that from a real (layout / state) difference.
+      let retried = false
+      if (!same && mid.hash.startsWith("scrolly=")) {
+        retried = true
+        await shoot(`theme=${themes[0]}&${mid.hash}`, again, mid.w, mid.h)
+        same = sha256(again) === c0.sha256
+      }
+      tgates.push({ name: "deterministic", pass: same, detail: same ? `${mid.tag} captured twice: identical${retried ? " (after one re-capture)" : ""}` : `${mid.tag} differs between runs` })
+      if (opts.preview && sheets[0]) {
+        const p = opts.preview
+        const maxSize = Math.max(256, Math.min(4096, p.maxSize ?? 1024))
+        const file = p.path ? path.resolve(p.path) : path.join(outDir, `${base}.preview.jpg`)
+        fs.mkdirSync(path.dirname(file), { recursive: true })
+        const firstTheme = tcaps.filter((c) => c.theme === themes[0])
+        const cols = Math.min(4, firstTheme.length)
+        const rows = Math.ceil(firstTheme.length / cols)
+        const ratio = shots[0].h / shots[0].w
+        // Cell width so the sheet's longest side fits maxSize.
+        const cw = Math.max(80, Math.floor(Math.min(maxSize / cols, maxSize / (rows * (ratio + 0.1))) - 12))
+        const r = await sheetShot(firstTheme.map((c, i) => ({ png: c.png, label: shots[i].label })), cols, cw, file)
+        tprev.push({ path: file, width: r.w, height: r.h, bytes: fs.statSync(file).size, shows: `${firstTheme.length} ${opts.slides ? "slide" : "scrolly"} frames (${cols} columns), ${themes[0]}` })
+      }
+      const dom = await run(browser!.path, [...baseFlags, fresh(), `--window-size=${shots[0].w},${shots[0].h}`, "--dump-dom", url(`theme=${themes[0]}&${shots[0].hash}`)], { timeoutMs, untilStdout: /<\/html>\s*$/, signal: opts.signal })
+      const ready = /<html[^>]*data-ready="1"/.test(dom.stdout)
+      tgates.push({ name: "ready", pass: ready, detail: ready ? "page hydrated, fonts ready" : "page never signalled ready" })
+      const lm = /<script type="application\/json" id="storyink-lint">([\s\S]*?)<\/script>/.exec(dom.stdout)
+      if (lm) {
+        tlint = JSON.parse(lm[1])
+        const l = tlint as { ok: boolean; figures?: Record<string, { issues: unknown[] }>; page?: { issues: unknown[] } }
+        const n = Object.values(l.figures ?? {}).reduce((a, f) => a + (f.issues?.length ?? 0), 0) + (l.page?.issues.length ?? 0)
+        tgates.push({ name: "lint", pass: l.ok, detail: l.ok ? `figures, page text${opts.slides ? " and slides" : ""}: no overflow or overlap` : `${n} issue(s)` })
+      } else tgates.push({ name: "lint", pass: false, detail: "no lint output in DOM" })
+    } catch (e) {
+      tgates.push({ name: "capture", pass: false, detail: (e as Error).message })
+    } finally {
+      fs.rmSync(tmpRoot, { recursive: true, force: true })
+    }
+    const rc: SnapshotReceipt = {
+      html: abs,
+      browser: { path: browser!.path, version: browser!.version ?? browserVersion(browser!.path), flavor: browser!.flavor, source: browser!.source },
+      flags: [...baseFlags, "--user-data-dir=<fresh tmp>"],
+      captures: tcaps,
+      ...(sheets[0] ? { sheet: sheets[0] } : {}),
+      ...(sheets.length > 1 ? { beats: sheets.slice(1) } : {}),
+      ...(tprev.length ? { previews: tprev } : {}),
+      page: { figures: Object.keys(pageFigs!), width: 1280, height: shots[0]?.h ?? 0 },
+      ...(tlint ? { lint: tlint } : {}),
+      gates: tgates,
+      ok: tgates.every((g) => g.pass),
+      createdAt: new Date().toISOString(),
+    }
+    const rp = path.join(outDir, `${base}.receipt.json`)
+    fs.writeFileSync(rp, `${JSON.stringify(rc, null, 2)}\n`)
+    return { code: rc.ok ? 0 : 1, receipt: rc, receiptPath: rp }
+  }
+
+  /** A labelled contact sheet of PNGs (a small local HTML page, screenshot at its exact size). */
+  async function sheetShot(cells: { png: string; label: string }[], cols: number, cellW: number, out: string): Promise<{ w: number; h: number; ms: number }> {
+    const first = cells[0]
+    const dims = first ? pngSize(first.png) : { w: 16, h: 9 }
+    const cellH = Math.round((cellW * dims.h) / dims.w)
+    const gap = 12
+    const labelH = 18
+    const rows = Math.ceil(cells.length / cols)
+    const w = cols * cellW + (cols + 1) * gap
+    const h = rows * (cellH + labelH) + (rows + 1) * gap
+    const esc = (x: string) => x.replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    const page = `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#e7e5e0;font:11px ui-monospace,monospace;color:#3b3934}.g{display:grid;grid-template-columns:repeat(${cols},${cellW}px);gap:${gap}px;padding:${gap}px}.c img{display:block;width:${cellW}px;height:${cellH}px;border:1px solid #c9c5bc;box-sizing:border-box}.c p{margin:0;height:${labelH}px;line-height:${labelH}px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}</style></head><body><div class="g">${cells.map((c) => `<div class="c"><p>${esc(c.label)}</p><img src="${pathToFileURL(c.png).href}"></div>`).join("")}</div></body></html>`
+    const f = path.join(tmpRoot, `sheet-${n++}.html`)
+    fs.writeFileSync(f, page)
+    fs.rmSync(out, { force: true })
+    const t0 = Date.now()
+    await run(browser!.path, [...baseFlags.filter((x) => !x.startsWith("--force-device-scale-factor")), "--force-device-scale-factor=1", fresh(), `--window-size=${w},${h}`, `--screenshot=${out}`, pathToFileURL(f).href], { timeoutMs, signal: opts.signal })
+    if (!fs.existsSync(out)) throw new Error(`sheet capture failed: ${out}`)
+    return { w, h, ms: Date.now() - t0 }
+  }
+
   async function snapshotPage(): Promise<SnapshotResult> {
     const PW = Math.round(Math.max(500, opts.width ?? 1280))
     // Figures at their final frame (deterministic, no gate), capped at a fixed height.

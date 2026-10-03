@@ -386,6 +386,9 @@ const plugin = {
             rail: { type: "boolean", description: "`at` frames: show the narration rail (specs with `narrate` steps)" },
             drawer: { type: "string", description: "`at` frames: open the change drawer on this element id or file path" },
             figure: { type: "string", description: "Page HTML (type: page): snapshot this figure with the single-diagram pipeline (default: full-page captures per theme)" },
+            slides: { type: "boolean", description: "Page HTML: one 1280×720 frame per slide (present mode, entry state) + a slides sheet" },
+            builds: { type: "boolean", description: "With slides: every build state too" },
+            scrolly: { type: "string", description: "Page HTML: one viewport frame per step of this scrolly block id (or \"all\") + a sheet" },
             maxImageSize: { type: "number", description: "Longest side of the returned image in px (default 1024, 256–2048)" },
           },
           required: ["html"],
@@ -408,6 +411,9 @@ const plugin = {
             rail?: boolean
             drawer?: string
             figure?: string
+            slides?: boolean
+            builds?: boolean
+            scrolly?: string
           }
           const image = i.image ?? "overview"
           const r = await snapshot(abs(i.html), {
@@ -421,6 +427,9 @@ const plugin = {
             ...(i.rail ? { rail: true } : {}),
             ...(i.drawer ? { drawer: i.drawer } : {}),
             ...(i.figure ? { figure: i.figure } : {}),
+            ...(i.slides || i.builds ? { slides: true } : {}),
+            ...(i.builds ? { builds: true } : {}),
+            ...(i.scrolly ? { scrolly: i.scrolly } : {}),
             ...(i.width ? { width: i.width } : {}),
             ...(i.outDir ? { outDir: abs(i.outDir) } : {}),
             signal: context.signal,

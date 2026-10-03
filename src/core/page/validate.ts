@@ -1,6 +1,10 @@
 /** Page validation: JSON-path diagnostics with hints; never throws. Figure specs use the diagram `validate()`. */
 import { validate, type Diagnostic } from "../validate.ts"
-import { CODE_LANGS, DELTAS } from "../spec.ts"
+import { CODE_LANGS, DELTAS, type Spec } from "../spec.ts"
+import { layout } from "../layout/index.ts"
+import type { Scene } from "../scene.ts"
+import { resolveCite } from "../story/narrate.ts"
+import { autoSteps, beatTargets, resolveAt, type ResolvedStep } from "./targets.ts"
 import {
   ALIGNS,
   BLOCK_TYPES,
@@ -10,6 +14,8 @@ import {
   FILE_STATUSES,
   SEVERITIES,
   TONES,
+  PAGE_LAYOUTS,
+  SLIDE_LAYOUTS,
   type Block,
   type PageSpec,
   type ValidPage,
@@ -25,8 +31,9 @@ export interface PageValidationResult {
 type Obj = Record<string, unknown>
 const isObj = (x: unknown): x is Obj => typeof x === "object" && x !== null && !Array.isArray(x)
 const ID_RE = /^[A-Za-z][A-Za-z0-9_\-]*$/
-const PAGE_KEYS = ["$schema", "type", "title", "eyebrow", "subtitle", "summary", "change", "toc", "sections", "changes"]
-const SECTION_KEYS = ["id", "title", "eyebrow", "blocks"]
+const PAGE_KEYS = ["$schema", "type", "title", "eyebrow", "subtitle", "summary", "change", "toc", "layout", "present", "sections", "changes"]
+const SECTION_KEYS = ["id", "title", "eyebrow", "slide", "blocks"]
+const TOP = /^sections\[\d+\]\.blocks\[\d+\]$/
 const PROSE_WARN = 4000
 
 const join = (path: string, key: string | number) => (typeof key === "number" ? `${path}[${key}]` : path ? `${path}.${key}` : key)
@@ -123,6 +130,7 @@ interface Ctx {
   figIds: Map<string, string>
   blockIds: Map<string, string>
   figN: number
+  scrollyN: number
   usesChanges: boolean
 }
 
@@ -132,9 +140,10 @@ function figureOf(x: Ctx, v: unknown, path: string): unknown {
     c.error(path, `"figure" must be an object`, `"figure": { "spec": "diagram.json", "claim": "…" }`)
     return v
   }
-  c.keys(v, ["spec", "claim", "id", "wide"], path)
+  c.keys(v, ["spec", "claim", "id", "wide", "builds"], path)
   c.str(v, "claim", path)
   c.bool(v, "wide", path)
+  c.bool(v, "builds", path)
   x.figN++
   let id = `fig-${x.figN}`
   if (v.id !== undefined) {
@@ -376,8 +385,107 @@ function block(x: Ctx, b: unknown, path: string): Block {
       }
       if (v.length < 2 || v.length > 3) c.error(p, `"columns" takes 2 or 3 columns, got ${v.length}`)
       return { ...b, columns: v.map((col, i) => blocks(x, col, join(p, i))) } as Block
+    case "break":
+      if (!TOP.test(path)) c.error(p, `"break" only works directly in a section's blocks`, "it starts a new slide of the section")
+      if (v === true) break
+      if (!isObj(v)) {
+        c.error(p, `"break" must be true or { "title"?, "layout"? }`, ex(`true or { "title": "Risks, continued" }`))
+        break
+      }
+      c.keys(v, ["title", "layout"], p)
+      c.str(v, "title", p)
+      c.oneOf(v, "layout", SLIDE_LAYOUTS, p)
+      break
+    case "scrolly":
+      return scrollyOf(x, b, v, p, path)
   }
   return b as Block
+}
+
+function scrollyOf(x: Ctx, b: Obj, v: unknown, p: string, path: string): Block {
+  const { c } = x
+  if (!TOP.test(path)) c.error(p, `"scrolly" only works directly in a section's blocks`)
+  if (!isObj(v)) {
+    c.error(p, `"scrolly" must be an object`, `"scrolly": { "figure": { "spec": "story.json" }, "steps": "auto" }`)
+    return b as Block
+  }
+  c.keys(v, ["id", "figure", "steps", "side"], p)
+  c.oneOf(v, "side", ["left", "right"], p)
+  x.scrollyN++
+  let id = typeof b.id === "string" ? b.id : `scrolly-${x.scrollyN}`
+  if (v.id !== undefined) {
+    if (typeof v.id !== "string" || !ID_RE.test(v.id)) c.error(join(p, "id"), `scrolly id must match ${ID_RE.source}`)
+    else if (x.blockIds.has(v.id)) c.error(join(p, "id"), `duplicate id "${v.id}" (also at ${x.blockIds.get(v.id)})`)
+    else {
+      id = v.id
+      x.blockIds.set(id, p)
+    }
+  } else if (b.id === undefined) {
+    if (x.blockIds.has(id)) c.error(p, `duplicate id "${id}"`, `give the scrolly an "id"`)
+    else x.blockIds.set(id, p)
+  }
+  if (v.figure === undefined) {
+    c.error(join(p, "figure"), `missing required field "figure"`, `"figure": { "spec": "story.json", "claim": "…" }`)
+    return b as Block
+  }
+  const fig = figureOf(x, v.figure, join(p, "figure")) as Obj
+  const steps = v.steps
+  const sp = join(p, "steps")
+  if (steps !== "auto") {
+    if (!Array.isArray(steps) || !steps.length) c.error(sp, `"steps" must be "auto" or a non-empty list of { "at", "body" }`, `"steps": [{ "at": "Change", "body": "…" }]`)
+    else
+      steps.forEach((st, i) => {
+        const q = join(sp, i)
+        if (!isObj(st)) return c.error(q, "a step must be an object { at, title?, body, cites? }")
+        c.keys(st, ["at", "title", "body", "cites"], q)
+        if (typeof st.at !== "string" && typeof st.at !== "number") c.error(join(q, "at"), `"at" must be a story step id, a stop label, a beat number, "start" or "end"`)
+        c.str(st, "title", q)
+        c.str(st, "body", q, true)
+        if (st.cites !== undefined) {
+          if (!Array.isArray(st.cites)) return c.error(join(q, "cites"), `"cites" must be a list of { "text", "ref" }`)
+          let from = 0
+          st.cites.forEach((ct, k) => {
+            const cq = join(join(q, "cites"), k)
+            if (!isObj(ct) || typeof ct.text !== "string" || typeof ct.ref !== "string" || !ct.text) return c.error(cq, `a cite is { "text", "ref" }`)
+            const body = typeof st.body === "string" ? st.body : ""
+            const at = body.indexOf(ct.text, from)
+            if (at < 0) c.error(join(cq, "text"), body.includes(ct.text) ? `cite "${ct.text}" is out of order` : `cite "${ct.text}" does not occur in the body`, "copy the text exactly from the body, in order")
+            else from = at + ct.text.length
+          })
+        }
+      })
+  }
+  // Targets: resolved against the figure's compiled story.
+  const spec = fig.spec
+  if (isObj(spec) && typeof spec.type === "string" && !c.d.some((d) => d.severity === "error" && d.path.startsWith(join(p, "figure")))) {
+    let scene: Scene | undefined
+    try {
+      scene = layout(spec as unknown as Spec)
+    } catch {
+      scene = undefined
+    }
+    const tl = scene?.timeline
+    if (scene && !tl) c.error(join(join(p, "figure"), "spec"), "a scrolly figure needs a story", `add "story": "auto" (or "changes", or steps) to the diagram spec`)
+    else if (scene && tl) {
+      const list = steps === "auto" ? autoSteps(tl) : Array.isArray(steps) ? (steps as ResolvedStep[]) : undefined
+      if (steps === "auto" && !list) c.error(sp, `"auto" needs a story with narrated steps or chapter stops`, `add "narrate" or "stop" to story steps, or write the steps`)
+      let last = -Infinity
+      ;(list ?? []).forEach((st, i) => {
+        if (!st || (typeof st.at !== "string" && typeof st.at !== "number")) return
+        const tg = resolveAt(tl, st.at)
+        const q = steps === "auto" ? sp : join(join(sp, i), "at")
+        if (!tg) {
+          const stops = tl.steps.map((s) => s.stop).filter(Boolean) as string[]
+          c.error(q, `"at" ${JSON.stringify(st.at)} matches no story step id, stop or beat (1–${beatTargets(tl).length})`, stops.length ? `stops: ${stops.join(", ")}` : `step ids: ${tl.steps.map((s) => s.id).join(", ")}`)
+          return
+        }
+        if (tg.t < last) c.warn(q, `step ${i + 1} moves the story backwards`, "scrolly steps read best in story order")
+        last = tg.t
+        for (const ct of st.cites ?? []) if (ct && typeof ct.ref === "string" && !resolveCite(scene!, ct.ref)) c.error(q.endsWith(".at") ? q.replace(/\.at$/, ".cites") : q, `cite ref "${ct.ref}" matches no element, row or file path`)
+      })
+    }
+  }
+  return { ...b, scrolly: { ...v, id, figure: fig } } as unknown as Block
 }
 
 /** Validate a page (parsed JSON or a JSON string). Never throws. */
@@ -401,6 +509,9 @@ export function validatePage(input: unknown): PageValidationResult {
   c.str(value, "title", "", true)
   for (const k of ["eyebrow", "subtitle", "summary", "$schema"]) c.str(value, k, "")
   c.bool(value, "toc", "")
+  c.bool(value, "present", "")
+  c.oneOf(value, "layout", PAGE_LAYOUTS, "")
+  if (value.layout === "slides" && value.present === false) c.warn("present", `"layout": "slides" with "present": false shows the article`)
   if (value.change !== undefined) {
     if (!isObj(value.change)) c.error("change", `"change" must be an object`, `"change": { "base": "main", "head": "feat/x" }`)
     else {
@@ -410,7 +521,7 @@ export function validatePage(input: unknown): PageValidationResult {
   }
   if (value.changes !== undefined && !(isObj(value.changes) && Array.isArray(value.changes.files)))
     c.error("changes", `"changes" must be { files: [...] } (written by --changes; don't hand-write it)`)
-  const x: Ctx = { c, figIds: new Map(), blockIds: new Map(), figN: 0, usesChanges: false }
+  const x: Ctx = { c, figIds: new Map(), blockIds: new Map(), figN: 0, scrollyN: 0, usesChanges: false }
   const secIds = new Map<string, string>()
   let sections: ValidPage["sections"] = []
   if (!Array.isArray(value.sections)) c.error("sections", `missing required list "sections"`, `"sections": [{ "title": "What changed", "blocks": [ … ] }]`)
@@ -425,6 +536,13 @@ export function validatePage(input: unknown): PageValidationResult {
       c.keys(s, SECTION_KEYS, p)
       c.str(s, "title", p, true)
       c.str(s, "eyebrow", p)
+      if (s.slide !== undefined) {
+        if (!isObj(s.slide)) c.error(join(p, "slide"), `"slide" must be { "layout"? }`, `"slide": { "layout": "split" }`)
+        else {
+          c.keys(s.slide, ["layout"], join(p, "slide"))
+          c.oneOf(s.slide, "layout", SLIDE_LAYOUTS, join(p, "slide"))
+        }
+      }
       let id = (typeof s.title === "string" && slug(s.title)) || `section-${i + 1}`
       if (s.id !== undefined) {
         if (typeof s.id !== "string" || !ID_RE.test(s.id)) c.error(join(p, "id"), `section id must match ${ID_RE.source}`, `e.g. "id": "risks"`)

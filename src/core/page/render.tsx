@@ -15,8 +15,10 @@ import { diffViewCss } from "../render/DiffView.tsx"
 import { fontCss, isChangeScene, isRichScene, StoryinkError } from "../render/index.tsx"
 import { Blocks, type RenderCtx } from "./blocks.tsx"
 import { pageCss, pageThemeCss } from "./css.ts"
+import { scrollyCss, slidesCss } from "./css-story.ts"
 import { Inline, Prose, safeHref } from "./prose.tsx"
-import { blockType, isPageSpec, type Block, type FigureBlock, type ValidPage } from "./types.ts"
+import { blockType, isPageSpec, type Block, type FigureBlock, type ScrollyBlock, type ValidPage } from "./types.ts"
+import { pageSlides, scrollyInfo, type ScrollyInfo, type SlideInfo } from "./slides.ts"
 import { validatePage } from "./validate.ts"
 
 export interface PageHtmlOptions {
@@ -33,11 +35,24 @@ export function pageFigures(page: { sections: { blocks: Block[] }[] }): FigureBl
     for (const b of bs ?? []) {
       const t = blockType(b)
       if (t === "figure") out.push((b as { figure: FigureBlock }).figure)
+      else if (t === "scrolly") out.push((b as { scrolly: ScrollyBlock }).scrolly.figure)
       else if (t === "details") walk((b as { details: { blocks: Block[] } }).details.blocks)
       else if (t === "columns") for (const c of (b as { columns: Block[][] }).columns) walk(c)
     }
   }
   for (const s of page.sections) walk(s.blocks)
+  return out
+}
+
+/** Every scrolly block of a page with its resolved steps and targets. */
+export function pageScrollies(page: ValidPage, scenes: Map<string, Scene>): Map<string, ScrollyInfo> {
+  const out = new Map<string, ScrollyInfo>()
+  for (const s of page.sections)
+    for (const b of s.blocks)
+      if (blockType(b) === "scrolly") {
+        const sc = (b as { scrolly: ScrollyBlock }).scrolly
+        out.set(sc.id!, scrollyInfo(sc, scenes.get(sc.figure.id!)))
+      }
   return out
 }
 
@@ -75,31 +90,68 @@ const ThemeIcon = () => (
   </>
 )
 
-function PageView({ page, ctx, toc }: { page: ValidPage; ctx: RenderCtx; toc: boolean }): ReactElement {
+const PresentIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+    <rect x="1.5" y="2.5" width="13" height="9" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+    <path d="M8 11.5V14M5.5 14h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+  </svg>
+)
+
+/** Figure shape for slide layouts: tall diagrams get the full slide height (undefined: no figure). */
+const figShape = (scene: Scene | undefined): "tall" | "wide" | undefined =>
+  scene ? ((scene.viewBox.h + 64) / (scene.viewBox.w + 64) > 0.8 ? "tall" : "wide") : undefined
+
+function SectionHead({ s, cont, title }: { s: ValidPage["sections"][number]; cont: boolean; title: string }): ReactElement {
+  if (cont)
+    return (
+      <h2 className="sp-sec-title sp-cont">
+        <Inline text={title} />
+      </h2>
+    )
+  return (
+    <header className="sp-sec-head">
+      {s.eyebrow ? <p className="sp-eyebrow">{s.eyebrow}</p> : null}
+      <h2 className="sp-sec-title">
+        <Inline text={s.title} />
+      </h2>
+    </header>
+  )
+}
+
+function PageView({ page, ctx, toc, slides, present }: { page: ValidPage; ctx: RenderCtx; toc: boolean; slides: SlideInfo[]; present: boolean }): ReactElement {
   const ch = page.change
   const href = ch?.url ? safeHref(ch.url) : undefined
+  const n = new Map(slides.map((x, i) => [x, i]))
   return (
     <>
-      <header className="sp-head">
-        <p className="sp-eyebrow">{page.eyebrow ?? "Page"}</p>
-        <button type="button" className="sp-theme" aria-label="Toggle light/dark" title="Toggle light/dark">
-          <ThemeIcon />
-        </button>
-        <h1 className="sp-title">{page.title}</h1>
-        {page.subtitle ? <p className="sp-sub">{page.subtitle}</p> : null}
-        {ch && (ch.base || ch.head || ch.title || href) ? (
-          <p className="sp-meta">
-            {ch.base || ch.head ? (
-              <span>
-                <span className="sp-meta-ref">{ch.base ?? "base"}</span> <span className="sp-meta-arrow">{"\u2192"}</span> <span className="sp-meta-ref">{ch.head ?? "head"}</span>
-              </span>
-            ) : null}
-            {ch.title ? <span>{ch.title}</span> : null}
-            {href ? <a href={href}>{ch.url}</a> : null}
-          </p>
-        ) : null}
-        {page.summary ? <Prose text={page.summary} className="sp-lead sp-prose" /> : null}
-      </header>
+      <div className="sp-slide sp-slide-title" data-slide="0" data-slide-layout="title">
+        <header className="sp-head">
+          <p className="sp-eyebrow">{page.eyebrow ?? "Page"}</p>
+          {present ? (
+            <button type="button" className="sp-present" aria-label="Present" title="Present (P)">
+              <PresentIcon />
+              <span>Present</span>
+            </button>
+          ) : null}
+          <button type="button" className="sp-theme" aria-label="Toggle light/dark" title="Toggle light/dark">
+            <ThemeIcon />
+          </button>
+          <h1 className="sp-title">{page.title}</h1>
+          {page.subtitle ? <p className="sp-sub">{page.subtitle}</p> : null}
+          {ch && (ch.base || ch.head || ch.title || href) ? (
+            <p className="sp-meta">
+              {ch.base || ch.head ? (
+                <span>
+                  <span className="sp-meta-ref">{ch.base ?? "base"}</span> <span className="sp-meta-arrow">{"\u2192"}</span> <span className="sp-meta-ref">{ch.head ?? "head"}</span>
+                </span>
+              ) : null}
+              {ch.title ? <span>{ch.title}</span> : null}
+              {href ? <a href={href}>{ch.url}</a> : null}
+            </p>
+          ) : null}
+          {page.summary ? <Prose text={page.summary} className="sp-lead sp-prose" /> : null}
+        </header>
+      </div>
       {toc ? (
         <nav className="sp-toc" aria-label="Contents">
           <p className="sp-toc-h">Contents</p>
@@ -113,15 +165,16 @@ function PageView({ page, ctx, toc }: { page: ValidPage; ctx: RenderCtx; toc: bo
         </nav>
       ) : null}
       <main className="sp-main">
-        {page.sections.map((s) => (
+        {page.sections.map((s, si) => (
           <section key={s.id} className="sp-sec" id={s.id}>
-            <header className="sp-sec-head">
-              {s.eyebrow ? <p className="sp-eyebrow">{s.eyebrow}</p> : null}
-              <h2 className="sp-sec-title">
-                <Inline text={s.title} />
-              </h2>
-            </header>
-            <Blocks blocks={s.blocks} ctx={ctx} />
+            {slides
+              .filter((x) => x.section === si)
+              .map((x) => (
+                <div key={x.id} className="sp-slide" data-slide={n.get(x)} data-slide-layout={x.layout} data-builds={x.builds} data-fig-shape={figShape(ctx.scenes.get(x.build?.fig ?? x.figs[0] ?? ""))}>
+                  <SectionHead s={s} cont={x.cont} title={x.title} />
+                  <Blocks blocks={x.blocks} ctx={ctx} />
+                </div>
+              ))}
           </section>
         ))}
       </main>
@@ -145,11 +198,27 @@ export function renderPageHtml(input: unknown, opts: PageHtmlOptions = {}): stri
   const drawer = narrate || list.some(hasDrawer)
   const counters = list.some((s) => s.timeline && Object.keys(s.timeline.counters).length)
   const toc = page.toc ?? page.sections.length >= 4
-  const ctx: RenderCtx = { scenes, ...(page.changes ? { changes: page.changes } : {}) }
-  const body = renderToStaticMarkup(<PageView page={page} ctx={ctx} toc={toc} />)
+  const scrollies = pageScrollies(page, scenes)
+  const slides = pageSlides(page, scenes, scrollies)
+  const present = page.present !== false
+  const ctx: RenderCtx = { scenes, scrollies, ...(page.changes ? { changes: page.changes } : {}) }
+  const body = renderToStaticMarkup(<PageView page={page} ctx={ctx} toc={toc} slides={slides} present={present} />)
   const figures: Record<string, { scene: Scene }> = {}
   for (const [id, scene] of scenes) figures[id] = { scene }
-  const data = escapeJson(JSON.stringify({ version: VERSION, figures, ...(page.changes ? { changes: page.changes } : {}) }))
+  const scrolly: Record<string, { fig: string; steps: { beat: number; t: number }[] }> = {}
+  for (const [id, x] of scrollies) scrolly[id] = { fig: x.fig, steps: x.targets }
+  const slideData = slides.map((x) => ({
+    id: x.id,
+    title: x.title,
+    layout: x.layout,
+    figs: x.figs,
+    ...(x.scrolly ? { scrolly: x.scrolly } : {}),
+    builds: x.builds,
+    ...(x.build ? { build: x.build } : {}),
+  }))
+  const data = escapeJson(
+    JSON.stringify({ version: VERSION, figures, ...(page.changes ? { changes: page.changes } : {}), ...(scrollies.size ? { scrolly } : {}), slides: slideData }),
+  )
   const viewer = opts.viewer === false ? "" : `<script id="storyink-viewer">${VIEWER_JS.replace(/<\/script/gi, "<\\/script")}</script>`
   const vcss = viewerCss({ narrate, drawer, page: true })
   return `<!doctype html>
@@ -165,11 +234,13 @@ ${pageThemeCss()}</style>
 <style id="storyink-diagram-css">${diagramCss(rich, change)}</style>
 <style id="storyink-viewer-css">${vcss}${counters ? ROLLING_CSS : ""}</style>
 <style id="storyink-page-css">${diffViewCss()}
-${pageCss()}</style>
+${pageCss()}
+${scrollyCss()}
+${slidesCss()}</style>
 <script>${BOOT}</script>
 </head>
 <body>
-<div id="storyink-page"${toc ? ` class="sp-has-toc"` : ""}>${body}</div>
+<div id="storyink-page"${toc ? ` class="sp-has-toc"` : ""} data-layout="${page.layout === "slides" && present ? "slides" : "article"}" data-present="${present ? 1 : 0}">${body}</div>
 <script id="storyink-page-js">${PAGE_JS}</script>
 <script type="application/json" id="storyink-page-data">${data}</script>
 ${viewer}

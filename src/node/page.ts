@@ -1,6 +1,8 @@
 /** Node helpers for pages: read figure spec paths, apply `--changes`, validate and write. */
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { resolvePageChanges } from "../core/page/resolve.ts"
 import { renderPageHtml, type PageHtmlOptions } from "../core/page/render.tsx"
 import { isPageSpec } from "../core/page/types.ts"
@@ -24,6 +26,13 @@ export function looksLikePage(x: unknown): boolean {
   return isPageSpec(x)
 }
 
+/** A figure spec path: absolute, `file://` URL, `~/…` or relative to the page directory. */
+function specFile(p: string, dir: string): string {
+  if (/^file:\/\//i.test(p)) return fileURLToPath(p)
+  if (p === "~" || p.startsWith("~/")) return path.join(os.homedir(), p.slice(1))
+  return path.isAbsolute(p) ? path.normalize(p) : path.resolve(dir, p)
+}
+
 /**
  * Replace every figure `spec` path (string) with the parsed diagram spec (JSON, or Mermaid for
  * .mmd / .mermaid), relative to `dir`. Unreadable files become error diagnostics at the figure path.
@@ -37,22 +46,25 @@ export function resolvePageFiles(input: unknown, dir: string): { page: unknown; 
     blocks.forEach((b, i) => {
       if (!isObj(b)) return
       const q = `${p}[${i}]`
-      if (isObj(b.figure) && typeof b.figure.spec === "string") {
-        const rel = b.figure.spec
-        const file = path.isAbsolute(rel) ? rel : path.resolve(dir, rel)
+      const holder = isObj(b.figure) ? { fig: b.figure, q: `${q}.figure` } : isObj(b.scrolly) && isObj(b.scrolly.figure) ? { fig: b.scrolly.figure, q: `${q}.scrolly.figure` } : undefined
+      if (holder && typeof holder.fig.spec === "string") {
+        const fig = holder.fig
+        const fq = holder.q
+        const rel = fig.spec as string
+        const file = specFile(rel, dir)
         try {
           const text = fs.readFileSync(file, "utf8")
           if (/\.(mmd|mermaid)$/i.test(file)) {
             const r = fromMermaid(text)
-            for (const d of r.diagnostics) diagnostics.push({ ...d, path: `${q}.figure.spec${d.path ? `.${d.path}` : ""}` })
-            if (r.spec) b.figure.spec = r.spec
+            for (const d of r.diagnostics) diagnostics.push({ ...d, path: `${fq}.spec${d.path ? `.${d.path}` : ""}` })
+            if (r.spec) fig.spec = r.spec
           } else {
             const spec = JSON.parse(text) as unknown
-            if (isPageSpec(spec)) diagnostics.push({ severity: "error", path: `${q}.figure.spec`, message: `"${rel}" is a page; figures embed diagram specs`, hint: "link to the other page with a prose [link](other.html) instead" })
-            else b.figure.spec = spec
+            if (isPageSpec(spec)) diagnostics.push({ severity: "error", path: `${fq}.spec`, message: `"${rel}" is a page; figures embed diagram specs`, hint: "link to the other page with a prose [link](other.html) instead" })
+            else fig.spec = spec
           }
         } catch (e) {
-          diagnostics.push({ severity: "error", path: `${q}.figure.spec`, message: `could not read figure spec "${rel}": ${(e as Error).message}`, hint: `paths are relative to the page file (${dir})` })
+          diagnostics.push({ severity: "error", path: `${fq}.spec`, message: `could not read figure spec "${rel}": ${(e as Error).message}`, hint: `paths are relative to the page file (${dir})` })
         }
       }
       if (isObj(b.details)) walk(b.details.blocks, `${q}.details.blocks`)

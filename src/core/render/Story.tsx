@@ -38,6 +38,8 @@ export interface StoryControls {
   frameAt: (t: number) => Frame
   /** The beat the header caption belongs to (step moves pin it; -1 before the first beat). */
   beat: number
+  /** Move to a story time (animated like → / ←, or a settled jump); see `moveTo`. */
+  goto: (t: number, animate?: boolean) => Promise<void>
 }
 
 export interface StoryOptions {
@@ -244,23 +246,11 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
     const k = motionEnds.findIndex((x) => Math.abs(x - target) < 1e-6)
     return k >= 0 ? k : motionEnds.length - 1
   }
-  const step = useCallback(
-    (dir: 1 | -1, useChapters = false): Promise<void> => {
-      const list = useChapters && chapters.length > 1 ? chapters : marks
-      const now = clock.get()
-      if (opts.reduced || !tl) {
-        // Stepped playback: jump between settled steps.
-        seek(stepBoundary(list, now, dir, duration))
-        return Promise.resolve()
-      }
-      const cur = move.current
-      const target = stepMoveTarget(list, now, dir, duration, cur ?? undefined)
-      setPin({ dir, beat: beatOf(target) })
-      if (cur && cur.dir === dir) {
-        // Same direction while moving: extend; the running driver picks the new target up.
-        cur.target = target
-        return new Promise((r) => cur.done.push(r))
-      }
+  /**
+   * The animated move driver (→ / ← and `moveTo`): from `now` to `target`, skipping dead time
+   * between beats; forward at `mult`× (1 for a step), backward at the ← rewind speed.
+   */
+  const drive = (target: number, dir: 1 | -1, now: number, mult: number): Promise<void> => {
       stop()
       setBlur(0)
       setSettled(false)
@@ -288,7 +278,7 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
         const dt = (nowMs - last) / 1000
         last = nowMs
         const c = clock.get()
-        const v = stepMoveSpeed(dir, (nowMs - t0) / 1000, Math.abs(m.target - c))
+        const v = stepMoveSpeed(dir, (nowMs - t0) / 1000, Math.abs(m.target - c)) * (dir > 0 ? mult : 1)
         // Skip the dead time between beats (reading holds, authored gaps) on the way.
         const next = skipGap(motionEnds, motionStarts, c + dir * v * dt, dir, m.target)
         if (dir > 0 ? next >= m.target - 1e-6 : next <= m.target + 1e-6) {
@@ -313,10 +303,53 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
         },
       } as AnimationPlaybackControls
       return p
+  }
+  const step = useCallback(
+    (dir: 1 | -1, useChapters = false): Promise<void> => {
+      const list = useChapters && chapters.length > 1 ? chapters : marks
+      const now = clock.get()
+      if (opts.reduced || !tl) {
+        // Stepped playback: jump between settled steps.
+        seek(stepBoundary(list, now, dir, duration))
+        return Promise.resolve()
+      }
+      const cur = move.current
+      const target = stepMoveTarget(list, now, dir, duration, cur ?? undefined)
+      setPin({ dir, beat: beatOf(target) })
+      if (cur && cur.dir === dir) {
+        // Same direction while moving: extend; the running driver picks the new target up.
+        cur.target = target
+        return new Promise((r) => cur.done.push(r))
+      }
+      return drive(target, dir, now, 1)
     },
     [marks, chapters, clock, duration, seek, opts.reduced, tl, motionEnds, motionStarts],
   )
   const moving = useCallback(() => (move.current ? { dir: move.current.dir, target: move.current.target } : null), [])
+  /**
+   * Move the story to time `target` (`moveTo`): reduced motion or `animate: false` jumps to the
+   * settled state (paused); otherwise forward plays (2.5× when crossing two or more beats) and
+   * backward rewinds like ←. The caption follows the target's beat. Resolves when it arrives.
+   */
+  const goto = useCallback(
+    (target: number, animate = true): Promise<void> => {
+      if (!tl) return Promise.resolve()
+      // The end lands a hair before `duration`: "paused" on the final frame, not "ended" (which
+      // dims the settled diagram) — a deck / scrolly holds its last state at full strength.
+      const x = Math.max(0, Math.min(Math.max(0, duration - 1e-3), target))
+      const now = clock.get()
+      if (!animate || opts.reduced || Math.abs(x - now) < 1e-4) {
+        seek(x)
+        return Promise.resolve()
+      }
+      const dir: 1 | -1 = x > now ? 1 : -1
+      const span = Math.abs(beatIndexAt(tl, x) - beatIndexAt(tl, now))
+      setPin({ dir, beat: Math.max(0, beatIndexAt(tl, x)) })
+      return drive(x, dir, now, dir > 0 && span >= 2 ? 2.5 : 1)
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tl, duration, clock, opts.reduced, seek, motionEnds, motionStarts],
+  )
   const ungate = useCallback(() => {
     if (modeRef.current !== "gate") return
     clock.set(0)
@@ -444,7 +477,7 @@ export function useStory(scene: Scene, tl: Timeline | undefined, opts: StoryOpti
   const dim = mode === "gate" ? (opts.reduced ? 1 : S.gateDim) : mode === "ended" && settled ? S.endedDim : 1
   // Glitch rewind (HTML only): the same velocity envelope as the blur, only while rewinding.
   const glitch = tl?.rewind === "glitch" && mode === "rewinding" && !opts.reduced ? Math.min(1, blur / S.rewind.blur) : 0
-  return { t, frame, mode, dim, blur, glitch, reduced: opts.reduced, play, pause, toggle, seek, replay, step, moving, now: () => clock.get(), modeNow: () => modeRef.current, ungate, frameAt, beat: captionBeat ?? beatIndexAt(tl, t) }
+  return { t, frame, mode, dim, blur, glitch, reduced: opts.reduced, play, pause, toggle, seek, replay, step, moving, now: () => clock.get(), modeNow: () => modeRef.current, ungate, frameAt, beat: captionBeat ?? beatIndexAt(tl, t), goto }
 }
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}.${Math.floor((s % 1) * 10)}`

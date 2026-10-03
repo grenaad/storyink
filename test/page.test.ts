@@ -134,10 +134,11 @@ describe("page HTML", () => {
   test("contract markup", () => {
     expect(html.startsWith("<!doctype html>\n<html lang=\"en\" class=\"si-noscript si-page\">")).toBe(true)
     for (const id of ["storyink-font", "storyink-theme", "storyink-diagram-css", "storyink-viewer-css", "storyink-page-css"]) expect(html).toContain(`<style id="${id}">`)
-    expect(html).toContain(`<div id="storyink-page">`)
-    expect(html).toContain(`<header class="sp-head">`)
+    // Phase 6: slide wrappers (display: contents in the article) and data-layout / data-present.
+    expect(html).toContain(`<div id="storyink-page" data-layout="article" data-present="1"><div class="sp-slide sp-slide-title" data-slide="0" data-slide-layout="title"><header class="sp-head">`)
+    expect(html).toContain(`<button type="button" class="sp-present" aria-label="Present"`)
     expect(html).toContain(`<main class="sp-main">`)
-    expect(html).toContain(`<section class="sp-sec" id="s">`)
+    expect(html).toContain(`<section class="sp-sec" id="s"><div class="sp-slide" data-slide="1" data-slide-layout="split" data-builds="0" data-fig-shape="tall">`)
     expect(html).toMatch(/<figure class="sp-b sp-wide sp-fig" id="fig-fig-1" data-fig="fig-1"><div class="sp-fig-root" data-si-fig="fig-1">/)
     expect(html).toContain(`<figcaption class="sp-cap">A talks to <strong>B</strong>.</figcaption>`)
     expect(html).toContain(`<script id="storyink-viewer">`)
@@ -207,6 +208,18 @@ describe("pages with files and changes", () => {
     const missing = loadPage(page([{ figure: { spec: "missing.json" } }]), ex)
     expect(missing.ok).toBe(false)
     expect(missing.diagnostics[0].path).toBe("sections[0].blocks[0].figure.spec")
+  })
+
+  test("loadPage resolves absolute and file:// figure / scrolly spec paths", () => {
+    const abs = path.resolve(ex, "changes", "payment-retry.architecture.json")
+    const blocks = [{ figure: { spec: abs } }, { scrolly: { figure: { spec: abs }, steps: "auto" } }, { figure: { spec: `file://${abs}` } }]
+    const r = loadPage(page(blocks), "/nonexistent-dir")
+    expect(r.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    expect(r.ok).toBe(true)
+    const secs = (r.page as { sections: { blocks: { figure?: { spec: unknown }; scrolly?: { figure: { spec: unknown } } }[] }[] }).sections
+    expect(typeof secs[0].blocks[0].figure!.spec).toBe("object")
+    expect(typeof secs[0].blocks[1].scrolly!.figure.spec).toBe("object")
+    expect(typeof secs[0].blocks[2].figure!.spec).toBe("object")
   })
 
   test("example pages validate", () => {

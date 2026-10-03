@@ -16,7 +16,11 @@ export const FILE_STATUSES = ["added", "modified", "removed", "renamed", "copied
 export const ALIGNS = ["left", "right", "center"] as const
 
 /** Every block type key, in docs order. */
-export const BLOCK_TYPES = ["prose", "figure", "kpis", "table", "cards", "callout", "filemap", "diff", "code", "risks", "decisions", "evidence", "timeline", "checklist", "details", "columns"] as const
+export const BLOCK_TYPES = ["prose", "figure", "kpis", "table", "cards", "callout", "filemap", "diff", "code", "risks", "decisions", "evidence", "timeline", "checklist", "details", "columns", "break", "scrolly"] as const
+/** Slide content layouts (`auto` is inferred from the slide's blocks). */
+export const SLIDE_LAYOUTS = ["auto", "center", "split", "full", "flow"] as const
+export type SlideLayout = (typeof SLIDE_LAYOUTS)[number]
+export const PAGE_LAYOUTS = ["article", "slides"] as const
 export type BlockType = (typeof BLOCK_TYPES)[number]
 
 export interface FigureBlock {
@@ -28,7 +32,25 @@ export interface FigureBlock {
   id?: string
   /** Break out to the full content width. */
   wide?: boolean
+  /** In slides, step through the figure's story beats (default true). */
+  builds?: boolean
 }
+/** A scrolly step: `at` = story step id, chapter stop label, 1-based beat number, "start" or "end". */
+export interface ScrollyStep {
+  at: string | number
+  title?: string
+  body: string
+  cites?: { text: string; ref: string }[]
+}
+export interface ScrollyBlock {
+  /** Block id (default scrolly-1, scrolly-2 …). */
+  id?: string
+  figure: FigureBlock
+  steps: "auto" | ScrollyStep[]
+  /** Where the pinned figure sits (default "right"). */
+  side?: "left" | "right"
+}
+export type BreakBlock = true | { title?: string; layout?: SlideLayout }
 export interface Kpi {
   label: string
   value: string | number
@@ -121,6 +143,8 @@ export type Block = { id?: string } & (
   | { checklist: ChecklistItem[] }
   | { details: DetailsBlock }
   | { columns: Block[][] }
+  | { break: BreakBlock }
+  | { scrolly: ScrollyBlock }
 )
 
 export interface Section {
@@ -128,6 +152,8 @@ export interface Section {
   id?: string
   title: string
   eyebrow?: string
+  /** Slide hint (present mode). */
+  slide?: { layout?: SlideLayout }
   blocks: Block[]
 }
 
@@ -150,6 +176,10 @@ export interface PageSpec {
   change?: ChangeMeta
   /** Table of contents; default: shown when there are ≥ 4 sections. */
   toc?: boolean
+  /** "article" (default) or "slides" (opens presenting; `#present=0` forces the article). */
+  layout?: (typeof PAGE_LAYOUTS)[number]
+  /** Allow presenting (Present button, P, `#present=1`); default true. */
+  present?: boolean
   sections: Section[]
   changes?: PageChanges
 }

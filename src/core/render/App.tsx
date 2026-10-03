@@ -7,9 +7,9 @@ import { motion as M, palettes, cssVar, type Palette, type ThemeName } from "../
 import type { Scene } from "../scene.ts"
 import { Diagram } from "./Diagram.tsx"
 import { CAMERA, cameraAt, cameraAtEnd, fitCamera, followStep, readableScale, stepAt, stepFocus, type Camera, type Viewport } from "../story/camera.ts"
-import { steppedTime } from "../story/state.ts"
+import { beatStops, steppedTime } from "../story/state.ts"
 import { recompilePace } from "../story/compile.ts"
-import { hasNarration, looksLikePath, parseFileRef, type CiteTarget } from "../story/narrate.ts"
+import { hasNarration, looksLikePath, parseFileRef, resolveCite, type CiteTarget } from "../story/narrate.ts"
 import { Drawer, drawerIdForSi, drawerIds, drawerInfo, hasDrawer, type DrawerTarget } from "./Drawer.tsx"
 import { Rail, railIndex } from "./Narration.tsx"
 
@@ -308,6 +308,8 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
   const engaged = useRef(false)
   /** Follow reacts to playback and to the reader's seeks, never to a `#t=` load or setTime(). */
   const armed = useRef(false)
+  /** Story time of the last settled `moveTo` (the camera derives from it until the reader moves). */
+  const settledAt = useRef<number | null>(null)
 
   const viewport = useCallback((): Viewport | undefined => {
     const el = stage.current
@@ -463,12 +465,38 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
     api.camera = () => cameraRef.current()
     api.pace = () => paceRef.current
     api.setPace = (n: number) => setPaceRef.current(Number(n))
+    /** Beats: each beat's settled stop time (`beats()[k]` = after beat k + 1). */
+    api.beats = () => (tl ? storyBeats(tl) : [])
+    /** Move to a beat (−1 = start, ≥ count = end) or a time: animated (→ / ← look) or settled. */
+    api.moveTo = (target: MoveTarget, o?: { animate?: boolean }) => {
+      if (!tl) return Promise.resolve()
+      armed.current = true
+      const t = moveTime(tl, target)
+      // A settled move (hash / entry states, snapshots): the camera is a pure function of t
+      // (`cameraAt`, the same as `#camera=follow&t=`), whatever the order of resize / render.
+      settledAt.current = o?.animate === false || reduced ? t : null
+      const p = storyRef.current?.goto(t, o?.animate !== false) ?? Promise.resolve()
+      if (settledAt.current !== null) placeRef.current()
+      return p
+    }
+    /** Pages: highlight a cite's element (`ref` or null), and open a cite (file → drawer). */
+    api.cite = (ref: string | null) => citeRef.current.hover(ref)
+    api.openCite = (ref: string) => citeRef.current.open(ref)
   }, [tl])
 
   /** Initial / resize placement: `#camera=follow` + `#t=` shows the followed view; engaged follow re-follows; else fit. */
   const place = () => {
     const vp = viewport()
     if (!vp) return
+    // After a settled `moveTo`: the follow camera at that time (pure), else fit.
+    if (tl && settledAt.current !== null && storyRef.current && !hash.beats && !hash.sheet?.length) {
+      const t = storyRef.current.now()
+      if (follow && vp.w > 0 && vp.h > 0) {
+        moveTo(cameraAt(scene, tl, t, vp, userK.current), false)
+        engaged.current = !cameraAtEnd(tl, t)
+      } else fit(false)
+      return
+    }
     if (tl && hash.camera === "follow" && hash.t !== undefined && !armed.current) {
       const t0 = hash.t === "end" ? tl.duration : Number(hash.t) || 0
       const t = reduced ? steppedTime(tl, t0) : t0
@@ -495,13 +523,20 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
   const stepIdx = tl && story ? stepAt(tl, story.t) : 0
   const atEnd = tl && story ? cameraAtEnd(tl, story.t) : false
   const mode = story?.mode
-  if (mode === "playing") armed.current = true
+  if (mode === "playing") {
+    armed.current = true
+    settledAt.current = null
+  }
   useEffect(() => {
     if (!tl || !story || !follow || !armed.current || hash.beats || hash.sheet?.length) return
     if (mode === "gate" || mode === "rewinding") return
     const vp = viewport()
     if (!vp) return
     const anim = !reduced
+    if (settledAt.current !== null) {
+      placeRef.current()
+      return
+    }
     if (atEnd) {
       // Ended or in the final hold: ease back out so the whole diagram is seen once.
       if (engaged.current) {
@@ -600,6 +635,8 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
       if (ev.target instanceof HTMLInputElement || ev.metaKey || ev.ctrlKey || ev.altKey) return
       // Pages: only the focused figure reacts (Space / arrows scroll the page otherwise).
       if (!ownsRef.current()) return
+      // A presenting page (slides) owns the keyboard.
+      if (embedded && document.documentElement.classList.contains("sp-presenting")) return
       const st = storyRef.current
       if (ev.key === "Escape" && drawerRef.current.get()) {
         drawerRef.current.close()
@@ -773,6 +810,16 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
         return
       }
     }
+  }
+  const citeRef = useRef({ hover: (_r: string | null) => {}, open: (_r: string) => false as boolean })
+  citeRef.current = {
+    hover: (ref) => setHot(ref ? resolveCite(scene, ref) : undefined),
+    open: (ref) => {
+      const c = resolveCite(scene, ref)
+      if (!c || !drawable) return false
+      onCiteOpen(c)
+      return true
+    },
   }
   const onCiteOpen = (c: CiteTarget) => {
     setHot(undefined)
@@ -989,6 +1036,21 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
 
 const sheet0 = (h: HashParams) => !!h.sheet?.length
 
+/** A `moveTo` target: a beat (0-based; −1 = start; ≥ the beat count = end) or a story time. */
+export type MoveTarget = { beat: number } | { t: number }
+
+/** The story's beats as their settled stop times (stepped schedule, without the final frame). */
+export const storyBeats = (tl: Timeline): number[] => beatStops(tl).slice(0, -1)
+
+/** The story time a `moveTo` target names. */
+export function moveTime(tl: Timeline, target: MoveTarget): number {
+  if ("t" in target) return Math.max(0, Math.min(tl.duration, Number(target.t) || 0))
+  const b = storyBeats(tl)
+  const k = Math.floor(Number(target.beat))
+  if (!(k >= 0)) return 0
+  return k < b.length ? b[k] : tl.duration
+}
+
 /** Page figure toolbar / transport strip (px) and fit padding (diagram px, as `fitCamera`). */
 const FIG_CHROME = 56
 const FIG_PAD = 32
@@ -1005,7 +1067,8 @@ export function figureStageStyle(vb: { w: number; h: number }, chrome: boolean):
   const h = vb.h + 2 * FIG_PAD
   // Full column width (the figure's container width, `cqw`); height from the aspect, up to the
   // largest fit scale (1.25, as `fitCamera`) and the viewport cap.
-  return { height: `min(${+((100 * h) / w).toFixed(3)}cqw + ${extra}px, ${Math.round(h * 1.25 + extra)}px, var(--si-fig-max, 90vh))` }
+  // Rounded to whole px: a fractional stage height rasterizes differently between captures.
+  return { height: `round(down, min(${+((100 * h) / w).toFixed(3)}cqw + ${extra}px, ${Math.round(h * 1.25 + extra)}px, var(--si-fig-max, 90vh)), 1px)` }
 }
 
 /** Narrated scenes: the stage and the narration rail side by side (bottom sheet when narrow). */

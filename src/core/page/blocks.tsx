@@ -7,11 +7,14 @@ import { DiffView, RowCode } from "../render/DiffView.tsx"
 import type { Scene } from "../scene.ts"
 import { CODE_LANGS, type CodeLang, type Delta } from "../spec.ts"
 import { Inline, Prose } from "./prose.tsx"
-import { blockType, type Block, type Cell, type CodeBlock, type DiffBlock, type FigureBlock, type FilemapBlock, type MapFile, type PageChanges, type Tone } from "./types.ts"
+import type { ScrollyInfo } from "./slides.ts"
+import { blockType, type ScrollyBlock, type Block, type Cell, type CodeBlock, type DiffBlock, type FigureBlock, type FilemapBlock, type MapFile, type PageChanges, type Tone } from "./types.ts"
 
 export interface RenderCtx {
   scenes: Map<string, Scene>
   changes?: PageChanges
+  /** Resolved scrolly steps by block id. */
+  scrollies?: Map<string, ScrollyInfo>
 }
 
 const DIFF_MAX = 120
@@ -63,7 +66,7 @@ const autoWide = (scene: Scene): boolean => {
   return kW < kH && kW * 11 < 9
 }
 
-function Figure({ f, ctx }: { f: FigureBlock; ctx: RenderCtx }): ReactElement {
+export function Figure({ f, ctx }: { f: FigureBlock; ctx: RenderCtx }): ReactElement {
   const id = f.id!
   const scene = ctx.scenes.get(id)!
   return (
@@ -310,12 +313,40 @@ const Refs = ({ refs }: { refs?: string[] }) =>
     </p>
   ) : null
 
+/** Scrollytelling: the figure pinned beside prose step cards (live behaviour comes from the viewer). */
+function Scrolly({ sc, ctx }: { sc: ScrollyBlock; ctx: RenderCtx }): ReactElement {
+  const info = ctx.scrollies?.get(sc.id!)
+  const fig = sc.figure.id!
+  const side = sc.side ?? "right"
+  return (
+    <div className={`sp-b sp-wide sp-scrolly sp-scrolly-${side}`} id={sc.id} data-scrolly={sc.id} data-fig={fig}>
+      <div className="sp-scrolly-graphic">
+        <Figure f={sc.figure} ctx={ctx} />
+      </div>
+      <ol className="sp-scrolly-steps">
+        {(info?.steps ?? []).map((st, i) => (
+          <li key={i} className="sp-scrolly-step" data-step={i}>
+            {st.title ? (
+              <h4>
+                <Inline text={st.title} />
+              </h4>
+            ) : null}
+            <Prose text={st.body} {...(st.cites?.length ? { cites: st.cites } : {})} />
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
 /** One block (wrapper carries the block class, width class and optional id). */
 export function BlockView({ b, ctx }: { b: Block; ctx: RenderCtx }): ReactElement | null {
   const t = blockType(b)
   if (!t) return null
   const v = (b as Record<string, unknown>)[t] as never
   if (t === "figure") return <Figure f={v} ctx={ctx} />
+  if (t === "break") return null
+  if (t === "scrolly") return <Scrolly sc={v} ctx={ctx} />
   const cls = `sp-b sp-b-${t}${WIDE.has(t) ? " sp-wide" : ""}`
   const id = b.id ? { id: b.id } : {}
   return (

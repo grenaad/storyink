@@ -31,11 +31,11 @@ export function resolvePageChanges(input: unknown, diffset: DiffSet, opts: PageR
     blocks.forEach((b, i) => {
       if (!isObj(b)) return
       const p = `${path}[${i}]`
-      const fig = b.figure
+      const [fig, fp] = isObj(b.figure) ? [b.figure, `${p}.figure`] : isObj(b.scrolly) && isObj(b.scrolly.figure) ? [b.scrolly.figure, `${p}.scrolly.figure`] : [undefined, ""]
       if (isObj(fig) && isObj(fig.spec)) {
         const r = resolveChanges(fig.spec as unknown as Spec, diffset)
         fig.spec = r.spec
-        for (const d of r.diagnostics) diagnostics.push({ ...d, path: d.path ? `${p}.figure.spec.${d.path}` : `${p}.figure.spec` })
+        for (const d of r.diagnostics) diagnostics.push({ ...d, path: d.path ? `${fp}.spec.${d.path}` : `${fp}.spec` })
       }
       if (b.filemap === "changes" || (isObj(b.filemap) && b.filemap.from === "changes")) allMeta = true
       const d = b.diff

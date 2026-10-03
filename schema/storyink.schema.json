@@ -620,6 +620,17 @@
           "type": "boolean",
           "description": "Table of contents (default: shown with 4 or more sections)."
         },
+        "layout": {
+          "enum": [
+            "article",
+            "slides"
+          ],
+          "description": "\"slides\" opens presenting (#present=0 forces the article); default \"article\"."
+        },
+        "present": {
+          "type": "boolean",
+          "description": "Allow presenting (Present button, P, #present=1); default true."
+        },
         "sections": {
           "type": "array",
           "items": {
@@ -640,6 +651,22 @@
               },
               "eyebrow": {
                 "type": "string"
+              },
+              "slide": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "layout": {
+                    "enum": [
+                      "auto",
+                      "center",
+                      "split",
+                      "full",
+                      "flow"
+                    ]
+                  }
+                },
+                "description": "Slide hint (present mode)."
               },
               "blocks": {
                 "type": "array",
@@ -701,6 +728,10 @@
             },
             "wide": {
               "type": "boolean"
+            },
+            "builds": {
+              "type": "boolean",
+              "description": "In slides, step through the figure's story beats (default true)."
             }
           }
         },
@@ -1254,6 +1285,151 @@
               "$ref": "#/$defs/pageBlock"
             }
           }
+        },
+        "break": {
+          "description": "Starts a new slide inside the section (renders nothing in the article).",
+          "anyOf": [
+            {
+              "const": true
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "layout": {
+                  "enum": [
+                    "auto",
+                    "center",
+                    "split",
+                    "full",
+                    "flow"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "scrolly": {
+          "description": "Scrollytelling: the figure pinned beside step cards; each step moves the figure's story to its beat.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "figure",
+            "steps"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_\\-]*$"
+            },
+            "figure": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "spec"
+              ],
+              "properties": {
+                "spec": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "$ref": "#"
+                    }
+                  ],
+                  "description": "A diagram spec, or a path relative to the page file (resolved by the CLI / plugin)."
+                },
+                "claim": {
+                  "type": "string",
+                  "description": "Caption stating the figure's point."
+                },
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z][A-Za-z0-9_\\-]*$"
+                },
+                "wide": {
+                  "type": "boolean"
+                },
+                "builds": {
+                  "type": "boolean",
+                  "description": "In slides, step through the figure's story beats (default true)."
+                }
+              }
+            },
+            "steps": {
+              "anyOf": [
+                {
+                  "const": "auto"
+                },
+                {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "at",
+                      "body"
+                    ],
+                    "properties": {
+                      "at": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          {
+                            "type": "integer",
+                            "minimum": 1
+                          }
+                        ],
+                        "description": "A story step id, a chapter stop label, a 1-based beat number, \"start\" or \"end\"."
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "body": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "cites": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "text",
+                            "ref"
+                          ],
+                          "properties": {
+                            "text": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "ref": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "side": {
+              "enum": [
+                "left",
+                "right"
+              ]
+            }
+          }
         }
       },
       "oneOf": [
@@ -1335,6 +1511,16 @@
         {
           "required": [
             "columns"
+          ]
+        },
+        {
+          "required": [
+            "break"
+          ]
+        },
+        {
+          "required": [
+            "scrolly"
           ]
         }
       ]

@@ -43,6 +43,7 @@ ${bold("Usage")}
                    [--at 0.5,1.2,end] [--motion reduced] [--camera follow] [--pace N] [--scale 2] [-o dir] [--json]
                    [--rail] [--drawer <id|path>]   narration rail / change drawer in the --at captures
                    [--figure <id>]   page HTML: snapshot one figure (default: full-page captures)
+                   [--slides [--builds]] [--scrolly <id|all>]   page HTML: slide / build frames, scrolly steps + sheets
                    [--preview out.jpg [--preview-size 1024]]   compact one-image preview for agents
   storyink skill            print the SKILL.md path and content
   storyink --help | --version
@@ -68,7 +69,7 @@ function parseArgs(argv: string[]): Args {
   const _: string[] = []
   const flags = new Map<string, string | true>()
   const rest: string[] = []
-  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size", "--animated-svg", "--font", "--motion", "--camera", "--pace", "--patch", "--changes", "--drawer", "--figure"])
+  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size", "--animated-svg", "--font", "--motion", "--camera", "--pace", "--patch", "--changes", "--drawer", "--figure", "--scrolly"])
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "--") {
@@ -300,6 +301,9 @@ async function main(argv: string[]): Promise<number> {
       ...(a.flags.has("--rail") ? { rail: true } : {}),
       ...(str(a, "--drawer") ? { drawer: str(a, "--drawer") } : {}),
       ...(str(a, "--figure") ? { figure: str(a, "--figure") } : {}),
+      ...(a.flags.has("--slides") ? { slides: true } : {}),
+      ...(a.flags.has("--builds") ? { slides: true, builds: true } : {}),
+      ...(str(a, "--scrolly") ? { scrolly: str(a, "--scrolly") } : {}),
       ...(str(a, "-o", "--out") ? { outDir: str(a, "-o", "--out") } : {}),
       ...(str(a, "--t") ? { t: str(a, "--t") } : {}),
     })

@@ -6,6 +6,7 @@ import { App, parseHash, type ViewerHooks } from "../core/render/App.tsx"
 import { lintDom } from "./lint.ts"
 import { createCounterOverlay } from "./counters.ts"
 import { lintPageText } from "./page-lint.ts"
+import { initDeck, initScrolly, type SlideIssue, type TellData } from "./tell.ts"
 
 interface Data {
   version: string
@@ -13,7 +14,7 @@ interface Data {
 }
 
 /** `#storyink-page-data`: a page's figures (`type: "page"`). */
-interface PageData {
+interface PageData extends TellData {
   version: string
   figures: Record<string, { scene: Scene }>
 }
@@ -198,7 +199,20 @@ function page(data: PageData) {
   } as never
   const roots = [...document.querySelectorAll<HTMLElement>("[data-si-fig]")]
   const pending = new Set(roots.map((r) => r.dataset.siFig!))
+  let told = false
+  let slideIssues: SlideIssue[] = []
   const finish = () => {
+    // Storytelling controllers start once every figure's API exists (hash states applied here,
+    // before ready, so snapshots see settled scrolly steps / slides / builds).
+    if (!told) {
+      told = true
+      try {
+        initScrolly(data)
+        initDeck(data, (issues) => (slideIssues = issues))
+      } catch (e) {
+        slideIssues = [{ kind: "slide-overflow", ids: [], detail: `deck: ${String(e)}` }]
+      }
+    }
     let text: unknown
     try {
       text = lintPageText(document)
@@ -206,8 +220,9 @@ function page(data: PageData) {
       text = { ok: false, issues: [{ kind: "error", ids: [], detail: String(e) }] }
     }
     const figs = Object.values(lints) as { ok?: boolean }[]
-    const t = text as { ok: boolean }
-    const lint = { ok: t.ok && figs.every((l) => l.ok !== false), figures: lints, page: text }
+    const t = text as { ok: boolean; issues: unknown[] }
+    if (slideIssues.length) text = { ...t, ok: false, issues: [...t.issues, ...slideIssues] }
+    const lint = { ok: t.ok && !slideIssues.length && figs.every((l) => l.ok !== false), figures: lints, page: text }
     writeLint(lint)
     ;(window.__storyink as unknown as Record<string, unknown>).lint = lint
     document.documentElement.dataset.contentHeight = String(Math.ceil(document.documentElement.scrollHeight))
