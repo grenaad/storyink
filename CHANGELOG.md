@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - **Scrollytelling and slides: viewer** — figure API `beats()` and `moveTo({ beat } | { t },
   { animate })` (forward plays, 2.5× across two or more beats; backward rewinds like ←; reduced

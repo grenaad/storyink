@@ -1,6 +1,6 @@
 {
   "name": "storyink",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Diagram library, CLI and OpenCode v2 plugin: architecture, workflow, sequence, dataflow and lifecycle diagrams from JSON or Mermaid into standalone HTML and SVG, with optional storyboard animation.",
   "type": "module",
   "main": "dist/index.js",
@@ -84,6 +84,7 @@
     "schema",
     "skill",
     "examples",
+    "!examples/*/out",
     "fonts/OFL.txt",
     "README.md",
     "LICENSE",

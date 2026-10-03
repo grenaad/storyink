@@ -41,11 +41,6 @@ npx storyink render change.json --changes changes.json -o change.html   # real +
 `change.json` is a [change diagram](#change-diagrams) whose boxes point at files; `--changes` fills
 in their `+/−`, resolves [diff code nodes](#diffs-and-diff-code-nodes) and embeds the hunks.
 
-> The npm release is 0.4.0. Everything under *Unreleased* in the [changelog](CHANGELOG.md)
-> (change diagrams, `storyink diff` and `--changes`, narration and the drawer, pages,
-> scrollytelling and slides) is on `main`; until the next release, run it from a checkout
-> (`bun install && bun run build`, then `node dist/cli.js …`).
-
 The HTML has no external requests. It includes pan/zoom (wheel at the cursor, drag, `+`/`-`/`0`,
 fit on load), a theme toggle that follows `prefers-color-scheme` and is saved in `localStorage`,
 SVG export and 2× PNG export (of the final frame, or of the frame on screen with **Frame: now**).
@@ -1166,7 +1161,7 @@ From npm, pinned or not:
 
 ```jsonc
 // opencode.json (global ~/.config/opencode/ or project .opencode/)
-{ "plugins": ["storyink"] }            // or "storyink@0.4.0"
+{ "plugins": ["storyink"] }            // or "storyink@0.5.0"
 ```
 
 From a local checkout, for development: build first, then point `plugins` at the **directory**
