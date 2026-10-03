@@ -5,7 +5,9 @@
  */
 import fs from "node:fs"
 import path from "node:path"
-import { loadSpec, writeAnimatedSvg } from "../src/node/index.ts"
+import { loadSpec, parseSource, diffSetFrom, writeAnimatedSvg, type LoadResult } from "../src/node/index.ts"
+import { resolveChanges } from "../src/core/diff/resolve.ts"
+import type { Spec } from "../src/core/spec.ts"
 
 const root = path.resolve(import.meta.dir, "..")
 const out = path.join(root, "docs/gallery")
@@ -20,12 +22,28 @@ export const ANIMATED = [
   ["failover.dataflow", "examples/failover.dataflow.json"],
   ["retry-helper.architecture", "examples/retry-helper.architecture.json"],
   ["agent-session.architecture", "examples/agent-session.architecture.json"],
+  ["batch-email.dataflow", "examples/changes/batch-email.dataflow.json"],
+  ["batch-email.changes.dataflow", "examples/changes/batch-email.changes.dataflow.json"],
+  ["auth-session-to-jwt.sequence", "examples/changes/auth-session-to-jwt.sequence.json"],
+  ["payment-retry.architecture", "examples/changes/payment-retry.architecture.json"],
+  ["etl-dedupe.dataflow", "examples/changes/etl-dedupe.dataflow.json"],
+  ["cache-layer.architecture", "examples/changes/cache-layer.architecture.json"],
+  ["rate-limit-plugin.architecture", "examples/changes/rate-limit-plugin.architecture.json"],
+  ["storyink-core.architecture", "examples/changes/storyink-core.architecture.json", "examples/changes/storyink-0.4.0.changes.json"],
 ] as const
+
+/** Load a spec; with `changes`, resolve stat / diff nodes from that diff first, like `storyink render --changes`. */
+export function loadWithChanges(file: string, changes?: string): LoadResult {
+  if (!changes) return loadSpec(file)
+  const ds = diffSetFrom(fs.readFileSync(changes, "utf8"), changes)
+  const r = resolveChanges(JSON.parse(fs.readFileSync(file, "utf8")) as Spec, ds)
+  return parseSource(JSON.stringify(r.spec), file)
+}
 const oi = process.argv.indexOf("--only")
 const only = oi > 0 ? new Set(process.argv[oi + 1].split(",")) : undefined
 if (import.meta.main)
-  for (const [name, file] of ANIMATED.filter(([n]) => !only || only.has(n))) {
-    const l = loadSpec(path.join(root, file))
+  for (const [name, file, changes] of ANIMATED.filter(([n]) => !only || only.has(n)) as readonly (readonly [string, string, string?])[]) {
+    const l = loadWithChanges(path.join(root, file), changes && path.join(root, changes))
     if (!l.spec) throw new Error(`invalid ${file}`)
     if (l.spec.story === undefined) l.spec.story = "auto"
     const r = writeAnimatedSvg(l.spec, path.join(out, `${name}.animated.svg`), { theme: "both", font })

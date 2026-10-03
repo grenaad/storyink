@@ -1,13 +1,14 @@
 /**
  * Render every example and Mermaid sample, snapshot light + dark, and write
- * docs/gallery/<name>.<theme>.png. Usage: bun run gallery [--width N]
+ * docs/gallery/<name>.<theme>.png. Usage: bun run gallery [--width N] [--only name,name]
  * (default width: derived from each diagram, 500..1600 px, so text stays at 1:1)
  */
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
-import { loadSpec, snapshot, writeDiagram } from "../src/node/index.ts"
+import { snapshot, writeDiagram } from "../src/node/index.ts"
+import { loadWithChanges } from "./animated-gallery.ts"
 
 /** Shrink committed PNGs with a 48-colour palette (lossless-looking for these flat figures). Needs ffmpeg; skipped otherwise. */
 function publish(src: string, dest: string) {
@@ -26,11 +27,20 @@ const ex = path.join(root, "examples")
 const files = [
   ...fs.readdirSync(ex).filter((f) => f.endsWith(".json")).map((f) => path.join(ex, f)),
   ...fs.readdirSync(path.join(ex, "mermaid")).map((f) => path.join(ex, "mermaid", f)),
+  // Change diagrams (delta / stat / diff nodes); storyink-* ones resolve against the real 0.4.0 diff.
+  ...fs.readdirSync(path.join(ex, "changes")).filter((f) => f.endsWith(".json") && !f.endsWith(".changes.json")).map((f) => path.join(ex, "changes", f)),
 ]
+const CHANGES: Record<string, string> = {
+  "storyink-core.architecture": path.join(ex, "changes/storyink-0.4.0.changes.json"),
+  "storyink-0.4.0.pr": path.join(ex, "changes/storyink-0.4.0.changes.json"),
+}
+const oi = process.argv.indexOf("--only")
+const only = oi > 0 ? new Set(process.argv[oi + 1].split(",")) : undefined
 let failed = 0
 for (const f of files) {
   const name = path.basename(f).replace(/\.(json|mmd)$/, "")
-  const l = loadSpec(f)
+  if (only && !only.has(name)) continue
+  const l = loadWithChanges(f, CHANGES[name])
   if (!l.ok || !l.spec) {
     console.error(`skip ${name}: invalid`)
     failed++
