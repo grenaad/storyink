@@ -36,6 +36,22 @@ export const inOutCubic = (x: number) => {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
 }
 
+/**
+ * Cruise ease for labelled pulses: speed ramps up over the first `a` of the flight, holds
+ * steady, and ramps down over the last `a` (trapezoidal velocity), so a payload label spends
+ * its time evenly along the wire instead of rushing through the middle like `inOutCubic`.
+ */
+export const CRUISE = 0.2
+export const cruise = (x: number, a = CRUISE) => {
+  const t = clamp01(x)
+  const v = 1 / (1 - a)
+  if (t < a) return (v * t * t) / (2 * a)
+  if (t > 1 - a) return 1 - (v * (1 - t) * (1 - t)) / (2 * a)
+  return v * (t - a / 2)
+}
+/** The flight ease of a pulse: labelled pulses cruise, all others keep `inOutCubic`. */
+export const pulseEase = (p: { label?: string }, x: number) => (p.label ? cruise(x) : inOutCubic(x))
+
 /** CSS-style cubic-bezier(x1, y1, x2, y2) evaluated at x. */
 export function cubicBezier(x1: number, y1: number, x2: number, y2: number): (x: number) => number {
   const bx = (t: number) => 3 * x1 * t * (1 - t) ** 2 + 3 * x2 * t * t * (1 - t) + t ** 3

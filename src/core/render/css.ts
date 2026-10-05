@@ -1,3 +1,5 @@
+import { TONES, toneKey } from "../../theme/tones.ts"
+import { hudCss } from "./Hud.tsx"
 import { delta as DL, fonts, geometry as G, type as T, v, ACCENTS, type Palette } from "../../theme/tokens.ts"
 
 /** Rules for rich nodes (panel / code / chip, bare groups); only emitted for scenes that use them. */
@@ -28,10 +30,69 @@ ${tk("kw", "codeKw")}${tk("op", "codeKw")}${tk("str", "codeStr")}${tk("num", "co
 `.trim()
 }
 
-/** Diagram rules. Colours come only from the `--si-*` variables. `rich` adds the rich-node rules, `changes` the change-diagram rules. */
-export function diagramCss(rich = false, changes = false): string {
+/**
+ * Diagram rules. Colours come only from the `--si-*` variables. `rich` adds the rich-node rules,
+ * `changes` the change-diagram rules, `tones` the story tone rules.
+ */
+export function diagramCss(rich = false, changes = false, tones = false, overlays = false): string {
   const css = rich ? `${baseCss()}\n${richCss()}` : baseCss()
-  return changes ? `${css}\n${deltaCss()}` : css
+  const c2 = changes ? `${css}\n${deltaCss()}` : css
+  const c3 = tones ? `${c2}\n${toneCss()}` : c2
+  return overlays ? `${c3}\n${overlayCss()}` : c3
+}
+
+/**
+ * Phase B overlays: node annotations (one mono line, muted or in a tone), toast cards (panel face,
+ * tone stripe, ink title, toned text). Only emitted for scenes that have them.
+ */
+export function overlayCss(): string {
+  const per = TONES.map((t) => {
+    const k = toneKey(t)
+    const c = `.si-t-${t}`
+    return [
+      `.storyink .si-ann${c},.storyink ${c} .si-ann,.storyink ${c} .si-toast-text{fill:${v(k)};}`,
+      `${c} .si-toast{stroke:${v(k)};}`,
+      `${c} .si-toast-stripe{fill:${v(k)};}`,
+    ].join("\n")
+  }).join("\n")
+  return `
+.storyink .si-ann{font-size:${10}px;fill:${v("inkMuted")};white-space:pre;}
+.si-toast{fill:${v("panel")};stroke:${v("line")};stroke-width:1;}
+.si-toast-stripe{fill:${v("inkFaint")};}
+.storyink .si-toast-title{font-size:11px;font-weight:700;fill:${v("ink")};}
+.storyink .si-toast-text{font-size:10px;fill:${v("inkMuted")};}
+${per}`.trim()
+}
+
+/**
+ * Story tones (`.si-t-<tone>` layers): a tinted face with a toned stroke, toned tag / detail /
+ * wires / ports / edge labels / group borders, toned pulses, pulse labels and caption emphasis.
+ * Only emitted for scenes that use tones (byte-identical otherwise).
+ */
+export function toneCss(): string {
+  const per = TONES.map((t) => {
+    const k = toneKey(t)
+    const ink = v(k)
+    const tint = v(`${k}Tint`)
+    const c = `.si-t-${t}`
+    return [
+      `${c} .si-face,${c} .si-win,${c} .si-soft,${c} .si-note,${c} .si-win-head{fill:${tint};stroke:${ink};}`,
+      `${c} .si-inset,${c} .si-note-fold,${c} .si-win-rule,${c} .si-chip-sheet{stroke:${ink};stroke-opacity:0.45;}`,
+      `${c} .si-ink-bar,${c} .si-dotfill{fill:${ink};}`,
+      `${c} .si-ring,${c} .si-glyph{stroke:${ink};}`,
+      `.storyink ${c} .si-tag,.storyink ${c} .si-detail,.storyink ${c} .si-edge-label,.storyink ${c} .si-group-label,.storyink ${c} .si-group-title{fill:${ink};}`,
+      `${c} .si-wire,${c} .si-arrow-open{stroke:${ink};}`,
+      `${c} .si-arrow{fill:${ink};stroke:${ink};}`,
+      `${c} .si-group,${c} .si-group-composite{fill:none;stroke:${ink};}`,
+      `.si-port${c},${c} .si-port,.si-pulse${c},.si-halo${c}{fill:${ink};}`,
+      `.si-ring-pulse${c},.si-trail${c},${c} .si-lit-rim,${c} .si-status path{stroke:${ink};}`,
+      `.storyink .si-plabel${c},.storyink .si-em${c},.si-em${c}{fill:${ink};color:${ink};}`,
+    ].join("\n")
+  }).join("\n")
+  return `
+${per}
+.storyink .si-plabel{font-size:${10}px;fill:${v("inkMuted")};pointer-events:none;}
+.si-lit-tone .si-lit-rim{fill:none;stroke-width:1;}`.trim()
 }
 
 /** Rules for change diagrams (delta / emphasis / stat / legend); only emitted for scenes that use them. */
@@ -161,8 +222,23 @@ export function fontFaceCss(b400: string, b700: string): string {
 }
 
 /** Viewer page rules (chrome, header, stage); narration rail / drawer rules only when used. */
-export function viewerCss(ui: { narrate?: boolean; drawer?: boolean; page?: boolean } = {}): string {
-  return baseViewerCss() + (ui.page ? `\n${figureCss()}` : "") + (ui.narrate || ui.drawer ? `\n${sideCss()}` : "") + (ui.narrate ? `\n${railCss()}` : "") + (ui.drawer ? `\n${drawerCss()}` : "")
+export function viewerCss(ui: { narrate?: boolean; drawer?: boolean; page?: boolean; acts?: boolean; hud?: boolean } = {}): string {
+  return baseViewerCss() + (ui.page ? `\n${figureCss()}` : "") + (ui.narrate || ui.drawer ? `\n${sideCss()}` : "") + (ui.narrate ? `\n${railCss()}` : "") + (ui.drawer ? `\n${drawerCss()}` : "") + (ui.acts ? `\n${actChipCss()}` : "") + (ui.hud ? `\n${hudCss(v as (k: string) => string, fonts.mono, TONES.map((t) => [t, toneKey(t)]))}` : "")
+}
+
+/**
+ * Act stories: the act chip pinned to the stage's top-right corner (not affected by pan / zoom):
+ * "● label", the dot in the act's tone; "◀◀ rewind" muted. Layers crossfade in one grid cell.
+ * Phase B's HUD sits below it (`.si-act-chip` is 26 px tall at top 14 px).
+ */
+export function actChipCss(): string {
+  const dots = TONES.map((t) => `.si-act-dot.si-t-${t}{background:${v(toneKey(t))};}`).join("\n")
+  return `.si-act-chip{position:absolute;top:14px;right:16px;display:grid;justify-items:end;pointer-events:none;z-index:2;transform:translateZ(0);}
+.si-act-layer{grid-area:1/1;display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 10px;box-sizing:border-box;border:1px solid ${v("chromeLine")};border-radius:13px;background:${v("chrome")};font-family:${fonts.mono};font-size:12px;color:${v("ink")};white-space:nowrap;overflow:hidden;}
+.si-act-layer.si-act-rewind{color:${v("inkMuted")};}
+.si-act-cap{display:flex;align-items:center;gap:7px;}
+.si-act-dot{width:8px;height:8px;border-radius:50%;background:${v("inkMuted")};flex:none;}
+${dots}`
 }
 
 /**

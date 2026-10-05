@@ -1,4 +1,5 @@
 import type { Box, Scene } from "../core/scene.ts"
+import { coexist } from "../core/story/acts.ts"
 
 export interface LintIssue {
   kind: "text-overflow" | "label-overflow" | "label-node" | "label-label" | "node-node"
@@ -73,14 +74,14 @@ export function lintDom(doc: ParentNode, scene: Scene, sheet: boolean): LintRepo
   }
   for (const l of labelBoxes)
     for (const n of nodeBoxes)
-      if (inter(l.box, n.box, 1) > 0) issues.push({ kind: "label-node", ids: [l.id, n.id], detail: "edge label overlaps a node" })
+      if (coexist(scene, l.id, n.id) && inter(l.box, n.box, 1) > 0) issues.push({ kind: "label-node", ids: [l.id, n.id], detail: "edge label overlaps a node" })
   for (let i = 0; i < labelBoxes.length; i++)
     for (let j = i + 1; j < labelBoxes.length; j++)
-      if (inter(labelBoxes[i].box, labelBoxes[j].box, 1) > 0)
+      if (coexist(scene, labelBoxes[i].id, labelBoxes[j].id) && inter(labelBoxes[i].box, labelBoxes[j].box, 1) > 0)
         issues.push({ kind: "label-label", ids: [labelBoxes[i].id, labelBoxes[j].id], detail: "edge labels overlap" })
   for (let i = 0; i < nodeBoxes.length; i++)
     for (let j = i + 1; j < nodeBoxes.length; j++)
-      if (inter(nodeBoxes[i].box, nodeBoxes[j].box) > 0)
+      if (coexist(scene, nodeBoxes[i].id, nodeBoxes[j].id) && inter(nodeBoxes[i].box, nodeBoxes[j].box) > 0)
         issues.push({ kind: "node-node", ids: [nodeBoxes[i].id, nodeBoxes[j].id], detail: "nodes overlap" })
   return { ok: issues.length === 0, issues, checked: { nodes: nodeBoxes.length, labels: labelBoxes.length, texts } }
 }

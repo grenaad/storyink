@@ -5,9 +5,11 @@ import type { Frame, Timeline } from "../story/types.ts"
 import { BeatSheet, Captions, Gate, Transport, useStory } from "./Story.tsx"
 import { motion as M, palettes, cssVar, type Palette, type ThemeName } from "../../theme/tokens.ts"
 import type { Scene } from "../scene.ts"
+import { Hud, HudLine } from "./Hud.tsx"
 import { Diagram } from "./Diagram.tsx"
+import { textWidth } from "../layout/measure.ts"
 import { CAMERA, cameraAt, cameraAtEnd, fitCamera, followStep, readableScale, stepAt, stepFocus, type Camera, type Viewport } from "../story/camera.ts"
-import { beatStops, steppedTime } from "../story/state.ts"
+import { actEndTime, beatStops, steppedTime, storyState } from "../story/state.ts"
 import { recompilePace } from "../story/compile.ts"
 import { hasNarration, looksLikePath, parseFileRef, resolveCite, type CiteTarget } from "../story/narrate.ts"
 import { Drawer, drawerIdForSi, drawerIds, drawerInfo, hasDrawer, type DrawerTarget } from "./Drawer.tsx"
@@ -41,6 +43,10 @@ export interface HashParams {
   sheet?: ThemeName[]
   /** `#sheet=beats`: one tile per story step. */
   beats?: boolean
+  /** `#sheet=acts`: one tile per act (its settled end), side by side. */
+  acts?: boolean
+  /** `#act=<id>`: seek (paused) to the settled end of that act. */
+  act?: string
   autoplay?: boolean
   motion?: "full" | "reduced"
   /** `#static=1`: the SSR final frame with the story runtime disabled. */
@@ -94,6 +100,8 @@ export function parseHash(hash: string): HashParams {
     ...(p.get("t") ? { t: p.get("t")! } : {}),
     ...(sheet === "beats"
       ? { beats: true }
+      : sheet === "acts"
+      ? { acts: true }
       : sheet
         ? { sheet: sheet.split(",").filter((x): x is ThemeName => x === "light" || x === "dark") }
         : {}),
@@ -108,6 +116,7 @@ export function parseHash(hash: string): HashParams {
     ...(p.get("rail") === "1" || p.get("rail") === "0" ? { rail: p.get("rail") === "1" } : {}),
     ...(p.get("fig") ? { fig: p.get("fig")! } : {}),
     ...(p.get("solo") === "1" ? { solo: true } : {}),
+    ...(p.get("act") ? { act: p.get("act")! } : {}),
   }
 }
 
@@ -288,11 +297,13 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
   // the browser (same function as the build, so the same numbers as `render --pace`).
   const tl = useMemo(() => (hydrated && scene.timeline ? recompilePace(scene, pace) : scene.timeline), [scene, hydrated, pace])
   const reduced = resolveMotion({ hash: hash.motion, stored: storedMotion, author: tl?.motion, system: sysReduced }) === "reduced"
+  // `#act=<id>`: the settled end of that act (a `#t=` wins).
+  const hashT = hash.t ?? (hash.act && tl ? actTime(tl, hash.act) : undefined)
   const story = useStory(scene, tl, {
-    ...(hash.t !== undefined ? { t: hash.t } : {}),
+    ...(hashT !== undefined ? { t: hashT } : {}),
     ...(hash.autoplay !== undefined ? { autoplay: hash.autoplay } : {}),
     reduced,
-    still: !hydrated || !!hash.still || !!hash.beats || !!hash.sheet?.length,
+    still: !hydrated || !!hash.still || !!hash.beats || !!hash.acts || !!hash.sheet?.length,
     stage,
   })
 
@@ -430,8 +441,8 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
 
   useEffect(() => {
     if (!hydrated) return
-    if (!hash.sheet?.length && !hash.beats) place()
-    hooks?.onReady(!!hash.sheet?.length || !!hash.beats)
+    if (!hash.sheet?.length && !hash.beats && !hash.acts) place()
+    hooks?.onReady(!!hash.sheet?.length || !!hash.beats || !!hash.acts)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hash, fit, hooks, hydrated])
 
@@ -489,7 +500,7 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
     const vp = viewport()
     if (!vp) return
     // After a settled `moveTo`: the follow camera at that time (pure), else fit.
-    if (tl && settledAt.current !== null && storyRef.current && !hash.beats && !hash.sheet?.length) {
+    if (tl && settledAt.current !== null && storyRef.current && !hash.beats && !hash.acts && !hash.sheet?.length) {
       const t = storyRef.current.now()
       if (follow && vp.w > 0 && vp.h > 0) {
         moveTo(cameraAt(scene, tl, t, vp, userK.current), false)
@@ -497,8 +508,8 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
       } else fit(false)
       return
     }
-    if (tl && hash.camera === "follow" && hash.t !== undefined && !armed.current) {
-      const t0 = hash.t === "end" ? tl.duration : Number(hash.t) || 0
+    if (tl && hash.camera === "follow" && hashT !== undefined && !armed.current) {
+      const t0 = hashT === "end" ? tl.duration : Number(hashT) || 0
       const t = reduced ? steppedTime(tl, t0) : t0
       moveTo(cameraAt(scene, tl, t, vp), false)
       // Chrome's raster of the canvas depends on whether a frame was painted at the fit transform
@@ -528,7 +539,7 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
     settledAt.current = null
   }
   useEffect(() => {
-    if (!tl || !story || !follow || !armed.current || hash.beats || hash.sheet?.length) return
+    if (!tl || !story || !follow || !armed.current || hash.beats || hash.acts || hash.sheet?.length) return
     if (mode === "gate" || mode === "rewinding") return
     const vp = viewport()
     if (!vp) return
@@ -775,7 +786,7 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
   // Client-only (never in the SSR markup): the stage size is final in the hydration commit, so
   // captures never race a rail / drawer appearing or disappearing. `#static=1` keeps them off
   // unless the hash asks explicitly (`#rail=1` / `#drawer=`), so snapshot gates compare like with like.
-  const uiOk = hydrated && !hash.beats && !sheet0(hash) && (!hash.still || hash.rail === true || hash.drawer !== undefined)
+  const uiOk = hydrated && !hash.beats && !hash.acts && !sheet0(hash) && (!hash.still || hash.rail === true || hash.drawer !== undefined)
   const railOn = hash.rail ?? (storedRail !== "off")
   const showRail = narrated && !!tl && uiOk && railOn && (hash.chrome || hash.rail === true)
   const drawerOk = drawable && uiOk && (hash.chrome || hash.drawer !== undefined)
@@ -868,6 +879,17 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
   }
   const resolved = theme ?? "light"
   const sheet = hash.sheet?.length ? hash.sheet : undefined
+  // Act stories: a rewind window glitches and blurs the figure (HTML only); a cut dips it.
+  const actFx = (() => {
+    const a = liveFrame?.act
+    if (!a || (a.rewind === undefined && a.dip === undefined)) return { on: false, glitch: 0, style: undefined }
+    const env = a.rewind !== undefined && !reduced ? Math.sin(Math.PI * a.rewind) : 0
+    const blur = Math.max(story?.blur ?? 0, 1.6 * env)
+    const glitch = Math.max(story?.glitch ?? 0, env)
+    const opacity = (story?.dim ?? 1) * (a.dip ?? 1)
+    const filter = glitch > 0 ? `url(#${pfx}si-glitch) blur(${+(0.3 * Math.max(blur, 1)).toFixed(2)}px)` : blur > 0 ? `blur(${+blur.toFixed(2)}px)` : undefined
+    return { on: true, glitch, style: { ...(opacity < 1 ? { opacity: +opacity.toFixed(3) } : {}), ...(filter ? { filter } : {}) } }
+  })()
   /** Export either the final frame (default) or the frame on screen. */
   const exportWith = (fn: () => void) => {
     if (!story || exportCurrent) return fn()
@@ -882,7 +904,7 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
   return (
     <LazyMotion features={domAnimation} strict>
     <div
-      className={`si-app${embedded ? ` si-embedded${expanded ? " si-expanded" : ""}` : ""}${hash.chrome ? "" : " si-nochrome"}${reduced ? " si-reduced" : ""}${hash.beats && tl ? " si-sheet-mode" : ""}`}
+      className={`si-app${embedded ? ` si-embedded${expanded ? " si-expanded" : ""}` : ""}${hash.chrome ? "" : " si-nochrome"}${reduced ? " si-reduced" : ""}${(hash.beats || hash.acts) && tl ? " si-sheet-mode" : ""}`}
       {...(embedded
         ? {
             ref: root,
@@ -899,7 +921,7 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
       {embedded ? (
         tl ? (
           <div className="si-fig-caps">
-            <Captions frame={hash.beats ? undefined : liveFrame} />
+            <Captions frame={hash.beats || hash.acts ? undefined : liveFrame} />
           </div>
         ) : null
       ) : (
@@ -907,11 +929,13 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
         <p className="si-kind">{TYPE_LABEL[scene.type]}</p>
         <h1 className="si-title">{scene.title}</h1>
         {scene.subtitle ? <p className="si-subtitle">{scene.subtitle}</p> : null}
-        {tl ? <Captions frame={hash.beats ? undefined : liveFrame} /> : null}
+        {tl ? <Captions frame={hash.beats || hash.acts ? undefined : liveFrame} /> : null}
       </header>
       )}
       {hash.beats && tl ? (
         <BeatSheet scene={scene} tl={tl} {...(hash.cols ? { cols: hash.cols } : {})} {...(hash.range ? { range: hash.range } : {})} />
+      ) : hash.acts && tl?.acts ? (
+        <ActSheet scene={scene} tl={tl} />
       ) : sheet ? (
         <div className="si-sheet" style={{ gridTemplateColumns: `repeat(${sheet.length}, 1fr)` }}>
           {sheet.map((t) => (
@@ -939,13 +963,15 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
           }}>
           <m.div
             className={fluid ? "si-canvas si-canvas-fluid" : "si-canvas"}
-            style={fluid ? { bottom: hash.chrome ? FIG_CHROME : 0 } : { x, y, scale: k, originX: 0, originY: 0, ...(hydrated && hash.camera === "follow" && hash.t !== undefined ? { visibility: "hidden" as const } : {}) }}
+            style={fluid ? { bottom: hash.chrome ? FIG_CHROME : 0 } : { x, y, scale: k, originX: 0, originY: 0, ...(hydrated && hash.camera === "follow" && hashT !== undefined ? { visibility: "hidden" as const } : {}) }}
           >
-            {story && story.glitch > 0 ? <GlitchFilter t={story.t} amount={story.glitch} id={`${pfx}si-glitch`} /> : null}
+            {story && (story.glitch > 0 || actFx.glitch > 0) ? <GlitchFilter t={story.t} amount={Math.max(story.glitch, actFx.glitch)} id={`${pfx}si-glitch`} /> : null}
             <div
               className="si-figure"
               style={
-                story && story.glitch > 0
+                actFx.on
+                  ? actFx.style
+                  : story && story.glitch > 0
                   ? { opacity: story.dim, filter: `url(#${pfx}si-glitch) blur(${+(0.3 * story.blur).toFixed(2)}px)` }
                   : story && (story.dim < 1 || story.blur > 0)
                   ? { opacity: story.dim, ...(story.blur > 0 ? { filter: `blur(${story.blur}px)` } : {}) }
@@ -956,6 +982,8 @@ export function App({ scene, hooks, embedded }: AppProps & { hooks?: ViewerHooks
               <div className="si-counters" />
             </div>
           </m.div>
+          {liveFrame?.act ? <ActChip act={liveFrame.act} /> : null}
+          {tl?.hud ? <Hud tl={tl} frame={liveFrame} below={!!tl.acts} /> : null}
           {story?.mode === "gate" ? <Gate onPlay={story.ungate} still={reduced} /> : null}
           {transport && tl ? <Transport c={transport} tl={tl} /> : null}
           <div className="si-tools" onPointerDown={(e) => e.stopPropagation()}>
@@ -1078,6 +1106,48 @@ function StageWrap({ on, side: rail, children }: { on: boolean; side: ReactNode;
     <div className="si-main">
       {children}
       {rail}
+    </div>
+  )
+}
+
+/** `#sheet=acts`: one tile per act at its settled end, side by side (the problem | fix diptych). */
+function ActSheet({ scene, tl }: { scene: Scene; tl: Timeline }) {
+  const acts = tl.acts ?? []
+  return (
+    <div className="si-sheet si-act-sheet" style={{ gridTemplateColumns: `repeat(${acts.length}, 1fr)` }}>
+      {acts.map((a) => (
+        <div key={a.id}>
+          <p className="si-sheet-cap si-act-cap">
+            <i className={`si-act-dot${a.tone ? ` si-t-${a.tone}` : ""}`} />
+            {a.label}
+            {tl.hud ? <HudLine tl={tl} frame={storyState(scene, tl, actEndTime(tl, a.id) ?? tl.duration)} /> : null}
+          </p>
+          <Diagram scene={scene} copy={`act-${a.id}`} frame={storyState(scene, tl, actEndTime(tl, a.id) ?? tl.duration)} />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** `#act=` as a story time (string, like `#t=`). */
+const actTime = (tl: Timeline, id: string): string | undefined => {
+  const t = actEndTime(tl, id)
+  return t === undefined ? undefined : t >= tl.duration ? "end" : String(t)
+}
+
+/** Chip width from the mono advance (whole px: the same raster every capture). */
+const chipWidth = (text: string, dot: boolean): number => Math.ceil(textWidth(text, 12)) + 22 + (dot ? 15 : 0)
+
+/** Act chip: "● label" pinned to the stage's top-right corner; "◀◀ rewind" while rewinding. */
+function ActChip({ act }: { act: NonNullable<Frame["act"]> }) {
+  return (
+    <div className="si-act-chip" aria-live="polite" data-act={act.id}>
+      {act.chip.map((c, k) => (
+        <span key={`${k}:${c.text}`} className={`si-act-layer${c.rewind ? " si-act-rewind" : ""}`} style={{ width: chipWidth(c.text, !c.rewind), ...(c.o < 1 ? { opacity: c.o } : {}) }} {...(c.o < 0.5 ? { "aria-hidden": true } : {})}>
+          {c.rewind ? null : <i className={`si-act-dot${c.tone ? ` si-t-${c.tone}` : ""}`} />}
+          {c.text}
+        </span>
+      ))}
     </div>
   )
 }

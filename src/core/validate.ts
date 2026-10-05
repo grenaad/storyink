@@ -19,6 +19,8 @@ import {
   type GraphNode,
   type GraphSpec,
   type MessageRef,
+  type StoryAct,
+  type HudItem,
   type StoryStep,
   type SequenceSpec,
   type Spec,
@@ -32,6 +34,8 @@ import { codeVersions } from "./layout/panels.ts"
 import { hunksOfNode, rowsOfNode } from "./layout/diffnode.ts"
 import { applyChanges } from "./layout/delta.ts"
 import { parseHunks } from "./diff/parse.ts"
+import { TONES } from "../theme/tones.ts"
+import { membership } from "./story/acts.ts"
 
 export type Severity = "error" | "warning"
 
@@ -203,6 +207,7 @@ export function validate(input: unknown): ValidationResult {
     const st = validateStoryShape(c, value.story)
     if (st !== undefined) spec.story = st
   }
+  checkActs(c, spec)
   if (!c.failed && spec.story !== undefined) {
     // Resolve ids and timing against the real layout.
     try {
@@ -221,13 +226,23 @@ const STEP_KEYS = new Set([
   "id", "at", "reveal", "pulse", "highlight", "caption", "counter", "stop", "hold",
   // 0.4 content steps
   "type", "line", "status", "dim", "undim", "hide", "show", "set", "clear", "wire", "unwire", "glow", "unglow", "focus",
+  // tones (colour carries meaning)
+  "tone",
   // diff code nodes
   "apply",
   // change diagrams
   "change",
   // narration rail
   "narrate",
+  // acts
+  "act", "enter",
+  // overlays
+  "toast", "dismiss",
 ])
+
+const TOAST_KEYS = new Set(["id", "near", "title", "text", "tone", "for"])
+
+const PULSE_KEYS = new Set(["edge", "route", "duration", "reverse", "delay", "tone", "label", "land", "tint", "stain"])
 
 /** Narrate shape: heading / body strings, cites `{ text, ref }` whose text occurs in the body, in order. */
 function validateNarrate(c: Collector, v: unknown, p: string): void {
@@ -270,7 +285,9 @@ function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefin
     c.error("story", `"story" must be an object or "auto"`, `{ "steps": [ { "reveal": ["api"] } ] } or "auto"`)
     return undefined
   }
-  unknownKeys(c, raw, new Set(["autoplay", "camera", "end", "motion", "pace", "steps", "spotlight", "rewind"]), "story")
+  unknownKeys(c, raw, new Set(["autoplay", "camera", "end", "motion", "pace", "steps", "spotlight", "rewind", "acts", "hud"]), "story")
+  const acts = actsOf(c, raw.acts)
+  const hud = hudOf(c, raw.hud)
   if (raw.spotlight !== undefined && typeof raw.spotlight !== "boolean" && raw.spotlight !== "veil") c.error("story.spotlight", `"spotlight" must be true, false or "veil"`, `"veil" dims everything outside the step's focus`)
   const rewind = oneOf(c, raw.rewind, ["tape", "glitch"] as const, "story.rewind", "story rewind")
   const motion = oneOf(c, raw.motion, ["full", "reduced", "system"] as const, "story.motion", "story motion")
@@ -284,6 +301,8 @@ function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefin
     ...(paceOk && typeof raw.pace === "number" ? { pace: raw.pace } : {}),
     ...(raw.spotlight === true ? { spotlight: true } : raw.spotlight === "veil" ? { spotlight: "veil" as const } : {}),
     ...(rewind ? { rewind } : {}),
+    ...(acts ? { acts } : {}),
+    ...(hud ? { hud } : {}),
   }
   if (raw.autoplay !== undefined && typeof raw.autoplay !== "boolean") c.error("story.autoplay", `"autoplay" must be true or false`)
   const end = oneOf(c, raw.end, ["hold", "loop"] as const, "story.end", "story end")
@@ -320,10 +339,28 @@ function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefin
       const list = Array.isArray(s0.counter) ? s0.counter : [s0.counter]
       if (!list.every((x) => isObj(x) && typeof x.id === "string" && typeof x.to === "number")) c.error(`${p}.counter`, `"counter" must be { "id": "...", "to": number }`)
     }
-    for (const k of ["undim", "hide", "show", "clear", "glow", "unglow"]) strList(s0[k], k)
+    for (const k of ["undim", "hide", "show", "clear", "unglow"]) strList(s0[k], k)
+    if (isObj(s0.glow)) {
+      const g = s0.glow
+      unknownKeys(c, g, new Set(["ids", "tone"]), `${p}.glow`)
+      if (!(typeof g.ids === "string" || (Array.isArray(g.ids) && g.ids.every((x) => typeof x === "string")))) c.error(`${p}.glow.ids`, `"ids" must be a node id or a list of node ids`, `{ "ids": ["api"], "tone": "warn" }`)
+    } else strList(s0.glow, "glow")
+    if (s0.tone !== undefined) {
+      const list = Array.isArray(s0.tone) ? s0.tone : [s0.tone]
+      list.forEach((x, k) => {
+        const q = `${p}.tone${Array.isArray(s0.tone) ? `[${k}]` : ""}`
+        if (!isObj(x) || !("ids" in x) || !("to" in x)) return c.error(q, `"tone" must be { "ids": id | [ids], "to": tone | null, "stagger"?: s }`, `{ "ids": ["db", "api"], "to": "risk", "stagger": 0.15 }`)
+        unknownKeys(c, x, new Set(["ids", "to", "stagger"]), q)
+        if (!(typeof x.ids === "string" || (Array.isArray(x.ids) && x.ids.length && x.ids.every((y) => typeof y === "string")))) c.error(`${q}.ids`, `"ids" must be an id or a non-empty list of ids`)
+        if (x.to !== null && typeof x.to !== "string") c.error(`${q}.to`, `"to" must be a tone name or null`, `one of: neutral, note, good, warn, risk (null clears)`)
+        if (x.stagger !== undefined && !(typeof x.stagger === "number" && Number.isFinite(x.stagger) && x.stagger >= 0 && x.stagger <= 5)) c.error(`${q}.stagger`, `"stagger" must be seconds from 0 to 5`)
+      })
+    }
     if (s0.focus !== undefined && typeof s0.focus !== "string" && !(Array.isArray(s0.focus) && s0.focus.length && s0.focus.every((x) => typeof x === "string"))) c.error(`${p}.focus`, `"focus" must be an id or a list of ids`)
     strList(s0.change, "change")
     if (s0.narrate !== undefined) validateNarrate(c, s0.narrate, `${p}.narrate`)
+    if (s0.act !== undefined && typeof s0.act !== "string") c.error(`${p}.act`, `"act" must be an act id`)
+    if (s0.act !== undefined && !acts) c.error(`${p}.act`, `"act" needs "story.acts"`, `declare the acts: "acts": [{ "id": "before", "label": "..." }, { "id": "after", "label": "..." }]`)
     const objList = (key: string, ok: (x: unknown) => boolean, msg: string) => {
       const v = s0[key]
       if (v === undefined) return
@@ -334,7 +371,8 @@ function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefin
     objList("type", idOrObj("id"), `"type" must be a code node / panel row id, or { "id": ..., "cps"?: n }`)
     objList("line", idOrObj("id"), `"line" must be "code#2", "code#2-4" or { "id": ..., "lines"?: .., "off"?: true }`)
     objList("status", (x) => isObj(x) && typeof x.id === "string" && typeof x.to === "string" && (ROW_STATUSES as readonly string[]).includes(x.to), `"status" must be { "id": "panel#row", "to": "running" | "done" | "error" | "none" }`)
-    objList("set", (x) => isObj(x) && typeof x.id === "string" && Object.keys(x).length >= 2, `"set" must be { "id": ..., "code" | "text" | "detail" | "tag" | "label": ... }`)
+    objList("set", (x) => isObj(x) && typeof x.id === "string" && Object.keys(x).length >= 2, `"set" must be { "id": ..., "code" | "text" | "detail" | "tag" | "label" | "tone": ... }`)
+    objList("set", (x) => !isObj(x) || x.tone === undefined || x.tone === null || typeof x.tone === "string", `"set" "tone" must be a tone name or null`)
     objList(
       "set",
       (x) =>
@@ -356,7 +394,25 @@ function validateStoryShape(c: Collector, raw: unknown): Spec["story"] | undefin
       const list = Array.isArray(s0.pulse) ? s0.pulse : [s0.pulse]
       if (!list.every((x) => typeof x === "string" || (isObj(x) && (typeof x.edge === "string" || Array.isArray(x.route)))))
         c.error(`${p}.pulse`, `"pulse" must be an edge id, "from->to", or { "edge" | "route" }`)
+      list.forEach((x, k) => {
+        if (isObj(x)) unknownKeys(c, x, PULSE_KEYS, `${p}.pulse${Array.isArray(s0.pulse) ? `[${k}]` : ""}`)
+      })
     }
+    if (s0.toast !== undefined) {
+      const list = Array.isArray(s0.toast) ? s0.toast : [s0.toast]
+      list.forEach((x, k) => {
+        const q = `${p}.toast${Array.isArray(s0.toast) ? `[${k}]` : ""}`
+        if (!isObj(x) || typeof x.near !== "string" || typeof x.text !== "string" || !x.text.trim())
+          return c.error(q, `"toast" must be { "near": node id, "text": "...", "title"?, "tone"?, "for"?: s, "id"? }`, `{ "near": "cli", "title": "Allow access?", "text": "vault wants your password", "tone": "warn" }`)
+        unknownKeys(c, x, TOAST_KEYS, q)
+        if (x.title !== undefined && typeof x.title !== "string") c.error(`${q}.title`, `"title" must be text`)
+        if (x.id !== undefined && (typeof x.id !== "string" || !ID_RE.test(x.id))) c.error(`${q}.id`, `invalid toast id ${JSON.stringify(x.id)}`, "use letters, digits, _ . : -")
+        if (x.tone !== undefined) oneOf(c, x.tone, TONES, `${q}.tone`, "tone")
+        if (x.for !== undefined && !(typeof x.for === "number" && Number.isFinite(x.for) && x.for > 0 && x.for <= 60)) c.error(`${q}.for`, `"for" must be seconds from 0 to 60`)
+        wideCheck(c, `${q}.text`, x.text)
+      })
+    }
+    if (s0.dismiss !== undefined && s0.dismiss !== "all") strList(s0.dismiss, "dismiss")
     steps.push(s0 as StoryStep)
   })
   return { ...opts, ...(end ? { end } : {}), steps }
@@ -368,7 +424,7 @@ function validateGraph(
   type: GraphSpec["type"],
   base: { title: string; subtitle?: string },
 ): GraphSpec {
-  unknownKeys(c, o, new Set([...COMMON_KEYS, "nodes", "edges", "groups"]), "")
+  unknownKeys(c, o, new Set([...COMMON_KEYS, "nodes", "edges", "groups", "annotations"]), "")
   const dirOf = (v: unknown, path: string): GraphSpec["direction"] => {
     if (v === undefined) return undefined
     const d = typeof v === "string" ? v.toUpperCase() : v
@@ -391,7 +447,7 @@ function validateGraph(
   arr(c, o, "groups", false).forEach((g, i) => {
     const p = `groups[${i}]`
     if (!isObj(g)) return c.error(p, "group must be an object", `{ "id": "vpc", "label": "VPC" }`)
-    unknownKeys(c, g, new Set(["id", "label", "kind", "parent", "direction", "bare", "delta"]), p)
+    unknownKeys(c, g, new Set(["id", "label", "kind", "parent", "direction", "bare", "delta", "in"]), p)
     const gDelta = oneOf(c, g.delta, DELTAS, `${p}.delta`, "delta")
     if (g.bare !== undefined && typeof g.bare !== "boolean") c.error(`${p}.bare`, `"bare" must be true or false`)
     const id = str(c, g, "id", p, true)
@@ -406,6 +462,7 @@ function validateGraph(
       ...(g.direction !== undefined && dirOf(g.direction, `${p}.direction`) ? { direction: dirOf(g.direction, `${p}.direction`) } : {}),
       ...(g.bare === true ? { bare: true } : {}),
       ...(gDelta ? { delta: gDelta } : {}),
+      ...inOf(c, g.in, `${p}.in`),
     })
   })
 
@@ -415,7 +472,7 @@ function validateGraph(
   rawNodes.forEach((n, i) => {
     const p = `nodes[${i}]`
     if (!isObj(n)) return c.error(p, "node must be an object", `{ "id": "api", "label": "API" }`)
-    unknownKeys(c, n, new Set(["id", "label", "kind", "detail", "tag", "parent", "group", "direction", "counter", ...RICH_NODE_KEYS, ...CHANGE_NODE_KEYS]), p)
+    unknownKeys(c, n, new Set(["id", "label", "kind", "detail", "tag", "parent", "group", "direction", "counter", "in", ...RICH_NODE_KEYS, ...CHANGE_NODE_KEYS]), p)
     const id = str(c, n, "id", p, true)
     if (!id) return
     if (!ID_RE.test(id)) c.error(`${p}.id`, `invalid id "${id}"`, "use letters, digits, _ . : -")
@@ -433,6 +490,7 @@ function validateGraph(
       ...(counterOf(c, n.counter, `${p}.counter`) ?? {}),
       ...richOf(c, n, kind ?? defaultKind, p, id),
       ...changeOf(c, n, p, "node", kind ?? defaultKind),
+      ...inOf(c, n.in, `${p}.in`),
     })
   })
   const counterIds = new Set<string>()
@@ -483,7 +541,7 @@ function validateGraph(
   arr(c, o, "edges", false).forEach((e, i) => {
     const p = `edges[${i}]`
     if (!isObj(e)) return c.error(p, "edge must be an object", `{ "from": "a", "to": "b" }`)
-    unknownKeys(c, e, new Set(["id", "from", "to", "label", "style", "arrow", ...CHANGE_EDGE_KEYS]), p)
+    unknownKeys(c, e, new Set(["id", "from", "to", "label", "style", "arrow", "in", ...CHANGE_EDGE_KEYS]), p)
     const ech = changeOf(c, e, p, "edge")
     const from = str(c, e, "from", p, true)
     const to = str(c, e, "to", p, true)
@@ -511,7 +569,29 @@ function validateGraph(
       style: style ?? "solid",
       arrow: arrow ?? "end",
       ...ech,
+      ...inOf(c, e.in, `${p}.in`),
     })
+  })
+
+  // Annotations: one mono line on a node (ids share the node namespace).
+  const annotations: NonNullable<GraphSpec["annotations"]> = []
+  arr(c, o, "annotations", false).forEach((a, i) => {
+    const p = `annotations[${i}]`
+    if (!isObj(a)) return c.error(p, "annotation must be an object", `{ "id": "chat", "on": "agent", "text": "chat ▸ ..." }`)
+    unknownKeys(c, a, new Set(["id", "on", "side", "text", "tone", "in"]), p)
+    const id = str(c, a, "id", p, true)
+    const on = str(c, a, "on", p, true)
+    const text = typeof a.text === "string" ? a.text : undefined
+    if (text === undefined) c.error(`${p}.text`, `"text" must be a string`, `"text": "chat ▸ ..."`)
+    const side = oneOf(c, a.side, ["top", "bottom"] as const, `${p}.side`, "annotation side")
+    const tone = oneOf(c, a.tone, TONES, `${p}.tone`, "tone")
+    if (!id || !on || text === undefined) return
+    if (!ID_RE.test(id)) c.error(`${p}.id`, `invalid id "${id}"`, "use letters, digits, _ . : -")
+    claim(id, p)
+    if (!nodes.some((n) => n.id === on)) return c.error(`${p}.on`, `unknown node "${on}"`, hintId(on, nodes.map((n) => n.id)))
+    if (text.length > 64) c.warn(`${p}.text`, `annotation is ${text.length} chars; long lines widen the layout`, "keep annotations to one short line (≤ 64 chars)")
+    wideCheck(c, `${p}.text`, text)
+    annotations.push({ id, on, text, ...(side ? { side } : {}), ...(tone ? { tone } : {}), ...inOf(c, a.in, `${p}.in`) })
   })
 
   return {
@@ -521,7 +601,42 @@ function validateGraph(
     nodes,
     edges,
     groups,
+    ...(annotations.length ? { annotations } : {}),
   }
+}
+
+/** `story.hud`: `{ id, label, value?, tone?, prefix?, suffix?, at? }` metrics. */
+function hudOf(c: Collector, v: unknown): HudItem[] | undefined {
+  if (v === undefined) return undefined
+  if (!Array.isArray(v)) {
+    c.error("story.hud", `"hud" must be a list of { "id", "label", "value"? }`, `"hud": [{ "id": "prompts", "label": "prompts", "value": 0 }]`)
+    return undefined
+  }
+  const out: HudItem[] = []
+  v.forEach((h, k) => {
+    const p = `story.hud[${k}]`
+    if (!isObj(h)) return c.error(p, `a HUD metric must be { "id", "label", "value"? }`)
+    unknownKeys(c, h, new Set(["id", "label", "value", "tone", "prefix", "suffix", "at"]), p)
+    const id = str(c, h, "id", p, true)
+    const label = str(c, h, "label", p, true)
+    const tone = oneOf(c, h.tone, TONES, `${p}.tone`, "tone")
+    const at = oneOf(c, h.at, ["top-right", "bottom-left"] as const, `${p}.at`, "HUD position")
+    if (h.value !== undefined && !(typeof h.value === "number" && Number.isFinite(h.value))) c.error(`${p}.value`, `"value" must be a number`)
+    for (const f of ["prefix", "suffix"]) if (h[f] !== undefined && typeof h[f] !== "string") c.error(`${p}.${f}`, `"${f}" must be text`)
+    if (!id || label === undefined) return
+    if (!ID_RE.test(id)) c.error(`${p}.id`, `invalid id "${id}"`, "use letters, digits, _ . : -")
+    if (out.some((x) => x.id === id)) return c.error(`${p}.id`, `duplicate HUD id "${id}"`)
+    out.push({
+      id,
+      label,
+      ...(typeof h.value === "number" && Number.isFinite(h.value) ? { value: h.value } : {}),
+      ...(tone ? { tone } : {}),
+      ...(typeof h.prefix === "string" ? { prefix: h.prefix } : {}),
+      ...(typeof h.suffix === "string" ? { suffix: h.suffix } : {}),
+      ...(at ? { at } : {}),
+    })
+  })
+  return out.length ? out : undefined
 }
 
 const RICH_NODE_KEYS = ["icon", "rows", "code", "lang", "size", "muted", "stack"]
@@ -1054,4 +1169,78 @@ function diffOf(c: Collector, v: unknown, p: string, kind?: string): GraphNode["
     ok = false
   }
   return ok ? (v as unknown as GraphNode["diff"]) : undefined
+}
+
+/** `in`: a list of act ids (checked against `story.acts` in `checkActs`). */
+function inOf(c: Collector, v: unknown, p: string): { in?: string[] } {
+  if (v === undefined) return {}
+  if (!Array.isArray(v) || !v.length || !v.every((x) => typeof x === "string")) {
+    c.error(p, `"in" must be a non-empty list of act ids`, `"in": ["after"]`)
+    return {}
+  }
+  return { in: v as string[] }
+}
+
+/** `story.acts`: 2–6 `{ id, label, tone? }` with unique ids. */
+function actsOf(c: Collector, v: unknown): StoryAct[] | undefined {
+  if (v === undefined) return undefined
+  if (!Array.isArray(v)) {
+    c.error("story.acts", `"acts" must be a list of { "id", "label", "tone"? }`, `"acts": [{ "id": "before", "label": "today", "tone": "risk" }, { "id": "after", "label": "with the fix", "tone": "good" }]`)
+    return undefined
+  }
+  if (v.length < 2 || v.length > 6) c.error("story.acts", `a story has 2 to 6 acts, got ${v.length}`, v.length < 2 ? "add a second act (the fix), or drop \"acts\"" : "split the story")
+  const out: StoryAct[] = []
+  const seen = new Set<string>()
+  v.forEach((a, k) => {
+    const p = `story.acts[${k}]`
+    if (!isObj(a)) return c.error(p, `an act must be { "id", "label", "tone"? }`)
+    unknownKeys(c, a, new Set(["id", "label", "tone"]), p)
+    const id = str(c, a, "id", p, true)
+    const label = str(c, a, "label", p, true)
+    const tone = oneOf(c, a.tone, TONES, `${p}.tone`, "tone")
+    if (!id) return
+    if (!ID_RE.test(id)) c.error(`${p}.id`, `invalid act id "${id}"`, "use letters, digits, _ . : -")
+    if (seen.has(id)) c.error(`${p}.id`, `duplicate act id "${id}"`)
+    seen.add(id)
+    out.push({ id, label: label ?? id, ...(tone ? { tone } : {}) })
+  })
+  return out
+}
+
+/** Acts against the elements: graph diagrams only, known ids in `in`, every edge on stage somewhere. */
+function checkActs(c: Collector, spec: Spec): void {
+  const st = spec.story
+  const acts = st && typeof st === "object" ? st.acts : undefined
+  if (spec.type === "sequence") {
+    if (acts) c.error("story.acts", "acts need a graph diagram", "sequence diagrams: tell the scenarios as two diagrams (or use an architecture / dataflow diagram)")
+    return
+  }
+  const g = spec as GraphSpec
+  const els: [string, { in?: string[] }][] = [
+    ...(g.groups ?? []).map((x, i) => [`groups[${i}]`, x] as [string, { in?: string[] }]),
+    ...g.nodes.map((x, i) => [`nodes[${i}]`, x] as [string, { in?: string[] }]),
+    ...(g.edges ?? []).map((x, i) => [`edges[${i}]`, x] as [string, { in?: string[] }]),
+    ...(g.annotations ?? []).map((x, i) => [`annotations[${i}]`, x] as [string, { in?: string[] }]),
+  ]
+  const ids = (acts ?? []).map((a) => a.id)
+  for (const [p, x] of els) {
+    if (!x.in) continue
+    if (!acts) {
+      c.warn(`${p}.in`, `"in" is ignored: the story has no "acts"`, `declare "story": { "acts": [...] }`)
+      continue
+    }
+    x.in.forEach((id, k) => {
+      if (!ids.includes(id)) {
+        const guess = closest(id, ids)
+        c.error(`${p}.in[${k}]`, `unknown act "${id}"`, guess ? `did you mean "${guess}"? (acts: ${ids.join(", ")})` : `acts: ${ids.join(", ")}`)
+      }
+    })
+  }
+  if (!acts || acts.length < 2) return
+  const mem = membership(g, acts)
+  ;(g.edges ?? []).forEach((e, i) => {
+    const id = e.id ?? `${e.from}->${e.to}`
+    if (mem.get(id)?.length !== 0) return
+    c.error(`edges[${i}]`, `edge "${id}" is never on stage: no act has the edge and both its ends`, `check "in" on "${id}", "${parseRef(e.from).node}" and "${parseRef(e.to).node}"`)
+  })
 }

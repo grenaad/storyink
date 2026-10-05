@@ -6,11 +6,15 @@ import type { Diagnostic } from "../validate.ts"
 import { autoStory } from "./auto.ts"
 import { changesStory, changeWindow, expandChanges, wireDuration } from "./changes.ts"
 import { stepFocus } from "./camera.ts"
-import { springSettle } from "./ease.ts"
+import { cruise, inOutCubic, springSettle } from "./ease.ts"
+import { isTone, TONES, type Tone } from "../../theme/tones.ts"
+import { closest } from "../suggest.ts"
+import { clipLabel, PULSE_LABEL_MAX } from "../layout/storyscan.ts"
 import { flattenPath } from "../layout/paths.ts"
-import { beatGroups } from "./state.ts"
+import { beatGroups, pulseLabelAnchor, pulseLabelWindows } from "./state.ts"
+import { actMorphs, actPlan, CUT, NEVER, REWIND, timelineActs, unset, type ActWindow } from "./acts.ts"
 import { boxOfRef, parseRef } from "../anchor.ts"
-import { CARET_LINGER, Content, CROSSFADE, LIT_FALL, LIT_RISE, STATUS_DRAW } from "./content.ts"
+import { CARET_LINGER, Content, CROSSFADE, LIT_FALL, LIT_RISE, STATUS_DRAW, TOAST_IN, TOAST_OUT, TONE_FADE } from "./content.ts"
 import type { StorySource, Timeline, TimelineDraw, TimelineGlow, TimelinePulse } from "./types.ts"
 
 const REACT_SETTLE = springSettle(S.springs.react)
@@ -36,6 +40,29 @@ export function polyLength(points: Pt[]): number {
 }
 
 /** Resolve an edge / message reference: exact id, else a unique "from->to". */
+/**
+ * Default flight time of a pulse over route length `L` px. Unlabelled: L / 520 px/s in
+ * [0.45, 1.6] s (unchanged). Labelled: the label must move with the dot (not held clear of a
+ * box, not mid-handoff — `pulseLabelAnchor`'s `follow`) for a reading budget of 0.6 s + 0.05 s
+ * per shown character; the flight is that budget divided by the following share of the
+ * (cruise-eased) flight, clamped to [1.2, 3.2] s and never faster than the unlabelled flight.
+ * An authored `duration` always wins (handled by the caller).
+ */
+export function pulseFlight(L: number, label?: string, spans: { s0: number; s1: number }[] = [], points?: Pt[]): number {
+  const P = S.pulse
+  const base = Math.min(P.flightMax, Math.max(P.flightMin, L / P.pxPerSecond))
+  if (!label) return base
+  const read = P.labelRead + P.labelPerChar * Array.from(label).length
+  const hops = spans.length ? spans : [{ s0: 0, s1: L }]
+  const win = pulseLabelWindows(label, L, hops, points)
+  const N = 400
+  let ok = 0
+  for (let i = 0; i < N; i++) if (pulseLabelAnchor(win, hops, cruise((i + 0.5) / N) * L).follow) ok++
+  const share = ok / N
+  const flight = share < 0.05 ? P.labelFlightMin : Math.min(P.labelFlightMax, Math.max(P.labelFlightMin, read / share))
+  return Math.round(Math.max(base, flight) * 1000) / 1000
+}
+
 export function resolveEdge(scene: Scene, ref: string): { id?: string; error?: string; hint?: string } {
   const m = /^(.+?)->(.+)$/.exec(ref)
   const dup = m ? scene.edges.filter((e) => e.from === m[1] && e.to === m[2]).length : 0
@@ -104,6 +131,11 @@ export function contentEvents(tl: Timeline): [number, number][] {
   for (const l of Object.values(tl.wires ?? {})) for (const e of l) out.push([e.t0, e.t1])
   for (const l of Object.values(tl.applies ?? {})) for (const e of l) out.push([e.t0, e.t1])
   for (const e of Object.values(tl.changes ?? {})) out.push([e.t0, e.t1])
+  for (const l of Object.values(tl.tones ?? {})) for (const e of l) out.push([e.t, e.t + TONE_FADE])
+  for (const w of Object.values(tl.toasts ?? {})) {
+    out.push([w.t0, w.t0 + TOAST_IN])
+    if (w.t1 !== undefined) out.push([w.t1, w.t1 + TOAST_OUT])
+  }
   // Status glyph transitions (not the spinner / shimmer: ambient, never part of a settle).
   for (const l of Object.values(tl.status ?? {})) for (const e of l) out.push([e.t, e.t + Math.max(REACT_SETTLE, e.to === "done" || e.to === "error" ? STATUS_DRAW : 0)])
   for (const l of Object.values(tl.lit ?? {}))
@@ -166,7 +198,58 @@ export function compileStory(scene: Scene, spec: Spec): CompileResult {
   // Diagnostics are about the authored story (pass 1), including the length warning: reading
   // holds are the viewer's pacing, not story the author has to shorten.
   const timeline = second.timeline && { ...second.timeline, pace, source: storySource(scene, spec) }
+  if (timeline?.acts && timeline.acts.length > 1) actStates(scene, spec, timeline)
   return { timeline, diagnostics: first.diagnostics }
+}
+
+/** Persistent channels: what an act's segment overrides (everything time-local stays shared). */
+const STATE_KEYS = ["appear", "draw", "counters", "typing", "versions", "bars", "levels", "vis", "wires", "status", "lit", "applies", "tones", "changes", "toasts"] as const
+
+/**
+ * Acts entered by a rewind or a cut start from the previous act's start state: compile the story
+ * again with the steps of every undone act moved to `NEVER` (pinned to the same step starts) and
+ * keep its persistent channels as that act's `state`.
+ */
+function actStates(scene: Scene, spec: Spec, tl: Timeline): void {
+  const st = spec.story as Story & { steps: StoryStep[] }
+  const ap = actPlan(st.steps, st.acts!, () => {}, () => {})
+  const t0 = tl.steps.map((s) => s.t0)
+  const undone = new Set<number>()
+  let last = ""
+  for (let j = 1; j < tl.acts!.length; j++) {
+    const a = tl.acts![j]
+    const k = ap.acts.findIndex((x) => x.id === a.id)
+    if (a.enter === "continue") continue
+    undone.add(k - 1)
+    const cancel = new Set(st.steps.map((_, i) => i).filter((i) => undone.has(ap.of[i])))
+    const key = [...cancel].join(",")
+    if (key === last) continue
+    last = key
+    const seg = compileOnce(scene, spec, undefined, undefined, undefined, { t0, cancel }).timeline
+    if (!seg) continue
+    const state: Partial<Timeline> = {}
+    for (const f of STATE_KEYS) {
+      const v = seg[f] ?? tl[f]
+      if (v === undefined) continue
+      ;(state as Record<string, unknown>)[f] = seg[f] !== undefined ? sortChannel(seg[f]) : Array.isArray(v) ? [] : {}
+    }
+    a.state = state
+  }
+}
+
+/** Channel lists in time order (a segment's "never" events sit after later acts' events). */
+function sortChannel(v: unknown): unknown {
+  const tOf = (e: { t?: number; t0?: number }) => e.t ?? e.t0 ?? 0
+  if (Array.isArray(v)) return [...v].sort((a, b) => tOf(a) - tOf(b))
+  if (!v || typeof v !== "object") return v
+  const out: Record<string, unknown> = {}
+  for (const [k, x] of Object.entries(v)) {
+    if (Array.isArray(x)) out[k] = [...x].sort((a, b) => tOf(a) - tOf(b))
+    else if (x && typeof x === "object" && Array.isArray((x as { events?: unknown }).events))
+      out[k] = { ...x, events: [...(x as { events: { t: number }[] }).events].sort((a, b) => a.t - b.t) }
+    else out[k] = x
+  }
+  return out
 }
 
 /**
@@ -199,7 +282,13 @@ export function recompilePace(scene: Scene, pace: number): Timeline | undefined 
 /** The authored timing without reading holds (pass 1 of `compileStory`; for tests and tooling). */
 export const compileStoryAuthored = (scene: Scene, spec: Spec): CompileResult => compileOnce(scene, spec)
 
-function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<number, { group: number[]; hold: number; still: number }>, authoredT0?: number[]): CompileResult {
+/** Act segments: pinned step starts (from the full compile) and the steps a rewind / cut undid. */
+interface Pin {
+  t0: number[]
+  cancel: Set<number>
+}
+
+function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<number, { group: number[]; hold: number; still: number }>, authoredT0?: number[], pin?: Pin): CompileResult {
   const diagnostics: Diagnostic[] = []
   const err = (path: string, message: string, hint?: string) => diagnostics.push({ severity: "error", path, message, hint })
   const warn = (path: string, message: string, hint?: string) => diagnostics.push({ severity: "warning", path, message, hint })
@@ -211,6 +300,18 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
       : derived
         ? { ...spec.story, steps: derived }
         : (spec.story as Story & { steps: StoryStep[] })
+  // Caption emphasis: `*phrase*` → plain text + accent ranges (`\*` = a literal asterisk).
+  const emOf = new Map<number, [number, number][]>()
+  if (story.steps.some((st) => typeof st?.caption === "string" && st.caption.includes("*")))
+    story = {
+      ...story,
+      steps: story.steps.map((st, i) => {
+        if (typeof st?.caption !== "string" || !st.caption.includes("*")) return st
+        const e = parseEmphasis(st.caption.trim())
+        if (e.em.length) emOf.set(i, e.em)
+        return { ...st, caption: e.text }
+      }),
+    }
   // A narrated step without a caption captions with its heading (or first sentence): the
   // animated SVG, header captions and beat tiles agree. Steps without `narrate` are untouched.
   if (story.steps.some((st) => st.narrate && !st.caption)) story = { ...story, steps: story.steps.map((st) => (st.narrate && !st.caption ? { ...st, caption: narrateCaption(st.narrate) } : st)) }
@@ -223,6 +324,9 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
   const edgeById = new Map(scene.edges.map((e) => [e.id, e]))
   const counterDefs = new Map<string, { node: string; value: number; prefix?: string; suffix?: string }>()
   for (const n of scene.nodes) if (n.counter) counterDefs.set(n.counter.id, { node: n.id, value: n.counter.value, prefix: n.counter.prefix, suffix: n.counter.suffix })
+  // HUD metrics (story.hud): stage numbers driven by `counter` steps (node = the HUD id).
+  const hud = hudItems(story.hud, seq, err, scene)
+  for (const h of hud) if (!counterDefs.has(h.id)) counterDefs.set(h.id, { node: h.id, value: h.value, prefix: h.prefix, suffix: h.suffix })
 
   const appear: Record<string, number> = {}
   const edgeReveal: Record<string, number> = {}
@@ -239,9 +343,21 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
   if (expanded.steps !== story.steps) story = { ...story, steps: expanded.steps }
   const changes: NonNullable<Timeline["changes"]> = {}
   const content = new Content(scene, story.steps, (ref) => resolveEdge(scene, ref).id)
+  for (const h of hud) content.hud.add(h.id)
+  const annIds = new Set((scene.annotations ?? []).map((a) => a.id))
 
   let prevEnd = 0
   let prevT0 = 0
+
+  // Acts: one stage, several scenarios (graph diagrams).
+  const storyActs = Array.isArray(story.acts) && story.acts.length ? story.acts : undefined
+  if (storyActs && seq) err("story.acts", "acts need a graph diagram", "sequence diagrams: tell the scenarios as two diagrams (or use an architecture / dataflow diagram)")
+  const ap = storyActs && !seq ? actPlan(story.steps, storyActs, err, warn) : undefined
+  const am = ap ? actMorphs(scene, ap, story.steps) : undefined
+  if (am) for (const e of scene.edges) if (e.acts) content.managed.add(e.id)
+  const actWin: ActWindow[] = []
+  const snaps: (() => void)[] = []
+  const body: number[] = []
 
   story.steps.forEach((step: StoryStep, i) => {
     const p = `story.steps[${i}]`
@@ -264,6 +380,46 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
     // Reading hold: a beat's first step waits for the previous beat to settle plus its hold.
     const h = plan?.get(i)
     if (h) t0 = Math.max(t0, Math.max(...h.prev.map((j) => steps[j].t1)) + h.still + h.hold)
+    if (pin) t0 = pin.t0[i]
+    // Acts: the entry step of a later act starts with the rewind / cut and the morph; its own
+    // events (and caption) follow them.
+    const stepStart = t0
+    let capT0 = t0
+    let actLabel: string | undefined
+    let actFocus: string[] | undefined
+    if (ap && am) {
+      if (i === 0) {
+        snaps[0] = content.snapshot()
+        body[0] = 0
+      }
+      const k = ap.entry.indexOf(i)
+      if (k > 0) {
+        const how = ap.enter[k]
+        const B = body[k - 1] ?? 0
+        const len = how === "rewind" ? Math.min(REWIND.max, Math.max(REWIND.min, (t0 - B) * REWIND.share)) : how === "cut" ? CUT : 0
+        // Toasts still up when an act ends: a warning; a rewind / cut takes them off the stage.
+        for (const id of content.toastsUp(t0)) {
+          warn(`story.steps[${i}]`, `toast "${id}" is still up when act "${ap.acts[k - 1].id}" ends`, `add "dismiss": "${id}" (or "all") to a step before, or give the toast "for": seconds`)
+          if (how !== "continue") content.out.toasts[id].t1 = Math.round(t0 * 1e4) / 1e4
+        }
+        const w = am.window(k, t0, t0 + len)
+        const win: ActWindow = { ...w, k, how, B, E: t0 }
+        actWin.push(win)
+        if (how !== "continue") snaps[k - 1]?.()
+        // Wires the act starts without (a rewind / cut undid their `wire`): no retract in the morph.
+        const undrawn = scene.edges.filter((e) => e.acts && content.drawn.get(e.id) === false).map((e) => e.id)
+        if (undrawn.length) win.undrawn = new Set(undrawn)
+        snaps[k] = content.snapshot()
+        body[k] = w.M
+        capT0 = w.R
+        t0 = w.M
+        actLabel = ap.acts[k].label
+        if (am.changed[k].length) actFocus = am.changed[k]
+      }
+    }
+    // A segment of an act story: steps of undone acts happen "never".
+    if (pin?.cancel.has(i)) t0 = capT0 = NEVER
+    const cancelled = pin?.cancel.has(i) === true
     const ends = [t0]
 
     // Reveal.
@@ -271,13 +427,15 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
       if (edgeById.has(id) || /->/.test(id)) {
         const r = resolveEdge(scene, id)
         if (!r.id) err(`${p}.reveal`, r.error!, r.hint)
-        else if (edgeReveal[r.id] === undefined) edgeReveal[r.id] = t0
-      } else if (nodeIds.has(id) || groupIds.has(id) || frameIds.has(id) || actIds.has(id)) {
-        if (appear[id] === undefined) appear[id] = t0
+        else if (unset(edgeReveal[r.id])) edgeReveal[r.id] = t0
+      } else if (nodeIds.has(id) || groupIds.has(id) || frameIds.has(id) || actIds.has(id) || annIds.has(id) || content.hud.has(id)) {
+        // Acts: a box back on stage after an act without it shows again (its first reveal stays).
+        if (ap && am && am.reenters(id, ap.of[i])) (content.out.vis[id] ??= []).push({ t: Math.round(t0 * 1000) / 1000, to: 1 })
+        else if (unset(appear[id])) appear[id] = t0
       } else if (id.includes("#") && nodeIds.has(parseRef(id).node) && boxOfRef(scene, id)) {
         // A panel row / code line ("session#exec1").
-        if (appear[id] === undefined) appear[id] = t0
-      } else err(`${p}.reveal`, `unknown id "${id}"`, "reveal takes node, group, edge, note or frame ids")
+        if (unset(appear[id])) appear[id] = t0
+      } else err(`${p}.reveal`, `unknown id "${id}"`, `reveal takes node, group, edge, note, frame, annotation or HUD ids${hintOf(id, [...nodeIds, ...groupIds, ...annIds, ...content.hud])}`)
       ends.push(t0 + REACT_SETTLE)
     }
 
@@ -339,13 +497,54 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
         L += len
         points.push(...(last && Math.hypot(last.x - pts[0].x, last.y - pts[0].y) < 1e-6 ? pts.slice(1) : pts))
       }
-      const flight = typeof ref === "object" && ref.duration ? ref.duration : Math.min(S.pulse.flightMax, Math.max(S.pulse.flightMin, L / S.pulse.pxPerSecond))
+      const rawLabel = typeof ref === "object" && typeof ref.label === "string" && ref.label.trim() ? clipLabel(ref.label) : undefined
+      const flight = typeof ref === "object" && ref.duration ? ref.duration : pulseFlight(L, rawLabel, spans, points)
       const tf0 = pt0 + S.pulse.gather
       const tf1 = tf0 + flight
       const lastE = edgeById.get(ids[reverse ? 0 : ids.length - 1])!
       const arriveNode = reverse ? lastE.from : lastE.to
       const arriveAnchor = reverse ? lastE.fromAnchor : lastE.toAnchor
       const pid = `pulse-${i}-${k}`
+      // Colour carries meaning: tone, payload label, landing on the edge, tint on arrival, stain.
+      const o = typeof ref === "object" ? ref : undefined
+      let tone: Tone | undefined
+      if (o?.tone !== undefined) {
+        if (isTone(o.tone)) tone = o.tone
+        else err(`${pp}.tone`, `unknown tone ${JSON.stringify(o.tone)}`, toneHint(o.tone))
+      }
+      let label: string | undefined
+      if (o?.label !== undefined) {
+        if (typeof o.label !== "string" || !o.label.trim()) err(`${pp}.label`, `pulse "label" must be non-empty text`)
+        else {
+          label = clipLabel(o.label)
+          if (o.label.length > PULSE_LABEL_MAX) warn(`${pp}.label`, `pulse label is ${o.label.length} chars; shown as "${label}"`, `keep payload labels to ${PULSE_LABEL_MAX} chars`)
+        }
+      }
+      if (o?.land !== undefined) {
+        if (o.land !== "edge") err(`${pp}.land`, `unknown land ${JSON.stringify(o.land)}`, `use "edge" (the label stays as the arriving edge's label)`)
+        else if (!label) warn(`${pp}.land`, `"land" needs a "label"; nothing lands`, `add "label": "..."`)
+        else if (seq) err(`${pp}.land`, `"land" needs a graph diagram`, "sequence messages keep their labels")
+        else if (edgeById.get(lastE.id)?.labels) {
+          content.landLabel(lastE.id, tf1)
+          ends.push(tf1 + CROSSFADE)
+        }
+      }
+      for (const key of ["tint", "stain"] as const) {
+        if (o?.[key] === undefined) continue
+        if (typeof o[key] !== "boolean") err(`${pp}.${key}`, `"${key}" must be true or false`)
+        else if (o[key] && !tone) warn(`${pp}.${key}`, `"${key}" needs a pulse "tone"; nothing changes colour`, `add "tone": "note" | "warn" | "risk" | "good" | "neutral"`)
+        else if (o[key] && seq) err(`${pp}.${key}`, `"${key}" needs a graph diagram`, "sequence diagrams: toned pulses only")
+      }
+      if (tone && o?.tint === true && !seq) {
+        content.toneEvent(arriveNode, tf1, tone)
+        ends.push(tf1 + TONE_FADE)
+      }
+      if (tone && o?.stain === true && !seq)
+        for (const sp of spans) {
+          // The moment the dot leaves this wire's span (the flight eases over the whole route).
+          const u = invEase(sp.s1 / L, label ? cruise : inOutCubic)
+          content.toneEvent(sp.edge, tf0 + u * flight, tone)
+        }
       pulses.push({
         id: pid,
         edges: hops,
@@ -358,16 +557,18 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
         target: seq ? undefined : arriveNode,
         ...(reverse ? { reverse: true } : {}),
         ...(!seq && (reverse || arriveAnchor) ? { arrive: { node: arriveNode, ...(arriveAnchor ? { anchor: arriveAnchor } : {}) } } : {}),
+        ...(tone ? { tone } : {}),
+        ...(label ? { label } : {}),
       })
       // Forward pulses draw hidden wires as they fly; reverse pulses and wire-managed edges never do.
-      if (!reverse)
+      if (!reverse && !cancelled)
         for (const sp of spans)
           if (!flights[sp.edge] && !content.managed.has(sp.edge)) flights[sp.edge] = { mode: "flight", pulse: pid, t0: tf0 + (sp.s0 / L) * flight, t1: tf0 + (sp.s1 / L) * flight, s0: sp.s0, s1: sp.s1 }
       if (!seq && nodeBox(arriveNode)) {
         const end = points[points.length - 1]
         // On a row / code line: a ring and a flash on that row, no panel flood.
-        if (arriveAnchor) glows.push({ node: `${arriveNode}#${arriveAnchor}`, t: tf1, dur: 0, cx: end.x, cy: end.y })
-        else glows.push({ node: arriveNode, t: tf1, dur: S.glow.duration, cx: end.x, cy: end.y })
+        if (arriveAnchor) glows.push({ node: `${arriveNode}#${arriveAnchor}`, t: tf1, dur: 0, cx: end.x, cy: end.y, ...(tone ? { tone } : {}) })
+        else glows.push({ node: arriveNode, t: tf1, dur: S.glow.duration, cx: end.x, cy: end.y, ...(tone ? { tone } : {}) })
       }
       ends.push(tf1)
     })
@@ -394,7 +595,9 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
 
     // Caption.
     if (typeof step.caption === "string" && step.caption.trim()) {
-      captions.push({ text: step.caption.trim(), t0, t1: 0, step: i, handoff: false })
+      const em = emOf.get(i)
+      const actTone = ap ? ap.acts[ap.of[i]]?.tone : undefined
+      captions.push({ text: step.caption.trim(), t0: capT0, t1: 0, step: i, handoff: false, ...(em ? { em } : {}), ...(em && actTone && isTone(actTone) ? { tone: actTone } : {}) })
       ends.push(t0 + readTime(step.caption))
     }
 
@@ -402,7 +605,7 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
     for (const c of asList(step.counter)) {
       const def = counterDefs.get(c.id)
       if (!def) {
-        err(`${p}.counter`, `unknown counter "${c.id}"`, counterDefs.size ? `counters: ${[...counterDefs.keys()].join(", ")}` : `declare it on a node: "counter": { "id": "${c.id}" }`)
+        err(`${p}.counter`, `unknown counter "${c.id}"`, counterDefs.size ? `${closest(c.id, [...counterDefs.keys()]) ? `did you mean "${closest(c.id, [...counterDefs.keys()])}"? ` : ""}counters: ${[...counterDefs.keys()].join(", ")}` : `declare it on a node: "counter": { "id": "${c.id}" }, or as a HUD metric: "story": { "hud": [{ "id": "${c.id}", "label": "..." }] }`)
         continue
       }
       if (typeof c.to !== "number" || !Number.isFinite(c.to)) {
@@ -417,9 +620,11 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
     const t1 = Math.max(...ends)
     const parts = titleParts(step, scene)
     if (cs.acts.length) parts.acts = cs.acts
-    const label = step.stop ?? (step.caption ? truncate(step.caption, 40) : composeTitle([parts], 48, i > 0 && isEmptyStep(step) ? "Hold" : "Start"))
+    const stop = step.stop ?? actLabel
+    const label = stop ?? (step.caption ? truncate(step.caption, 40) : composeTitle([parts], 48, i > 0 && isEmptyStep(step) ? "Hold" : "Start"))
     const be = beatEnds?.get(i)
-    steps.push({ id: step.id ?? `step-${i + 1}`, label, t0, t1, parts, ...(cs.focus ? { focus: cs.focus } : {}), ...(step.stop ? { stop: step.stop } : {}), ...(step.caption ? { caption: step.caption } : {}), ...(step.narrate ? { narrate: step.narrate } : {}), ...(be ? { hold: Math.round(be.hold * 1000) / 1000 } : {}) })
+    const focus = cs.focus ?? actFocus
+    steps.push({ id: step.id ?? `step-${i + 1}`, label, t0: stepStart, t1, parts, ...(focus ? { focus } : {}), ...(stop ? { stop } : {}), ...(step.caption ? { caption: step.caption } : {}), ...(step.narrate ? { narrate: step.narrate } : {}), ...(be ? { hold: Math.round(be.hold * 1000) / 1000 } : {}) })
     prevEnd = t1
     prevT0 = t0
 
@@ -438,6 +643,9 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
   }
   // One glow per node at a time: drop overlapping duplicates.
   glows = glows.filter((g, k) => !glows.slice(0, k).some((h) => h.node === g.node && Math.abs(h.t - g.t) < 1e-6))
+
+  // Acts: membership events (the morphs) on the appear / visibility / wire channels.
+  if (ap && am) am.emit(actWin, appear, content.out)
 
   // Groups revealed implicitly with their first child when all children are hidden.
   const childrenOf = (gid: string): string[] => [
@@ -536,6 +744,11 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
         if (content.status(key) !== "running" || end.hidden(key) || end.hidden(n.id)) continue
         warn("story", `"${key}" is still running at the end: the static diagram shows a spinner`, `add "status": { "id": "${key}", "to": "done" }`)
       }
+    for (const n of scene.nodes)
+      if (n.glyph && content.status(n.id) === "running" && !end.hidden(n.id))
+        warn("story", `"${n.id}" is still running at the end: the static diagram shows a spinner`, `add "status": { "id": "${n.id}", "to": "done" }`)
+    for (const id of content.toastsUp(Infinity))
+      if (content.out.toasts[id].t0 < NEVER) warn("story", `toast "${id}" is still up at the end: the static diagram shows it`, `add "dismiss": "${id}" (or "all") to a later step, or give it "for": seconds`)
   }
   if (duration > S.warnTotal) warn("story", `story runs ${duration.toFixed(1)}s (over ${S.warnTotal}s, reading holds not counted)`, "shorten gaps or split the story")
   if (!story.steps.length) warn("story.steps", "story has no steps")
@@ -562,6 +775,8 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
     ...legendTimes(scene, changes, appear, content.fields()),
     ...(story.spotlight === true ? { spot: spotTargets(scene, steps, pulses, glows, content.fields() as Timeline, story.steps) } : {}),
     ...(story.rewind ? { rewind: story.rewind } : {}),
+    ...(ap ? { acts: timelineActs(ap, actWin, r3(duration)) } : {}),
+    ...(hud.length ? { hud } : {}),
   }
   if (story.spotlight === "veil") {
     const veil = veilTargets(scene, timeline)
@@ -578,7 +793,7 @@ function compileOnce(scene: Scene, spec: Spec, plan?: HoldPlan, beatEnds?: Map<n
 function spotTargets(scene: Scene, steps: Timeline["steps"], pulses: TimelinePulse[], glows: TimelineGlow[], c: Timeline, src: StoryStep[]): NonNullable<Timeline["spot"]> {
   const out: NonNullable<Timeline["spot"]> = []
   const r3 = (x: number) => Math.round(x * 1000) / 1000
-  const box = (id: string) => boxOfRef(scene, id.replace(/@label$/, ""))
+  const box = (id: string) => boxOfRef(scene, id.replace(/@\w+$/, ""))
   const at0 = (t: number, t0: number) => Math.abs(t - t0) < 1e-6
   const ofBox = (b: { x: number; y: number; w: number; h: number }) => ({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: Math.max(90, Math.min(260, 0.6 * Math.max(b.w, b.h))) })
   steps.forEach((st, i) => {
@@ -800,4 +1015,80 @@ export function composeTitle(list: NonNullable<import("./types.ts").TimelineStep
   const acts = [...new Set(list.flatMap((p) => p.acts ?? []))]
   const bits = [paths.length ? paths.join(" + ") : "", reveals.length ? reveals.join(", ") : "", ...counters, ...acts].filter(Boolean)
   return truncate(bits.join(" · ") || empty, max)
+}
+
+/** Inverse of a pulse ease (default `inOutCubic`) on [0, 1] (bisection; monotonic). */
+function invEase(y: number, ease: (x: number) => number = inOutCubic): number {
+  if (y <= 0) return 0
+  if (y >= 1) return 1
+  let a = 0
+  let b = 1
+  for (let k = 0; k < 40; k++) {
+    const m = (a + b) / 2
+    if (ease(m) < y) a = m
+    else b = m
+  }
+  return (a + b) / 2
+}
+
+const hintOf = (id: string, ids: string[]): string => {
+  const g = closest(id, ids)
+  return g ? `; did you mean "${g}"?` : ""
+}
+
+/** `story.hud` items, normalised (graph diagrams; unique ids not clashing with elements). */
+function hudItems(raw: unknown, seq: boolean, err: (path: string, message: string, hint?: string) => void, scene: Scene): NonNullable<Timeline["hud"]> {
+  if (!Array.isArray(raw) || !raw.length) return []
+  if (seq) {
+    err("story.hud", "HUD metrics need a graph diagram", "sequence diagrams: use a node counter")
+    return []
+  }
+  const out: NonNullable<Timeline["hud"]> = []
+  const taken = new Set([...scene.nodes.map((n) => n.id), ...scene.groups.map((g) => g.id), ...scene.edges.map((e) => e.id), ...(scene.annotations ?? []).map((a) => a.id)])
+  raw.forEach((h, k) => {
+    if (!h || typeof h !== "object" || typeof h.id !== "string" || typeof h.label !== "string") return
+    if (taken.has(h.id)) return err(`story.hud[${k}].id`, `HUD id "${h.id}" is already used by an element`, "ids share one namespace: pick another id")
+    if (out.some((x) => x.id === h.id)) return err(`story.hud[${k}].id`, `duplicate HUD id "${h.id}"`)
+    if (h.tone !== undefined && !isTone(h.tone)) err(`story.hud[${k}].tone`, `unknown tone ${JSON.stringify(h.tone)}`, toneHint(h.tone))
+    out.push({
+      id: h.id,
+      label: h.label,
+      value: typeof h.value === "number" && Number.isFinite(h.value) ? h.value : 0,
+      ...(isTone(h.tone) ? { tone: h.tone } : {}),
+      ...(typeof h.prefix === "string" ? { prefix: h.prefix } : {}),
+      ...(typeof h.suffix === "string" ? { suffix: h.suffix } : {}),
+      at: h.at === "bottom-left" ? "bottom-left" : "top-right",
+    })
+  })
+  return out
+}
+
+const toneHint = (x: unknown): string => {
+  const g = typeof x === "string" ? closest(x, TONES) : undefined
+  return g ? `did you mean "${g}"? (one of: ${TONES.join(", ")})` : `use one of: ${TONES.join(", ")}`
+}
+
+/**
+ * Caption emphasis: `*phrase*` pairs become [start, end) ranges of the returned plain text;
+ * `\*` is a literal asterisk; an unpaired `*` stays literal.
+ */
+export function parseEmphasis(src: string): { text: string; em: [number, number][] } {
+  let out = ""
+  const em: [number, number][] = []
+  let open = -1
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i]
+    if (c === "\\" && src[i + 1] === "*") {
+      out += "*"
+      i++
+    } else if (c === "*") {
+      if (open < 0) open = out.length
+      else {
+        if (out.length > open) em.push([open, out.length])
+        open = -1
+      }
+    } else out += c
+  }
+  if (open >= 0) out = `${out.slice(0, open)}*${out.slice(open)}`
+  return { text: out, em }
 }

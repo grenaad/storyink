@@ -83,7 +83,7 @@ describe("row status", () => {
   })
   test("validation: targets, values, no-ops and the end state", () => {
     const one = [{ id: "a", text: "x" }]
-    expect(msgs(mini([{ status: { id: "k", to: "done" } }], one).v.diagnostics)).toEqual([`error: status takes a panel row ("p#a")`])
+    expect(msgs(mini([{ status: { id: "k", to: "done" } }], one).v.diagnostics)).toEqual([`error: status takes a panel row ("p#a") or a plain graph node`])
     expect(msgs(mini([{ status: { id: "p#a", to: "ok" } }], one).v.diagnostics)[0]).toMatch(/^error: "status" must be/)
     expect(msgs(mini([{ status: { id: "p#a", to: "done" } }, { status: { id: "p#a", to: "done" } }], one).v.diagnostics)).toEqual([`warning: "p#a" is already done here; status has no effect`])
     expect(msgs(mini([{ status: { id: "p#a", to: "running" } }]).v.diagnostics)).toEqual([

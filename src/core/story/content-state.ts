@@ -6,7 +6,8 @@ import { geometry as G } from "../../theme/tokens.ts"
 import type { Scene } from "../scene.ts"
 import { parseRef } from "../anchor.ts"
 import { easeOutCubic, inOutCubic, react, smooth, smoothstep, spring } from "./ease.ts"
-import { CARET_LINGER, CROSSFADE, SHIMMER_PERIOD, SPIN_PERIOD, STATUS_DRAW } from "./content.ts"
+import { CARET_LINGER, CROSSFADE, SHIMMER_PERIOD, SPIN_PERIOD, STATUS_DRAW, TOAST_IN, TOAST_OUT, TONE_FADE } from "./content.ts"
+import type { Tone } from "../../theme/tones.ts"
 import type { RowStatus } from "../spec.ts"
 import type { ContentLayer, Frame, StatusFrame, Timeline, TimelineTyping } from "./types.ts"
 
@@ -139,17 +140,26 @@ export function contentFrame(scene: Scene, tl: Timeline, t: number, tc: number, 
   // Persistent glows: react rise, smooth fall.
   if (tl.lit) {
     const lit: Record<string, number> = {}
+    const litTone: NonNullable<Frame["litTone"]> = {}
     for (const [id, ws] of Object.entries(tl.lit)) {
       let v = 0
+      const byTone: Partial<Record<Tone, number>> = {}
       for (const w of ws) {
         const up = reduced ? (t >= w.t0 ? 1 : 0) : react(t - w.t0)
         const down = w.t1 === undefined ? 0 : reduced ? (t >= w.t1 ? 1 : 0) : smooth(t - w.t1)
-        v = Math.max(v, up * (1 - down))
+        if (w.tone) byTone[w.tone] = Math.max(byTone[w.tone] ?? 0, up * (1 - down))
+        else v = Math.max(v, up * (1 - down))
       }
       if (v > 0.005) lit[id] = r2(v)
+      const tv = Object.fromEntries(Object.entries(byTone).filter(([, x]) => x > 0.005).map(([k, x]) => [k, r2(x)]))
+      if (Object.keys(tv).length) litTone[id] = tv
     }
     if (Object.keys(lit).length) frame.lit = lit
+    if (Object.keys(litTone).length) frame.litTone = litTone
   }
+
+  toneFrame(tl, t, reduced, frame)
+  toastFrame(tl, t, reduced, frame)
 
   // Spotlight: glides between step targets; fades in with the first, out after the last event.
   if (tl.spot?.length) {
@@ -255,6 +265,48 @@ export function contentFrame(scene: Scene, tl: Timeline, t: number, tc: number, 
   if (caret.length) frame.caret = caret
 }
 
+/**
+ * Tone layers: per element, the opacity of each tone's layer. Superposed crossfades (each event
+ * fades its tone in and the previous one out over `TONE_FADE`), so quick successive tones (a
+ * stagger, a stain then a tint) blend smoothly. Omitted = the rest look. Pure function of time:
+ * a reverse playback (Phase C rewinds) just evaluates earlier times.
+ */
+export function toneFrame(tl: Timeline, t: number, reduced: boolean, frame: Frame): void {
+  if (!tl.tones) return
+  const fade = (dt: number) => (reduced ? (dt >= 0 ? 1 : 0) : smoothstep(dt / TONE_FADE))
+  const out: NonNullable<Frame["tone"]> = {}
+  for (const [id, ev] of Object.entries(tl.tones)) {
+    const L: Partial<Record<Tone, number>> = {}
+    let prev: Tone | null = null
+    for (const e of ev) {
+      if (e.t > t + 1e-9) break
+      const f = fade(t - e.t)
+      if (prev) L[prev] = (L[prev] ?? 0) - f
+      if (e.to) L[e.to] = (L[e.to] ?? 0) + f
+      prev = e.to
+    }
+    const kept = Object.entries(L).filter(([, x]) => x! > 0.005).map(([k, x]) => [k, r2(Math.min(1, x!))])
+    if (kept.length) out[id] = Object.fromEntries(kept)
+  }
+  if (Object.keys(out).length) frame.tone = out
+}
+
+/** Toast appear: fade + 4 px rise + scale 0.96 → 1 over `TOAST_IN`; dismiss / expiry: fade over `TOAST_OUT`. */
+export function toastFrame(tl: Timeline, t: number, reduced: boolean, frame: Frame): void {
+  if (!tl.toasts) return
+  const out: NonNullable<Frame["toasts"]> = {}
+  for (const [id, w] of Object.entries(tl.toasts)) {
+    if (t < w.t0 - 1e-9) continue
+    const u = reduced ? 1 : easeOutCubic(Math.min(1, (t - w.t0) / TOAST_IN))
+    const fin = reduced ? 1 : smoothstep((t - w.t0) / TOAST_IN)
+    const fout = w.t1 === undefined || t < w.t1 - 1e-9 ? 1 : reduced ? 0 : 1 - smoothstep((t - w.t1) / TOAST_OUT)
+    const o = r2(fin * fout)
+    if (o <= 0.005) continue
+    out[id] = { o, dy: r2(4 * (1 - u)), s: Math.round((0.96 + 0.04 * u) * 1e4) / 1e4 }
+  }
+  if (Object.keys(out).length) frame.toasts = out
+}
+
 /** Is a row visible in this frame (its own reveal / visibility and its node's)? */
 function rowShown(frame: Frame, node: string, key: string): boolean {
   const o = (id: string) => (frame.el[id]?.o ?? 1) * (frame.vis?.[id] ?? 1)
@@ -269,10 +321,14 @@ function rowShown(frame: Frame, node: string, key: string): boolean {
 export function statusFrame(scene: Scene, tl: Timeline, t: number, reduced: boolean, frame: Frame): void {
   const out: Record<string, StatusFrame> = {}
   const ease = (dt: number) => (reduced ? (dt >= 0 ? 1 : 0) : react(dt))
-  for (const n of scene.nodes)
-    for (const row of n.rows ?? []) {
-      const key = `${n.id}#${row.id}`
-      const rest: RowStatus = row.status ?? "none"
+  // Panel rows, and plain graph nodes given a status by the story (key = node id).
+  const slots: { n: Scene["nodes"][number]; key: string; rest: RowStatus }[] = []
+  for (const n of scene.nodes) {
+    for (const row of n.rows ?? []) slots.push({ n, key: `${n.id}#${row.id}`, rest: row.status ?? "none" })
+    if (n.glyph) slots.push({ n, key: n.id, rest: "none" })
+  }
+  for (const { n, key, rest } of slots) {
+    {
       const ev = tl.status?.[key] ?? []
       if (rest === "none" && !ev.length) continue
       if (!rowShown(frame, n.id, key)) continue
@@ -294,8 +350,8 @@ export function statusFrame(scene: Scene, tl: Timeline, t: number, reduced: bool
         sf.prev = { s: prev.to, o: r2(1 - fin) }
         if (prev.to === "running" && !reduced) sf.prev.spin = Math.round(((360 * (t - prev.t)) / SPIN_PERIOD) % 360)
       }
-      // Shimmer: the most recent running interval, fading in after it starts and out after it ends.
-      if (!reduced) {
+      // Shimmer (rows): the most recent running interval, fading in after it starts and out after it ends.
+      if (!reduced && key !== n.id) {
         let a = 0
         let x = 0
         for (let j = 0; j < states.length; j++) {
@@ -313,5 +369,6 @@ export function statusFrame(scene: Scene, tl: Timeline, t: number, reduced: bool
       const animating = sf.spin !== undefined || sf.draw !== undefined || sf.prev || sf.shimmer || sf.o < 1
       if (cur.to !== rest || animating) out[key] = sf
     }
+  }
   if (Object.keys(out).length) frame.status = out
 }

@@ -1,13 +1,16 @@
 import { geometry as G, type as T } from "../../theme/tokens.ts"
 import type { Arrowhead, Box, Pt, Scene, SceneEdge, SceneGroup, SceneLabel, SceneNode, ScenePort } from "../scene.ts"
-import type { Direction, GraphSpec } from "../spec.ts"
+import type { Direction, GraphNode, GraphSpec } from "../spec.ts"
+import { edgeIdOf, landedLabels, nodeTextVersions, pulseLabelsByEdge } from "./storyscan.ts"
 import { r2, snap, textWidth } from "./measure.ts"
 import { sizeNode } from "./nodes.ts"
 import { fitBadge, groupBadgeW } from "./delta.ts"
+import { membership, specActs, withoutDeltaLook } from "../story/acts.ts"
 import { faceH, isRichKind, sizeRich } from "./panels.ts"
 import { anchorOffsetY, parseRef } from "../anchor.ts"
 import { wirePath } from "./paths.ts"
 import { type Dir, Router } from "./route.ts"
+import { ANN, annotationRoom, growForAnnotations, placeAnnotations, placeToasts } from "./overlays.ts"
 
 interface Member {
   id: string
@@ -371,18 +374,44 @@ export const AUTO_ASPECT = 1.6
  * the one whose viewBox aspect ratio is closest to 16:10 wins (log distance).
  */
 export function layoutGraph(spec: GraphSpec): Scene {
-  if (spec.direction) return layoutGraphDir(spec, spec.direction)
-  const tb = layoutGraphDir(spec, "TB")
-  const lr = layoutGraphDir(spec, "LR")
-  const score = (sc: Scene) => Math.abs(Math.log(sc.viewBox.w / sc.viewBox.h / AUTO_ASPECT))
-  return score(lr) < score(tb) - 0.05 ? lr : tb
+  // Act stories: membership per act (routing, story), and no delta look.
+  const acts = specActs(spec)
+  const mem = acts ? { acts: acts.map((a) => a.id), of: membership(spec, acts) } : undefined
+  if (acts) spec = withoutDeltaLook(spec)
+  const pick = (): Scene => {
+    if (spec.direction) return layoutGraphDir(spec, spec.direction, mem)
+    const tb = layoutGraphDir(spec, "TB", mem)
+    const lr = layoutGraphDir(spec, "LR", mem)
+    const score = (sc: Scene) => Math.abs(Math.log(sc.viewBox.w / sc.viewBox.h / AUTO_ASPECT))
+    return score(lr) < score(tb) - 0.05 ? lr : tb
+  }
+  const scene = pick()
+  if (mem)
+    for (const el of [...scene.nodes, ...scene.groups, ...scene.edges]) {
+      const a = mem.of.get(el.id)
+      if (a) el.acts = a
+    }
+  // Phase B overlays: annotations (room reserved in the layout), toast slots.
+  if (spec.annotations?.length) {
+    const anns = placeAnnotations(spec, scene.nodes, (id) => mem?.of.get(id))
+    if (anns.length) {
+      scene.annotations = anns
+      growForAnnotations(scene)
+    }
+  }
+  const toasts = placeToasts(spec, scene)
+  if (toasts.length) scene.toasts = toasts
+  return scene
 }
+
+/** Act membership for routing: act ids and the acts of elements not in every act. */
+type ActMembership = { acts: string[]; of: Map<string, string[]> }
 
 type Base = "TB" | "LR"
 const baseOf = (d: Direction): Base => (d === "TB" || d === "BT" ? "TB" : "LR")
 const isReversed = (d: Direction) => d === "BT" || d === "RL"
 
-function layoutGraphDir(spec: GraphSpec, direction: Direction): Scene {
+function layoutGraphDir(spec: GraphSpec, direction: Direction, mem?: ActMembership): Scene {
   const dir = baseOf(direction)
   const tags = spec.type === "architecture" || spec.type === "dataflow"
   const groupsById = new Map((spec.groups ?? []).map((g) => [g.id, g]))
@@ -402,11 +431,17 @@ function layoutGraphDir(spec: GraphSpec, direction: Direction): Scene {
     children.set(p, list)
   }
   const sized = new Map<string, SceneNode>()
+  // Annotations: their line's room is reserved around the node (both sides, so centres stay aligned).
+  const annRoom = annotationRoom(spec)
+  const versionsOf = (n: GraphNode) => {
+    const v = nodeTextVersions(spec, n)
+    return v ? { versions: v } : {}
+  }
   for (const n of spec.nodes)
     if (!composites.has(n.id)) {
       const s = isRichKind(n.kind)
         ? sizeRich(spec, n)
-        : sizeNode({ id: n.id, kind: n.kind ?? "service", label: n.label ?? n.id, detail: n.detail, tag: n.tag, ...(n.counter ? { counter: counterSlot(spec, n.counter) } : {}) }, { tags })
+        : sizeNode({ id: n.id, kind: n.kind ?? "service", label: n.label ?? n.id, detail: n.detail, tag: n.tag, ...(n.counter ? { counter: counterSlot(spec, n.counter) } : {}), ...versionsOf(n) }, { tags })
       if (n.muted) s.muted = true
       if (n.delta || n.stat || n.summary || n.files) fitBadge(s, n)
       sized.set(n.id, s)
@@ -429,7 +464,14 @@ function layoutGraphDir(spec: GraphSpec, direction: Direction): Scene {
     for (let cur: string | undefined = id; cur !== undefined; cur = parent.get(cur)) out.push(cur)
     return out
   }
-  const edges = anchorEdges(spec.edges ?? [])
+  // Labels pulses land on an edge: the slot is placed for the widest version.
+  const landed = landedLabels(spec)
+  const pulseLabels = pulseLabelsByEdge(spec)
+  const widest = (xs: string[]) => xs.reduce((a, b) => (textWidth(b, T.edgeLabel) > textWidth(a, T.edgeLabel) ? b : a))
+  const edges = anchorEdges((spec.edges ?? []).map((e) => {
+    const l = landed.get(edgeIdOf(e))
+    return l ? { ...e, label: widest([e.label ?? "", ...l.map((x) => x.text)]) } : e
+  }))
   // Anchor offsets from the node centre (cross axis of LR / RL levels only).
   const anchorOff = (id: string, anchor: string | undefined, d: Direction): number => {
     if (!anchor || baseOf(d) !== "LR") return 0
@@ -458,6 +500,8 @@ function layoutGraphDir(spec: GraphSpec, direction: Direction): Scene {
       const s = sized.get(id)!
       // Fork/join bars run across the flow.
       if (s.shape === "bar" && baseOf(own) === "LR" && s.w > s.h) [s.w, s.h] = [s.h, s.w]
+      const aw = annRoom.get(id)
+      if (aw !== undefined) return { id, w: s.w + 2 * Math.max(0, aw - s.w), h: s.h + 2 * ANN.band, group: false }
       return { id, w: s.w, h: s.h, group: false }
     })
     const kidSet = new Set(kids)
@@ -467,7 +511,11 @@ function layoutGraphDir(spec: GraphSpec, direction: Direction): Scene {
       const b = chain(e.to).find((x) => kidSet.has(x))
       if (!a || !b || a === b) continue
       // Only lift when the common container is exactly this one.
-      const ls = labelSize(e.label)
+      // Pulse payload labels need wire to ride on: the gap fits them like an edge label.
+      const pl = pulseLabels.get(e.id ?? `${e.from}->${e.to}`)
+      const ls0 = labelSize(e.label)
+      const lp = pl ? { w: textWidth(pl, 10) + 24, h: 0 } : undefined
+      const ls = lp && lp.w > ls0.w ? { w: lp.w, h: ls0.h } : ls0
       const offFrom = a === e.from ? anchorOff(e.from, e.fromAnchor, own) : 0
       const offTo = b === e.to ? anchorOff(e.to, e.toAnchor, own) : 0
       lifted.push({ from: a, to: b, labelW: ls.w, labelH: ls.h, ...(offFrom || offTo ? { offFrom, offTo } : {}) })
@@ -526,7 +574,16 @@ function layoutGraphDir(spec: GraphSpec, direction: Direction): Scene {
   const boxes = new Map<string, Box>([...nodes.map((n) => [n.id, n] as const), ...groups.map((g) => [g.id, g] as const)])
 
   const arrowheads = spec.style?.arrowheads ?? G.graphArrowheads
-  const routed = routeEdges(edges, direction, boxes, nodes, groups, labelSize, arrowheads)
+  // Edge labels keep clear of annotation lines.
+  const annBoxes = annRoom.size ? placeAnnotations(spec, nodes).map((a) => a.box) : []
+  const routed = mem ? routeByActs(mem, edges, direction, boxes, nodes, groups, labelSize, arrowheads, annBoxes) : routeEdges(edges, direction, boxes, nodes, groups, labelSize, arrowheads, annBoxes)
+  for (const e of spec.edges ?? []) {
+    const l = landed.get(edgeIdOf(e))
+    const se = l && routed.edges.find((x) => x.id === edgeIdOf(e))
+    if (!l || !se?.label) continue
+    se.label.text = e.label ?? ""
+    se.labels = [{ text: e.label ?? "" }, ...l]
+  }
 
   // viewBox: content bounds plus margin.
   let maxX = M + root.w
@@ -584,6 +641,42 @@ function anchorEdges(list: GraphEdgeIn[]): AEdge[] {
 
 const STRAIGHT_SHAPES = new Set(["window", "chip"])
 
+/**
+ * Act stories: each edge is routed against only the boxes and wires that coexist with it (on
+ * stage in at least one of its acts), so a first-act wire runs straight through the slot of a
+ * node that only exists later. Edges sharing an act set are routed together.
+ */
+function routeByActs(
+  mem: ActMembership,
+  edges: AEdge[],
+  direction: Direction,
+  boxes: Map<string, Box>,
+  nodes: SceneNode[],
+  groups: SceneGroup[],
+  labelSize: (s?: string) => { w: number; h: number },
+  arrowheads: boolean,
+  extra: Box[] = [],
+): { edges: SceneEdge[]; ports: ScenePort[] } {
+  const actsOf = (id: string) => mem.of.get(id) ?? mem.acts
+  const idOf = (e: AEdge) => e.id ?? `${e.from}->${e.to}`
+  const meets = (a: string[], b: string[]) => a.some((x) => b.includes(x))
+  const result = new Map<string, SceneEdge>()
+  const portsOf = new Map<string, ScenePort[]>()
+  const sigs = [...new Set(edges.map((e) => actsOf(idOf(e)).join("\u0000")))]
+  for (const sig of sigs) {
+    const S = sig.split("\u0000")
+    const es = edges.filter((e) => meets(actsOf(idOf(e)), S))
+    const r = routeEdges(es, direction, boxes, nodes.filter((n) => meets(actsOf(n.id), S)), groups.filter((g) => meets(actsOf(g.id), S)), labelSize, arrowheads, extra)
+    for (const e of es) {
+      const id = idOf(e)
+      if (actsOf(id).join("\u0000") !== sig) continue
+      result.set(id, r.edges.find((x) => x.id === id)!)
+      portsOf.set(id, r.ports.filter((p) => p.edge === id))
+    }
+  }
+  return { edges: edges.map((e) => result.get(idOf(e))!), ports: edges.flatMap((e) => portsOf.get(idOf(e)) ?? []) }
+}
+
 function routeEdges(
   edges: AEdge[],
   direction: Direction,
@@ -592,6 +685,7 @@ function routeEdges(
   groups: SceneGroup[],
   labelSize: (s?: string) => { w: number; h: number },
   arrowheads: boolean,
+  extra: Box[] = [],
 ): { edges: SceneEdge[]; ports: ScenePort[] } {
   const dir = baseOf(direction)
   const rev = isReversed(direction)
@@ -913,7 +1007,7 @@ function routeEdges(
     if (!e.label) return
     const edge = result[p.i]
     const others = result.filter((o) => o !== edge).flatMap((o) => segsOf(o.points))
-    const lbl = placeLabel(`${edge.id}:label`, e.label, edge.points, labelSize(e.label), obstacles, placedLabels, others, groupRules, groupTitles)
+    const lbl = placeLabel(`${edge.id}:label`, e.label, edge.points, labelSize(e.label), extra.length ? [...obstacles, ...extra] : obstacles, placedLabels, others, groupRules, groupTitles)
     const cx = lbl.x + lbl.w / 2
     const cy = lbl.y + lbl.h / 2
     const inside = groups.filter((g) => cx > g.x && cx < g.x + g.w && cy > g.y && cy < g.y + g.h).sort((a, b) => b.depth - a.depth)[0]

@@ -1,0 +1,68 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "dataflow",
+  "title": "One order, four colours",
+  "subtitle": "Blue is a request, gold is pending, rose is a failure, sage is done",
+  "direction": "LR",
+  "nodes": [
+    { "id": "client", "kind": "client", "label": "browser" },
+    { "id": "gateway", "kind": "service", "label": "API gateway", "detail": "routes /orders" },
+    { "id": "orders", "kind": "function", "label": "order service", "detail": "idle" },
+    { "id": "payments", "kind": "external", "label": "payments API" },
+    { "id": "db", "kind": "database", "label": "orders db" },
+    { "id": "alerts", "kind": "queue", "label": "alerts" }
+  ],
+  "edges": [
+    { "from": "client", "to": "gateway" },
+    { "from": "gateway", "to": "orders" },
+    { "from": "orders", "to": "payments" },
+    { "from": "orders", "to": "db" },
+    { "from": "orders", "to": "alerts", "style": "dashed" }
+  ],
+  "story": {
+    "steps": [
+      {
+        "caption": "A *request* leaves the browser: blue is data in flight",
+        "pulse": { "route": ["client->gateway", "gateway->orders"], "tone": "note", "label": "POST /orders" }
+      },
+      {
+        "caption": "Gold: the order is *pending* while payments decides",
+        "status": { "id": "orders", "to": "running" },
+        "set": { "id": "orders", "detail": "charging card…", "tone": "warn" },
+        "pulse": { "edge": "orders->payments", "tone": "warn", "label": "charge $42.00", "tint": true }
+      },
+      {
+        "caption": "Rose: the card is declined",
+        "status": { "id": "orders", "to": "error" },
+        "set": { "id": "orders", "detail": "payment failed", "tone": "risk" },
+        "pulse": { "edge": "orders->payments", "reverse": true, "tone": "risk", "label": "card declined", "tint": true }
+      },
+      {
+        "caption": "The failure spreads down the error path",
+        "tone": { "ids": ["payments", "orders->payments", "orders->alerts"], "to": "risk", "stagger": 0.15 },
+        "pulse": { "edge": "orders->alerts", "tone": "risk", "label": "order.failed", "tint": true, "delay": 0.3 }
+      },
+      {
+        "caption": "Retry with the saved card",
+        "tone": { "ids": ["orders->payments", "orders", "orders->alerts", "payments"], "to": null },
+        "status": { "id": "orders", "to": "running" },
+        "set": { "id": "orders", "detail": "retrying…", "tone": "warn" },
+        "pulse": { "edge": "orders->payments", "tone": "warn", "label": "retry charge" }
+      },
+      {
+        "caption": "Sage: approved, and the order is stored",
+        "status": { "id": "orders", "to": "done" },
+        "set": { "id": "orders", "detail": "paid", "tone": "good" },
+        "pulse": [
+          { "edge": "orders->payments", "reverse": true, "tone": "good", "label": "approved ✓", "tint": true },
+          { "edge": "orders->db", "tone": "good", "label": "INSERT order", "tint": true, "stain": true, "delay": 0.6 }
+        ]
+      },
+      {
+        "caption": "The *201* goes home and stays on the wire",
+        "set": { "id": "gateway", "detail": "201 in 182 ms", "tone": "good" },
+        "pulse": { "route": ["client->gateway", "gateway->orders"], "reverse": true, "tone": "good", "label": "201 Created", "stain": true, "land": "edge", "tint": true }
+      }
+    ]
+  }
+}

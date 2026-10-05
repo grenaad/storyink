@@ -374,7 +374,8 @@ const plugin = {
             width: { type: "number", description: "Window width in CSS px (min 500)" },
             outDir: { type: "string", description: "Directory for PNGs and receipt (default: next to the html)" },
             at: { type: "array", items: { type: ["number", "string"] }, description: 'Story times to capture, seconds or "end" (default ["end"])' },
-            sheet: { type: "string", enum: ["themes", "beats", "none"], description: 'Contact sheet: "themes" (light|dark, default) or "beats" (one tile per story step)' },
+            sheet: { type: "string", enum: ["themes", "beats", "acts", "none"], description: 'Contact sheet: "themes" (light|dark, default), "beats" (one tile per story step) or "acts" (act stories: one tile per act, the problem | fix diptych)' },
+            act: { type: "string", description: "Act stories: the `at` frames show the settled end of this act id instead of a time" },
             image: {
               type: "string",
               enum: ["overview", "full", "none"],
@@ -402,7 +403,8 @@ const plugin = {
             width?: number
             outDir?: string
             at?: (number | string)[]
-            sheet?: "themes" | "beats" | "none"
+            sheet?: "themes" | "beats" | "acts" | "none"
+            act?: string
             image?: "overview" | "full" | "none"
             maxImageSize?: number
             motion?: "full" | "reduced"
@@ -419,7 +421,8 @@ const plugin = {
           const r = await snapshot(abs(i.html), {
             ...(image !== "none" ? { preview: { mode: image, maxSize: Math.max(256, Math.min(2048, i.maxImageSize ?? 1024)) } } : {}),
             ...(i.at ? { at: i.at.map((x) => (x === "end" ? ("end" as const) : Number(x))) } : {}),
-            sheet: i.sheet === "none" ? false : i.sheet === "beats" ? "beats" : true,
+            sheet: i.sheet === "none" ? false : i.sheet === "beats" ? "beats" : i.sheet === "acts" ? "acts" : true,
+            ...(i.act ? { act: i.act } : {}),
             ...(i.themes ? { themes: i.themes } : {}),
             ...(i.motion ? { motion: i.motion } : {}),
             ...(i.camera === "follow" ? { camera: "follow" as const } : {}),

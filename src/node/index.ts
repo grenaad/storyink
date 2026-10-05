@@ -4,7 +4,10 @@
 import fs from "node:fs"
 import path from "node:path"
 import { detectMermaid, fromMermaid } from "../core/mermaid/index.ts"
-import { renderHtml, renderSvg, type HtmlOptions } from "../core/render/index.tsx"
+import { renderHtml, renderSvg, toScene, type HtmlOptions } from "../core/render/index.tsx"
+import type { Scene } from "../core/scene.ts"
+import { actEndTime } from "../core/story/state.ts"
+import { closest } from "../core/suggest.ts"
 import { animatedSvg, type AnimatedSvgOptions } from "../core/render/smil.tsx"
 import type { Spec } from "../core/spec.ts"
 import { validate, type Diagnostic } from "../core/validate.ts"
@@ -49,7 +52,7 @@ export interface WriteResult {
 /** Render a spec to HTML and/or SVG files. Invalid specs write nothing. */
 export function writeDiagram(
   input: Spec | unknown,
-  out: { html?: string; svg?: string; theme?: ThemeName; htmlOptions?: HtmlOptions },
+  out: { html?: string; svg?: string; theme?: ThemeName; htmlOptions?: HtmlOptions; /** Act stories: the static SVG shows this act's settled end. */ act?: string },
 ): WriteResult {
   const v = validate(input)
   if (!v.ok || !v.spec) return { ok: false, diagnostics: v.diagnostics }
@@ -61,7 +64,21 @@ export function writeDiagram(
     res.html = { path: path.resolve(out.html), bytes: Buffer.byteLength(html) }
   }
   if (out.svg) {
-    const svg = renderSvg(v.spec, out.theme ? { theme: out.theme } : {})
+    let t: number | undefined
+    let src: Spec | Scene = v.spec
+    if (out.act) {
+      const scene = toScene(v.spec)
+      const acts = scene.timeline?.acts
+      t = scene.timeline ? actEndTime(scene.timeline, out.act) : undefined
+      if (t === undefined) {
+        const guess = acts ? closest(out.act, acts.map((a) => a.id)) : undefined
+        res.ok = false
+        res.diagnostics = [...res.diagnostics, { severity: "error", path: "act", message: `unknown act "${out.act}"`, hint: acts ? `${guess ? `did you mean "${guess}"? ` : ""}acts: ${acts.map((a) => a.id).join(", ")}` : "the story has no acts" }]
+        return res
+      }
+      src = scene
+    }
+    const svg = renderSvg(src, { ...(out.theme ? { theme: out.theme } : {}), ...(t !== undefined ? { t } : {}) })
     fs.mkdirSync(path.dirname(out.svg), { recursive: true })
     fs.writeFileSync(out.svg, svg)
     res.svg = { path: path.resolve(out.svg), bytes: Buffer.byteLength(svg) }

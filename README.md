@@ -69,6 +69,11 @@ It also works without JavaScript.
 <td valign="top"><a href="#slides"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/gallery/pr-review.deck.slide3-build4.dark.png"><img alt="Present mode: slide 3 of 8 mid-build, the diff node lit and the new queue highlighted" src="docs/gallery/pr-review.deck.slide3-build4.light.png" width="260"></picture></a><br><b>Slides</b><br><sub>present any page; builds step the figure</sub></td>
 <td valign="top"><a href="#animated-svg-readmes-and-prs"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/gallery/auth-session-to-jwt.sequence.animated.dark.svg"><img alt="Sequence change story, animated: session lookups replaced by a signed JWT" src="docs/gallery/auth-session-to-jwt.sequence.animated.light.svg" width="260"></picture></a><br><b>Animated SVG</b><br><sub>SMIL inside a plain <code>&lt;img&gt;</code></sub></td>
 </tr>
+<tr>
+<td valign="top"><a href="#tones-acts-and-overlays"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/gallery/request-colours.story.pulse.dark.png"><img alt="A gold pulse with its payload label charge $42.00 in flight" src="docs/gallery/request-colours.story.pulse.light.png" width="260"></picture></a><br><b>Tones and payload labels</b><br><sub>colour carries meaning</sub></td>
+<td valign="top"><a href="#tones-acts-and-overlays"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/gallery/payment-retry.story.acts.dark.png"><img alt="Act sheet: today the order is lost, with a retry queue it is paid" src="docs/gallery/payment-retry.story.acts.light.png" width="260"></picture></a><br><b>Acts</b><br><sub>problem → rewind → fix</sub></td>
+<td valign="top"><a href="#tones-acts-and-overlays"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/gallery/secret-broker.story.toasts.dark.png"><img alt="Approval toasts piling up with a prompts HUD" src="docs/gallery/secret-broker.story.toasts.light.png" width="260"></picture></a><br><b>Toasts, annotations, HUD</b><br><sub>overlays on the stage</sub></td>
+</tr>
 </table>
 
 ## Diagram types
@@ -246,6 +251,130 @@ Examples: [checkout](examples/checkout.architecture.json), [OAuth](examples/oaut
 Spec: [storyboard](docs/spec.md#storyboard-story-opt-in), [beats](docs/spec.md#beats),
 [motion](docs/spec.md#motion-mode-storymotion), [reduced motion](docs/spec.md#reduced-motion-play-steps),
 [follow camera](docs/spec.md#follow-camera-storycamera).
+
+## Tones, acts and overlays
+
+> **Available since 0.6.0.** Everything in this section needs storyink 0.6.0 or later; earlier
+> versions do not know these fields. See [CHANGELOG.md](CHANGELOG.md#060).
+
+Three example stories in [examples/stories/](examples/stories) show the new pieces:
+[request-colours](examples/stories/request-colours.dataflow.json) (tones and payload labels),
+[secret-broker](examples/stories/secret-broker.architecture.json) (acts, toasts, annotation, HUD)
+and [payment-retry](examples/stories/payment-retry.acts.architecture.json) (a code change told as
+two acts).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/gallery/request-colours.story.animated.dark.svg">
+  <img alt="One order, four colours: a blue request with its payload label, a gold charge, a rose decline that spreads, a sage response that lands on the wire (animated)" src="docs/gallery/request-colours.story.animated.light.svg">
+</picture>
+
+**Tones: colour carries meaning.** Five tones, the same as page tones: `note` (blue, data in
+flight), `warn` (gold, pending), `risk` (rose, failure), `good` (sage, done), `neutral` (ink). A
+pulse takes a `tone` and a payload `label`; `tint` colours its target on arrival, `stain` keeps the
+tone on each wire it has passed, and `land: "edge"` leaves the label on the wire as its edge label.
+The `tone` step colours nodes, groups, edges (and toasts, annotations, HUD metrics) with an
+optional `stagger` for a contagion sweep; `to: null` clears. `set` / `status` work on plain graph
+nodes (`detail` + `tone`, a spinner / check / cross on the detail line), and `*phrase*` in a caption
+is drawn in the accent.
+
+```json
+{ "caption": "Gold: the order is *pending* while payments decides",
+  "status": { "id": "orders", "to": "running" },
+  "set": { "id": "orders", "detail": "charging card…", "tone": "warn" },
+  "pulse": { "edge": "orders->payments", "tone": "warn", "label": "charge $42.00", "tint": true } },
+{ "tone": { "ids": ["payments", "orders->payments", "orders->alerts"], "to": "risk", "stagger": 0.15 } },
+{ "pulse": { "route": ["client->gateway", "gateway->orders"], "reverse": true, "tone": "good",
+             "label": "201 Created", "stain": true, "land": "edge" } }
+```
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/gallery/request-colours.story.pulse.dark.png">
+  <img alt="Mid-flight: the gold charge $42.00 label held clear of the payments box while the dot arrives" src="docs/gallery/request-colours.story.pulse.light.png" width="720">
+</picture>
+
+**Payload labels you can read in flight.** A label follows a *label track*: it **waits** parked
+clear of the source box until the dot catches up, **follows** the dot, then **waits** clear of the
+destination box until the dot touches it, and fades out after arrival (multi-hop routes hand off
+between hops instead of drawing over the middle node). A labelled pulse also flies **slower**, at
+a steady cruise: 0.6 s + 0.05 s per character of reading time over the part of the flight where
+the label moves, clamped to 1.2–3.2 s and never faster than an unlabelled pulse; an explicit
+`duration` wins. Labels over 32 characters are clipped with "…". Reduced motion has no flights, so
+no labels.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/gallery/secret-broker.story.acts.dark.png">
+  <img alt="Act sheet: raw CLI (prompts: 4, the raw key in the agent's chat, rose) beside with broker (prompts: 0, a reference in the same slot, sage)" src="docs/gallery/secret-broker.story.acts.light.png">
+</picture>
+
+**Acts: problem → rewind → fix.** `story.acts` (2–6, graph diagrams) puts several scenarios on one
+stage. A step with `act` starts the next one; by default (`"enter": "rewind"`) the previous act
+plays backwards to its start, then the topology morphs in place (leaving wires retract, a node
+fades in in the gap, new wires draw on); the act's own steps then send the request through the fix.
+The rewind only plays the previous act backwards: nothing replays act 1's steps for you, so write
+the second pass as steps of its own (`"cut"` and `"continue"` are the other entries). Elements say which acts they are in with `in: [actIds]`; in
+an act story `delta: "removed"` means the first act only and `delta: "added"` every later act, so
+a change diagram becomes a before / after (as in
+[payment-retry](examples/stories/payment-retry.acts.architecture.json)). Positions come from one
+layout of every act, so nothing jumps; each wire is routed only against the boxes it shares a
+stage with. Act tiles have their own sheet and anchors: `#act=<id>` seeks to an act's settled end,
+`#sheet=acts` / `snapshot --sheet acts` lays the acts side by side.
+
+```json
+"nodes": [ { "id": "broker", "label": "secret broker", "in": ["after"] }, … ],
+"edges": [ { "id": "ask", "from": "agent", "to": "cli", "in": ["before"] }, … ],
+"story": {
+  "acts": [ { "id": "before", "label": "raw CLI", "tone": "risk" },
+            { "id": "after", "label": "with broker", "tone": "good" } ],
+  "steps": [ …, { "act": "after", "caption": "Same request, with a secret broker in between" }, … ]
+}
+```
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/gallery/secret-broker.story.toasts.dark.png">
+  <img alt="Four approval toasts piled up above the vault CLI, the act chip raw CLI and the HUD prompts: 4" src="docs/gallery/secret-broker.story.toasts.light.png" width="720">
+</picture>
+
+**Annotations, toasts and HUD metrics.** An **annotation** is one mono line attached above (or
+below) a node; it can be typed, `set` to a new text and tone, and after a rewind the same slot can
+hold the opposite (the leaked key in act 1, a reference in act 2). A **toast** is a small card near
+a node (`toast` step, gone after `for` seconds or at a `dismiss`); slots are placed by the layout so
+a pile never overlaps nodes, labels or each other. A **HUD** metric is a big `label: value` number
+on the stage, driven by the existing `counter` step: the number that drops between the problem and
+the fix.
+
+```json
+"annotations": [ { "id": "chat", "on": "agent", "text": "chat ▸ sk-live-7Hq2Zx9mK4pL…", "tone": "risk" } ],
+"story": {
+  "hud": [ { "id": "prompts", "label": "prompts", "value": 0 } ],
+  "steps": [
+    { "toast": { "id": "p1", "near": "cli", "title": "Allow access?", "text": "vault CLI wants 1 secret", "tone": "warn" },
+      "counter": { "id": "prompts", "to": 1 } },
+    { "dismiss": "all", "type": { "id": "chat", "cps": 24 } },
+    { "toast": { "near": "cli", "title": "approved once ✓", "text": "no more prompts this session", "tone": "good", "for": 2.8 } }
+  ]
+}
+```
+
+**Where each piece shows.** The HTML viewer, snapshots, beat sheets and the animated SVG share one
+timeline, so rewinds, morphs, toasts and labels play everywhere a story plays. The act chip and the
+HUD are pinned to the HTML stage; the animated SVG draws them in its header row; beat and act sheet
+tiles show the HUD in their caption line. The **static SVG** has no header, so it shows neither (tones,
+annotations and the end state are there); `render --svg x.svg --act <id>` writes one act's settled
+end. `--act` applies only to `--svg` (open the HTML with `#act=<id>` instead). A
+toast still up at the end of an act or the story is a warning.
+
+```sh
+storyink render examples/stories/secret-broker.architecture.json -o broker.html \
+  --svg broker.before.svg --act before
+storyink render examples/stories/secret-broker.architecture.json -o broker.html \
+  --animated-svg broker.svg --theme both
+storyink snapshot broker.html --sheet acts -o shots
+```
+
+Spec: [tones](docs/spec.md#tones-colour-carries-meaning), [acts](docs/spec.md#acts-problem--rewind--fix-storyacts),
+[annotations](docs/spec.md#annotations-annotations), [toasts](docs/spec.md#toasts-toast-dismiss),
+[HUD](docs/spec.md#hud-metrics-storyhud). All three examples, with captures and sheets:
+`bun run gallery:stories` (writes `examples/stories/out/index.html`).
 
 ## Rich nodes and content steps
 
@@ -892,6 +1021,7 @@ to `https://unpkg.com/storyink/schema/storyink.schema.json`) for editor completi
 | `direction` | `TB` (`TD`) `BT` `LR` `RL` | graphs; omit to pick TB or LR by aspect (closest to 16:10) |
 | `style` | `{ "arrowheads": bool, "legend": bool }` | graph arrowheads (default off); the change legend (default: on when any element has a delta) |
 | `story` | `"auto"`, `"changes"` or [an object](#story) | opt-in |
+| `annotations` | `[{ "id", "on", "side", "text", "tone", "in" }]` | graphs; one mono line on a node ([overlays](#tones-acts-and-overlays)) |
 | `change` | `{ "base", "head", "title", "url" }` | `base → head` (else `title`) above the diagram |
 | `changes` | object | written by `--changes`; not hand-written |
 | `$schema` | string | ignored by the renderer |
@@ -919,6 +1049,7 @@ to `https://unpkg.com/storyink/schema/storyink.schema.json`) for editor completi
 | `stack` | `chip` | 1–3 sheets peeking below |
 | `diff` | `code` | unified hunk text, `{ "file", "lines", "context", "max" }`, or resolved `{ "file", "hunks" }` |
 | `delta` `stat` `summary` `files` | all | [change diagrams](#change-diagrams) |
+| `in` | all | act ids the node is on stage in ([acts](#tones-acts-and-overlays)) |
 
 | edge field | value |
 | --- | --- |
@@ -928,6 +1059,7 @@ to `https://unpkg.com/storyink/schema/storyink.schema.json`) for editor completi
 | `style` | `solid` (default) `dashed` `thick` |
 | `arrow` | `end` (default) `none` `both`; drawn with `"style": { "arrowheads": true }` |
 | `delta` `emphasis` `summary` `files` | [change diagrams](#change-diagrams) |
+| `in` | act ids (also limited to the acts both ends are in) |
 
 | group field | value |
 | --- | --- |
@@ -937,6 +1069,7 @@ to `https://unpkg.com/storyink/schema/storyink.schema.json`) for editor completi
 | `direction` | inner layout direction (best-effort) |
 | `bare` | label only, no box (a column heading) |
 | `delta` | [change diagrams](#change-diagrams) |
+| `in` | act ids |
 
 ### Sequence
 
@@ -965,6 +1098,8 @@ Message references (`start`, `end`, `after`) are 0-based indices or message ids.
 | `camera` | `follow` `fit` | `follow` |
 | `spotlight` | `true` or `"veil"` | off |
 | `rewind` | `tape` `glitch` | `tape` (the HTML replay effect) |
+| `acts` | 2–6 `{ "id", "label", "tone" }` | none; graphs ([acts](#tones-acts-and-overlays)) |
+| `hud` | `[{ "id", "label", "value", "tone", "prefix", "suffix", "at" }]`; `at`: `top-right` `bottom-left` | none |
 
 `"story": "auto"` and `"story": "changes"` are shorthands for `{ "steps": "auto" }` and
 `{ "steps": "changes" }`.
@@ -976,21 +1111,25 @@ Message references (`start`, `end`, `after`) are 0-based indices or message ids.
 | `id` | string | names the step (beat sheets, `__storyink.steps`, scrolly `at`) |
 | `at` | seconds, or `"+x"` | start time; default `"+0"` after the previous step ends; with reading holds an absolute `at` is a minimum |
 | `reveal` | id or list | appears (fade and rise): nodes, groups, edges, notes `note-<i>`, frames `frame-<i>` |
-| `pulse` | edge id, `"from->to"`, a list, `{ "route": [...] }`, `{ "edge", "duration", "reverse", "delay" }` | a dot travels the wire and the target glows |
+| `pulse` | edge id, `"from->to"`, a list, `{ "route": [...] }`, `{ "edge", "duration", "reverse", "delay" }`; also `"tone"`, `"label"`, `"land": "edge"`, `"tint"`, `"stain"` | a dot travels the wire and the target glows |
 | `highlight` | ids, or `{ "ids", "for" }` | flood glow and text flash |
 | `caption` | string | a line under the title |
-| `counter` | `{ "id", "to" }` or a list | rolls a node counter |
+| `counter` | `{ "id", "to" }` or a list | rolls a node counter (or a HUD metric) |
 | `stop` | string | a chapter: scrubber tick, beat-sheet title, Shift+→ / ← stop |
 | `hold` | seconds, 0–60 | the reading hold after this beat (not scaled by `pace`) |
 | `type` | id, or `{ "id", "by", "cps", "duration" }` | typewriter on a code node or a row (`by`: `char` `word`) |
-| `set` | `{ "id", "code" }`, `{ "id", "text", "detail", "tag" }`, `{ "id", "label" }` | crossfades to new content |
+| `set` | `{ "id", "code" }`, `{ "id", "text", "detail", "tag" }`, `{ "id", "label" }`; also `{ "id", "label", "detail", "tag", "tone" }` on a plain node, `{ "id", "text", "tone" }` on an annotation | crossfades to new content |
 | `clear` | id or list | fades content out |
 | `line` | `"code#2"`, `"code#2-4"`, `"pay#+14"`, `{ "id", "lines" }`, `{ "id", "hunk" }`, `{ "id", "off": true }` | the active-line bar |
-| `status` | `{ "id": "node#row", "to" }` | `none` `running` `done` `error` |
+| `status` | `{ "id": "node#row", "to" }` (also a plain node) | `none` `running` `done` `error` |
 | `dim`, `undim` | ids, or `{ "ids", "to" }` | lower to a level (default 0.42) / back to full |
 | `hide`, `show` | ids | take away / bring back something already there |
 | `wire`, `unwire` | edge, or `{ "edge", "duration" }` | draw an edge on / retract it |
-| `glow`, `unglow` | ids | a persistent glow |
+| `glow`, `unglow` | ids (`glow` also `{ "ids", "tone" }`) | a persistent glow |
+| `tone` | `{ "ids", "to", "stagger" }` or a list; `to`: `note` `warn` `risk` `good` `neutral` or `null` | colours nodes, groups, edges, annotations, toasts, HUD metrics |
+| `toast` | `{ "id", "near", "title", "text", "tone", "for" }` or a list | a card near a node |
+| `dismiss` | toast ids or `"all"` | removes toasts |
+| `act`, `enter` | an act id; `rewind` (default) `cut` `continue` | starts that act |
 | `focus` | id or list | where the follow camera, spotlight and veil aim |
 | `change` | id or list | plays these elements' deltas |
 | `apply` | id, `{ "id", "hunk", "cps" }`, or a list | plays a diff code node's change |
@@ -1028,6 +1167,7 @@ storyink render <in.json|in.mmd|-> [-o out.html] [--svg out.svg] [--theme light|
                [--motion full|reduced|system]   story playback motion (default full; system = OS setting)
                [--camera follow|fit]   viewer camera while playing (default follow)
                [--pace N]   reading holds after each beat × N (default 0.6; 0 = none)
+               [--act <id>] act stories: --svg shows that act's settled end
                [--animated-svg out.svg [--theme light|dark|both] [--once] [--font system|embed]]
                  animated SVG (SMIL) for READMEs / PRs: plays inside <img>, no script
                [--changes changes.json|x.diff|x.patch]   resolve files / stat / diff nodes from a diff
@@ -1038,7 +1178,7 @@ storyink diff [<range>|<base> [<head>]] [--staged] [--patch file|-] [-o changes.
                  parse git diff (default: working tree vs merge base with main/master)
 storyink mermaid <in.mmd> [-o out.json]
 storyink validate <in|page.json> [--json]
-storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats]|--no-sheet]
+storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats|acts]|--no-sheet] [--act <id>]
                  [--at 0.5,1.2,end] [--motion reduced] [--camera follow] [--pace N] [--scale 2] [-o dir] [--json]
                  [--rail] [--drawer <id|path>]   narration rail / change drawer in the --at captures
                  [--figure <id>]   page HTML: snapshot one figure (default: full-page captures)
@@ -1061,7 +1201,7 @@ input (`x.json` → `x.html`). `--theme both` needs `--animated-svg`. `--pace` t
 | `storyink_diff` | `range`, `base`, `head`, `staged`, `patch` (diff text), `paths` (pathspecs), `output` |
 | `storyink_from_mermaid` | `mermaid` (required), `output` |
 | `storyink_validate` | `spec`, `mermaid` or `path` |
-| `storyink_snapshot` | `html` (required); `themes`; `width`; `outDir`; `at`; `sheet` (`themes` `beats` `none`); `image` (`overview` `full` `none`); `maxImageSize` (256–2048, default 1024); `motion` (`full` `reduced`); `camera` (`fit` `follow`); `pace`; `rail`; `drawer`; `figure`; `slides`; `builds`; `scrolly` |
+| `storyink_snapshot` | `html` (required); `themes`; `width`; `outDir`; `at`; `sheet` (`themes` `beats` `acts` `none`); `act`; `image` (`overview` `full` `none`); `maxImageSize` (256–2048, default 1024); `motion` (`full` `reduced`); `camera` (`fit` `follow`); `pace`; `rail`; `drawer`; `figure`; `slides`; `builds`; `scrolly` |
 
 ### Viewer keys
 
@@ -1096,7 +1236,8 @@ otherwise), the wheel scrolls the page and Ctrl / ⌘ + wheel or a pinch zooms. 
 | `camera` | `follow` `fit` | the follow camera; with `t`, `follow` shows the followed view |
 | `pace` | a number | the reading-hold pace |
 | `static` | `1` | story runtime off, the final frame (page-wide on pages) |
-| `sheet` | `light,dark` or `beats` | both themes side by side, or one tile per beat |
+| `sheet` | `light,dark`, `beats` or `acts` | both themes side by side, one tile per beat, or one tile per act |
+| `act` | an act id | seeks, paused, to that act's settled end |
 | `rail` | `0` `1` | hides / shows the narration rail |
 | `drawer` | an element id or file path | opens the drawer on load |
 | `fig` | a figure id | pages: scopes `t`, `camera`, `motion`, `pace`, `drawer`, `rail`, `autoplay` and `static` to that figure |
@@ -1161,7 +1302,7 @@ From npm, pinned or not:
 
 ```jsonc
 // opencode.json (global ~/.config/opencode/ or project .opencode/)
-{ "plugins": ["storyink"] }            // or "storyink@0.5.0"
+{ "plugins": ["storyink"] }            // or "storyink@0.6.0"
 ```
 
 From a local checkout, for development: build first, then point `plugins` at the **directory**
@@ -1243,6 +1384,10 @@ file):
   [batch-email.changes](docs/gallery/batch-email.changes.dataflow.animated.light.svg) · [auth-session-to-jwt](docs/gallery/auth-session-to-jwt.sequence.animated.light.svg) · [payment-retry](docs/gallery/payment-retry.architecture.animated.light.svg) ·
   [etl-dedupe](docs/gallery/etl-dedupe.dataflow.animated.light.svg) · [cache-layer](docs/gallery/cache-layer.architecture.animated.light.svg) · [rate-limit-plugin](docs/gallery/rate-limit-plugin.architecture.animated.light.svg) ·
   [storyink-core](docs/gallery/storyink-core.architecture.animated.light.svg) (resolved with `--changes`)
+- **Tones, acts and overlays** (`bun run gallery:stories --docs`): [request-colours animated](docs/gallery/request-colours.story.animated.light.svg) ·
+  [request-colours mid-flight](docs/gallery/request-colours.story.pulse.light.png) · [secret-broker animated](docs/gallery/secret-broker.story.animated.light.svg) ·
+  [secret-broker act sheet](docs/gallery/secret-broker.story.acts.light.png) · [secret-broker toasts](docs/gallery/secret-broker.story.toasts.light.png) ·
+  [payment-retry act sheet](docs/gallery/payment-retry.story.acts.light.png)
 
 `bun run gallery` renders every example and Mermaid sample and writes a light and a dark PNG per
 example to `docs/gallery/`, plus a beat sheet for each story (`storyink-*` change examples are
@@ -1250,6 +1395,9 @@ resolved against [the 0.4.0 diff](examples/changes/storyink-0.4.0.changes.json))
 `bun run gallery:animated` writes the animated SVGs of the story examples
 (`*.animated.light.svg` / `*.animated.dark.svg`), and `bun run gallery:showcase` the PNGs of the
 HTML-only features (rail, drawer, page, scrolly, slides). `--only name,…` writes just those.
+`bun run gallery:stories` renders [examples/stories/](examples/stories) (HTML, SVGs, captures,
+beat and act sheets) to the git-ignored `examples/stories/out/`; `--docs` also copies the
+`*.story.*` pairs above to `docs/gallery/`.
 `bun run verify:smil` checks the animated SVGs in headless Chrome (frame parity with the viewer's
 frames, `<img>` playback, embedded font).
 
@@ -1272,6 +1420,7 @@ bun run build              # dist/ (ESM for node, .d.ts, CLI with a node shebang
 bun run gallery            # docs/gallery/*.png (needs Chrome / Playwright headless shell)
 bun run gallery:animated   # docs/gallery/*.animated.{light,dark}.svg
 bun run gallery:showcase   # docs/gallery PNGs of the rail, drawer, pages, scrolly and slides
+bun run gallery:stories    # examples/stories/out/ (ignored); --docs: docs/gallery/*.story.*
 bun run verify:smil        # animated SVGs: frame parity, <img> playback, embedded font
 bun run verify:viewer      # every viewer control with real mouse input, full and reduced motion
 bun run verify:narrate     # narration rail and change drawer

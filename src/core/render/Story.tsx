@@ -5,6 +5,7 @@ import type { Scene } from "../scene.ts"
 import { beatCaption, beatChapters, beatIndexAt, beatMotionChapters, beatMotionEnds, beatMotionStarts, mapStoryTime, skipGap, beatStops, beatTicks, beatTileMin, beatTimes, stepBoundary, stepMoveSpeed, stepMoveTarget, steppedSchedule, steppedStop, steppedTime, storyState } from "../story/state.ts"
 import type { Frame, Timeline } from "../story/types.ts"
 import { Diagram } from "./Diagram.tsx"
+import { HudLine } from "./Hud.tsx"
 
 export type Mode = "gate" | "playing" | "paused" | "ended" | "rewinding"
 
@@ -592,20 +593,45 @@ export function Transport({ c, tl }: { c: StoryControls; tl: Timeline }): ReactE
 export function Captions({ frame }: { frame?: Frame }): ReactElement {
   return (
     <div className="si-captions" aria-live="polite">
-      {(frame?.captions ?? []).map((c, i) => (
-        <p key={`${c.text}-${i}`} className="si-caption" style={c.o < 1 ? { opacity: c.o } : undefined}>
-          {c.text.split(/\s+/).map((w, k) => {
-            const p = c.words[k] ?? 1
-            return (
-              <span key={k} className="si-word" style={p < 1 ? { opacity: p, transform: `scale(${(0.95 + 0.05 * p).toFixed(3)})` } : undefined}>
-                {w}{" "}
-              </span>
-            )
-          })}
-        </p>
-      ))}
+      {(frame?.captions ?? []).map((c, i) => {
+        // `*emphasis*` ranges (char offsets in the plain text) → accent spans inside the words.
+        const starts = c.em ? [...c.text.matchAll(/\S+/g)].map((m) => m.index!) : []
+        return (
+          <p key={`${c.text}-${i}`} className="si-caption" style={c.o < 1 ? { opacity: c.o } : undefined}>
+            {c.text.split(/\s+/).map((w, k) => {
+              const p = c.words[k] ?? 1
+              return (
+                <span key={k} className="si-word" style={p < 1 ? { opacity: p, transform: `scale(${(0.95 + 0.05 * p).toFixed(3)})` } : undefined}>
+                  {c.em ? emWord(w, starts[k] ?? 0, c.em, c.tone ?? "note") : w}{" "}
+                </span>
+              )
+            })}
+          </p>
+        )
+      })}
     </div>
   )
+}
+
+/** A caption word starting at `at` with the emphasis ranges that fall inside it as accent spans. */
+function emWord(w: string, at: number, em: [number, number][], tone: string): ReactElement[] | string {
+  const cuts = em.filter(([a, b]) => b > at && a < at + w.length)
+  if (!cuts.length) return w
+  const out: ReactElement[] = []
+  let i = 0
+  cuts.forEach(([a, b], k) => {
+    const s0 = Math.max(0, a - at)
+    const s1 = Math.min(w.length, b - at)
+    if (s0 > i) out.push(<span key={`p${k}`}>{w.slice(i, s0)}</span>)
+    out.push(
+      <span key={`e${k}`} className={`si-em si-t-${tone}`}>
+        {w.slice(s0, s1)}
+      </span>,
+    )
+    i = s1
+  })
+  if (i < w.length) out.push(<span key="end">{w.slice(i)}</span>)
+  return out
 }
 
 /** `#sheet=beats`: one labelled tile per step plus the final frame. */
@@ -627,6 +653,7 @@ export function BeatSheet({ scene, tl, cols, range }: { scene: Scene; tl: Timeli
             <figcaption className="si-beat-cap">
               <span className="si-beat-n">{b.id !== "end" ? String(i + 1).padStart(2, "0") : "END"}</span> {b.label}
               <span className="si-beat-t">{b.t.toFixed(2)}s</span>
+              {tl.hud ? <HudLine tl={tl} frame={fr} /> : null}
             </figcaption>
             <Diagram scene={scene} frame={fr} copy={`beat${i}`} />
             <p className="si-beat-caption">{cap ?? " "}</p>

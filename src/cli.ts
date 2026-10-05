@@ -29,6 +29,7 @@ ${bold("Usage")}
                  [--motion full|reduced|system]   story playback motion (default full; system = OS setting)
                  [--camera follow|fit]   viewer camera while playing (default follow)
                  [--pace N]   reading holds after each beat × N (default 0.6; 0 = none)
+                 [--act <id>] act stories: --svg shows that act's settled end
                  [--animated-svg out.svg [--theme light|dark|both] [--once] [--font system|embed]]
                    animated SVG (SMIL) for READMEs / PRs: plays inside <img>, no script
                  [--changes changes.json|x.diff|x.patch]   resolve files / stat / diff nodes from a diff
@@ -39,7 +40,7 @@ ${bold("Usage")}
                    parse git diff (default: working tree vs merge base with main/master)
   storyink mermaid <in.mmd> [-o out.json]
   storyink validate <in|page.json> [--json]
-  storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats]|--no-sheet]
+  storyink snapshot <out.html> [--theme light,dark] [--width N] [--sheet [themes|beats|acts]|--no-sheet] [--act <id>]
                    [--at 0.5,1.2,end] [--motion reduced] [--camera follow] [--pace N] [--scale 2] [-o dir] [--json]
                    [--rail] [--drawer <id|path>]   narration rail / change drawer in the --at captures
                    [--figure <id>]   page HTML: snapshot one figure (default: full-page captures)
@@ -69,7 +70,7 @@ function parseArgs(argv: string[]): Args {
   const _: string[] = []
   const flags = new Map<string, string | true>()
   const rest: string[] = []
-  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size", "--animated-svg", "--font", "--motion", "--camera", "--pace", "--patch", "--changes", "--drawer", "--figure", "--scrolly"])
+  const takes = new Set(["-o", "--out", "--svg", "--theme", "--width", "--scale", "--t", "--at", "--story", "--preview", "--preview-size", "--animated-svg", "--font", "--motion", "--camera", "--pace", "--patch", "--changes", "--drawer", "--figure", "--scrolly", "--act"])
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "--") {
@@ -81,7 +82,7 @@ function parseArgs(argv: string[]): Args {
       const [k, ...v] = a.split("=")
       flags.set(k, v.join("="))
     } else if (takes.has(a) && i + 1 < argv.length) flags.set(a, argv[++i])
-    else if (a === "--sheet" && (argv[i + 1] === "beats" || argv[i + 1] === "themes")) flags.set(a, argv[++i])
+    else if (a === "--sheet" && (argv[i + 1] === "beats" || argv[i + 1] === "themes" || argv[i + 1] === "acts")) flags.set(a, argv[++i])
     else flags.set(a, true)
   }
   return { _, flags, rest }
@@ -196,7 +197,10 @@ async function main(argv: string[]): Promise<number> {
     const pinned = both ? undefined : theme(a)
     let ok = true
     if (html || svg) {
-      const res = writeDiagram(loaded.spec, { html, svg, theme: pinned })
+      const act = str(a, "--act")
+      if (act && !svg) process.stderr.write(`${yellow("warn ")} --act applies to --svg (open the HTML with #act=${act})\n`)
+      const res = writeDiagram(loaded.spec, { html, svg, theme: pinned, ...(act ? { act } : {}) })
+      if (!res.ok) printDiagnostics(res.diagnostics.filter((d) => d.path === "act"))
       if (res.html) console.log(`${green("wrote")} ${res.html.path} ${dim(kb(res.html.bytes))}`)
       if (res.svg) console.log(`${green("wrote")} ${res.svg.path} ${dim(kb(res.svg.bytes))}`)
       ok = res.ok
@@ -289,7 +293,8 @@ async function main(argv: string[]): Promise<number> {
     const r = await snapshot(file, {
       themes,
       ...(width ? { width } : {}),
-      sheet: a.flags.has("--no-sheet") ? false : str(a, "--sheet") === "beats" ? "beats" : true,
+      sheet: a.flags.has("--no-sheet") ? false : str(a, "--sheet") === "beats" ? "beats" : str(a, "--sheet") === "acts" ? "acts" : true,
+      ...(str(a, "--act") ? { act: str(a, "--act") } : {}),
       ...(str(a, "--preview")
         ? { preview: { mode: "overview" as const, path: str(a, "--preview")!, maxSize: Number(str(a, "--preview-size") ?? 1024) || 1024 } }
         : {}),
@@ -315,11 +320,16 @@ async function main(argv: string[]): Promise<number> {
       process.stderr.write(`${red("no browser")} ${r.error}\n`)
       return 2
     }
-    const rc = r.receipt!
+    if (!r.receipt) {
+      process.stderr.write(`${red("error")} ${r.error}\n`)
+      return 1
+    }
+    const rc = r.receipt
     console.log(`${dim("browser")} ${rc.browser.version ?? rc.browser.path}`)
     for (const c of rc.captures) console.log(`${green("png")} ${c.png}${c.at !== undefined && c.at !== "end" ? dim(` t=${c.at}`) : ""} ${dim(`${c.width}×${c.height} ${kb(c.bytes)} ${c.ms}ms`)}`)
     if (rc.sheet) console.log(`${green("sheet")} ${rc.sheet.png}`)
     for (const b of rc.beats ?? []) console.log(`${green("beats")} ${b.png}`)
+    for (const b of rc.acts ?? []) console.log(`${green("acts")} ${b.png}`)
     for (const p of rc.previews ?? []) console.log(`${green("preview")} ${p.path} ${dim(`${p.width}×${p.height} ${kb(p.bytes)} · ${p.shows}`)}`)
     for (const g of rc.gates) console.log(`${g.pass ? green("pass") : red("FAIL")} ${bold(g.name)} ${dim(g.detail)}`)
     const issues = (rc.lint as { issues?: { kind: string; ids: string[]; detail: string }[] } | undefined)?.issues ?? []

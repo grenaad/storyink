@@ -1,6 +1,6 @@
 {
   "name": "storyink",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Diagram library, CLI and OpenCode v2 plugin: architecture, workflow, sequence, dataflow and lifecycle diagrams from JSON or Mermaid into standalone HTML and SVG, with optional storyboard animation.",
   "type": "module",
   "main": "dist/index.js",
@@ -40,6 +40,7 @@
     "gallery": "bun run gen && bun scripts/gallery.ts",
     "gallery:animated": "bun run gen && bun scripts/animated-gallery.ts",
     "gallery:showcase": "bun run gen && bun scripts/showcase.ts",
+    "gallery:stories": "bun run gen && bun scripts/story-showcase.ts",
     "verify:smil": "bun run gen && bun scripts/smil-verify.ts",
     "verify:viewer": "bun run build && bun scripts/viewer-verify.ts",
     "verify:narrate": "bun run gen && bun scripts/narrate-verify.ts",

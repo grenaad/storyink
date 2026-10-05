@@ -1,8 +1,12 @@
 import { createContext, Fragment, useContext, type CSSProperties, type ReactElement, type ReactNode } from "react"
-import type { ContentLayer, Frame, StatusFrame } from "../story/types.ts"
+import type { ContentLayer, Frame, StatusFrame, Timeline } from "../story/types.ts"
+import type { Tone } from "../../theme/tones.ts"
+import { DETAIL_LH, LABEL_LH } from "../layout/nodes.ts"
 import { SHIMMER } from "../story/content-state.ts"
 import { geometry as G, type as T } from "../../theme/tokens.ts"
-import type { Arrowhead, CodeLine, Scene, SceneEdge, SceneFrame, SceneGroup, SceneNode, SceneRow } from "../scene.ts"
+import { toneKey } from "../../theme/tones.ts"
+import type { Arrowhead, CodeLine, Scene, SceneAnnotation, SceneEdge, SceneFrame, SceneGroup, SceneNode, SceneRow, SceneToast } from "../scene.ts"
+import { ANN, TOAST } from "../layout/overlays.ts"
 import { r2 } from "../layout/measure.ts"
 import { ICON_PATHS, STATUS_PATHS } from "./icons.ts"
 import type { Delta, Emphasis, IconName, RowStatus } from "../spec.ts"
@@ -47,6 +51,32 @@ export interface Union {
 const UnionCtx = createContext<Union | undefined>(undefined)
 const useUnion = () => useContext(UnionCtx)
 const xcls = (base: string | undefined, extra: boolean) => (extra ? `${base ? `${base} ` : ""}si-x` : base)
+
+/**
+ * Tone layers of an element: one per tone the story ever gives it (first-use order). Normally the
+ * frame's visible ones; in the animated SVG all of them, absent ones as extras at 0 (SMIL animates
+ * their opacity: `tone:<id>:<tone>`).
+ */
+function toneLayers(u: Union | undefined, tl: Timeline | undefined, fr: Frame | undefined, id: string): { tone: Tone; o: number; extra: boolean }[] {
+  const ev = tl?.tones?.[id]
+  if (!ev) return []
+  const all = [...new Set(ev.map((e) => e.to).filter((x): x is Tone => !!x))]
+  const cur = fr?.tone?.[id] ?? {}
+  return all.flatMap((tone): { tone: Tone; o: number; extra: boolean }[] => {
+    const o = cur[tone] ?? 0
+    return o > 0.001 ? [{ tone, o, extra: false }] : u ? [{ tone, o: 0, extra: true }] : []
+  })
+}
+
+/** One tone layer: its content in the tone's colours at the layer's opacity. */
+function ToneG({ id, tone, o, extra, smil, className, children }: { id: string; tone: Tone; o: number; extra: boolean; smil?: Smil; className?: string; children: ReactNode }) {
+  return (
+    <g className={xcls(`si-tone si-t-${tone}${className ? ` ${className}` : ""}`, extra)} opacity={extra ? 0 : o < 0.9995 ? +o.toFixed(3) : undefined}>
+      {smil?.(`tone:${id}:${tone}`)}
+      {children}
+    </g>
+  )
+}
 /** Gradient stop colour / opacity: custom properties normally, literals when pinned. */
 function stop(u: Union | undefined, color: string, opacity: number, gain = true): Record<string, unknown> {
   if (!u) return { style: { stopColor: `var(--si-${color})`, stopOpacity: gain ? `calc(var(--si-glowGain) * ${+opacity.toFixed(4)})` : opacity } }
@@ -171,6 +201,10 @@ function NodeView({ n, copy, fr, smil, typed }: { n: SceneNode; copy: string; fr
   // A `change` step owns this node's delta look: neutral before, the delta face fades in over it.
   const ch = useChange(n.id, fr)
   const face = rich ? <RichFace n={n} /> : <NodeShape n={n} />
+  const u = useUnion()
+  const tl = useContext(TlCtx)
+  const tones = toneLayers(u, tl, fr, n.id)
+  const plainText = !rich && (n.labels || n.details || n.tags || n.glyph)
   return (
     <g
       className={ch ? `si-node si-a-${n.accent0 ?? n.accent}` : `si-node si-a-${n.accent}${n.delta ? ` si-d-${n.delta}` : ""}`}
@@ -188,16 +222,31 @@ function NodeView({ n, copy, fr, smil, typed }: { n: SceneNode; copy: string; fr
           {face}
         </ChangeLayer>
       ) : null}
+      {tones.map((x) => (
+        <ToneG key={x.tone} id={n.id} {...x} smil={smil}>
+          {face}
+        </ToneG>
+      ))}
       {smil?.(`glow:${n.id}`)}
       {glows.map((g, k) => {
         const gid = `si-glow-${copy}-${n.id}-${k}`.replace(/[^\w-]/g, "_")
         return (
-          <g key={gid} className="si-glow" style={{ mixBlendMode: "var(--si-glowBlend)" as never }}>
+          <g key={gid} className="si-glow" style={g.tone ? undefined : { mixBlendMode: "var(--si-glowBlend)" as never }}>
             <defs>
               <radialGradient id={gid} gradientUnits="userSpaceOnUse" cx={f(g.cx - n.x)} cy={f(g.cy - n.y)} r={g.r}>
-                <stop offset="0" style={{ stopColor: "var(--si-glowCrest)", stopOpacity: `calc(var(--si-glowGain) * ${g.a})` }} />
-                <stop offset="0.45" style={{ stopColor: "var(--si-glow)", stopOpacity: `calc(var(--si-glowGain) * ${+(g.a * 0.45).toFixed(3)})` }} />
-                <stop offset="1" style={{ stopColor: "var(--si-glow)", stopOpacity: 0 }} />
+                {g.tone ? (
+                  <>
+                    <stop offset="0" style={{ stopColor: `var(--si-${toneKey(g.tone)})`, stopOpacity: +(g.a * TONED_GLOW).toFixed(3) }} />
+                    <stop offset="0.45" style={{ stopColor: `var(--si-${toneKey(g.tone)})`, stopOpacity: +(g.a * TONED_GLOW * 0.45).toFixed(3) }} />
+                    <stop offset="1" style={{ stopColor: `var(--si-${toneKey(g.tone)})`, stopOpacity: 0 }} />
+                  </>
+                ) : (
+                  <>
+                    <stop offset="0" style={{ stopColor: "var(--si-glowCrest)", stopOpacity: `calc(var(--si-glowGain) * ${g.a})` }} />
+                    <stop offset="0.45" style={{ stopColor: "var(--si-glow)", stopOpacity: `calc(var(--si-glowGain) * ${+(g.a * 0.45).toFixed(3)})` }} />
+                    <stop offset="1" style={{ stopColor: "var(--si-glow)", stopOpacity: 0 }} />
+                  </>
+                )}
               </radialGradient>
             </defs>
             <rect x={0} y={0} width={n.w} height={n.h} fill={`url(#${gid})`} />
@@ -213,22 +262,44 @@ function NodeView({ n, copy, fr, smil, typed }: { n: SceneNode; copy: string; fr
           <path className="si-glyph" d="M0.5 9.5C0.5 6.8 2.3 5.6 4.5 5.6S8.5 6.8 8.5 9.5" />
         </g>
       ) : null}
-      {!rich && n.tag ? (
+      {plainText ? <PlainText n={n} fr={fr} smil={smil} flash={flash} tones={tones} actorX={actorIcon ? cx + 6 : cx} /> : null}
+      {!rich && !plainText && n.tag ? (
         <text className="si-tag" x={f(actorIcon ? cx + 6 : cx)} y={f(n.text.tagY)} textAnchor="middle">
           {n.tag}
         </text>
       ) : null}
-      {(rich ? [] : n.label).map((line, k) => (
+      {(rich || plainText ? [] : n.label).map((line, k) => (
         <text key={`l${k}`} className={n.shape === "pill" ? "si-label si-pill-label" : "si-label"} x={f(cx)} y={f(n.text.labelY[k])} textAnchor="middle" style={flashFill(flash, "ink")}>
           {line}
           {smil?.(`flash:${n.id}`)}
         </text>
       ))}
-      {n.detail.map((line, k) => (
+      {(plainText ? [] : n.detail).map((line, k) => (
         <text key={`d${k}`} className="si-detail" x={f(cx)} y={f(n.text.detailY[k])} textAnchor="middle">
           {line}
         </text>
       ))}
+      {!plainText && n.detail.length && tones.length ? (
+        // Toned nodes: the detail line in the tone (the label stays ink).
+        tones.map((x) => (
+          <ToneG key={x.tone} id={n.id} {...x} smil={smil}>
+            {n.detail.map((line, k) => (
+              <text key={`d${k}`} className="si-detail" x={f(cx)} y={f(n.text.detailY[k])} textAnchor="middle">
+                {line}
+              </text>
+            ))}
+          </ToneG>
+        ))
+      ) : null}
+      {!rich && !plainText && n.tag && tones.length
+        ? tones.map((x) => (
+            <ToneG key={`t${x.tone}`} id={n.id} {...x} smil={smil}>
+              <text className="si-tag" x={f(actorIcon ? cx + 6 : cx)} y={f(n.text.tagY)} textAnchor="middle">
+                {n.tag}
+              </text>
+            </ToneG>
+          ))
+        : null}
       {n.counter && n.text.counterY !== undefined ? (
         <text className="si-counter" x={f(cx)} y={f(n.text.counterY)} textAnchor="middle">
           {n.counter.label ? <tspan className="si-counter-label">{`${n.counter.label.toUpperCase()} `}</tspan> : null}
@@ -396,20 +467,32 @@ function LegendView({ scene, fr, smil }: { scene: Scene; fr?: Frame; smil?: Smil
 }
 
 /** Persistent glow (glow / unglow): an ink rim on the face plus the radial flood at amplitude `lit`. */
-function LitView({ n, copy, lit, group, extra, smil }: { n: SceneNode; copy: string; lit: number; group?: number; extra?: boolean; smil?: Smil }) {
+function LitView({ n, copy, lit, group, extra, smil, tone }: { n: SceneNode; copy: string; lit: number; group?: number; extra?: boolean; smil?: Smil; tone?: Tone }) {
   const u = useUnion()
-  const gid = `si-lit-${copy}-${n.id}`.replace(/[^\w-]/g, "_")
+  const gid = `si-lit-${copy}-${n.id}${tone ? `-${tone}` : ""}`.replace(/[^\w-]/g, "_")
   const h = n.shape === "chip" && n.stack ? n.h - n.stack * G.stackStep : n.h
   const a = 0.28 * lit
+  // A toned glow: the tone's ink, normal blend, no theme gain.
+  const ta = TONED_GLOW * lit
   return (
-    <g className={xcls("si-lit", !!extra)} data-si={`lit:${n.id}`} opacity={group !== undefined ? +group.toFixed(3) : undefined}>
-      {smil?.(`lit:${n.id}`)}
-      <g style={blendStyle(u)}>
+    <g className={xcls(tone ? `si-lit si-lit-tone si-t-${tone}` : "si-lit", !!extra)} data-si={`lit:${n.id}`} opacity={group !== undefined ? +group.toFixed(3) : undefined}>
+      {smil?.(tone ? `lit:${n.id}:${tone}` : `lit:${n.id}`)}
+      <g style={tone ? undefined : blendStyle(u)}>
         <defs>
           <radialGradient id={gid} gradientUnits="userSpaceOnUse" cx={f(n.w / 2)} cy={f(h / 2)} r={f(Math.max(n.w, h) * 0.75)}>
-            <stop offset="0" {...stop(u, "glowCrest", a)} />
-            <stop offset="0.45" {...stop(u, "glow", a * 0.45)} />
-            <stop offset="1" {...stop(u, "glow", 0, false)} />
+            {tone ? (
+              <>
+                <stop offset="0" {...stop(u, toneKey(tone), ta, false)} />
+                <stop offset="0.45" {...stop(u, toneKey(tone), ta * 0.45, false)} />
+                <stop offset="1" {...stop(u, toneKey(tone), 0, false)} />
+              </>
+            ) : (
+              <>
+                <stop offset="0" {...stop(u, "glowCrest", a)} />
+                <stop offset="0.45" {...stop(u, "glow", a * 0.45)} />
+                <stop offset="1" {...stop(u, "glow", 0, false)} />
+              </>
+            )}
           </radialGradient>
         </defs>
         <rect x={0} y={0} width={n.w} height={h} fill={`url(#${gid})`} />
@@ -424,10 +507,26 @@ function LitSlot({ n, copy, fr, smil }: { n: SceneNode; copy: string; fr?: Frame
   const u = useUnion()
   const lit = fr?.lit?.[n.id]
   const tl = useContext(TlCtx)
-  if (u && tl?.lit?.[n.id]) return <LitView n={n} copy={copy} lit={1} group={lit ?? 0} extra={!lit} smil={smil} />
-  return lit ? <LitView n={n} copy={copy} lit={lit} /> : null
+  const ws = tl?.lit?.[n.id]
+  // Toned glows (`glow: { ids, tone }`): one layer per tone, after the untoned one.
+  const toned = [...new Set((ws ?? []).map((w) => w.tone).filter((x): x is Tone => !!x))]
+  const plain = !ws || ws.some((w) => !w.tone)
+  const base = u && ws && plain ? <LitView n={n} copy={copy} lit={1} group={lit ?? 0} extra={!lit} smil={smil} /> : lit ? <LitView n={n} copy={copy} lit={lit} /> : null
+  if (!toned.length) return base
+  return (
+    <>
+      {base}
+      {toned.map((t) => {
+        const a = fr?.litTone?.[n.id]?.[t]
+        if (u) return <LitView key={t} n={n} copy={copy} lit={1} group={a ?? 0} extra={!a} smil={smil} tone={t} />
+        return a ? <LitView key={t} n={n} copy={copy} lit={a} tone={t} /> : null
+      })}
+    </>
+  )
 }
 const TlCtx = createContext<import("../story/types.ts").Timeline | undefined>(undefined)
+/** Toned glows (arrival and persistent): peak alpha of the tone's ink (normal blend, no theme gain). */
+const TONED_GLOW = 0.9
 
 /** Spotlight: a soft light over the active target (after labels, before pulses). */
 function SpotLayer({ fr, copy, smil }: { fr?: Frame; copy: string; smil?: Smil }) {
@@ -721,6 +820,118 @@ function RowView({ n, r, fr, smil, copy, typed }: { n: SceneNode; r: SceneRow; f
   )
 }
 
+/**
+ * A plain node's story text: tag / label / detail versions as crossfading layers (`set`), a detail
+ * version's own tone, the node's tone copies of tag and detail (the label stays ink), and the
+ * status glyph at the start of the detail line.
+ */
+function PlainText({ n, fr, smil, flash, tones, actorX }: { n: SceneNode; fr?: Frame; smil?: Smil; flash?: number; tones: { tone: Tone; o: number; extra: boolean }[]; actorX: number }) {
+  const u = useUnion()
+  const tl = useContext(TlCtx)
+  const cx = n.text.cx
+  const layersOf = (key: string) => unionLayers(u, tl, key, fr?.content?.[key] ?? [{ v: 0, o: 1 }])
+  const layer = (key: string, k: string, l: ContentLayer, extra: boolean, children: ReactNode, cls?: string) => (
+    <g key={key} className={xcls(cls, extra)} data-v={l.v} style={extra ? undefined : layerStyle(l.o)} opacity={extra ? 0 : undefined}>
+      {smil?.(`layer:${k}:${l.v}`)}
+      {children}
+    </g>
+  )
+  const tags = n.tags ?? [n.tag]
+  const labels = n.labels ?? [n.label]
+  const details = n.details ?? [{ lines: n.detail }]
+  const LN = n.text.labelY.length
+  const DN = n.text.detailY.length
+  const tagKey = `${n.id}@tag`
+  const labelKey = `${n.id}@label`
+  const detailKey = `${n.id}@detail`
+  const tagView = () =>
+    layersOf(tagKey).map(({ l, extra }) =>
+      tags[l.v]
+        ? layer(
+            `t${l.v}`,
+            tagKey,
+            l,
+            extra,
+            <text className="si-tag" x={f(actorX)} y={f(n.text.tagY)} textAnchor="middle">
+              {tags[l.v]}
+            </text>,
+          )
+        : null,
+    )
+  const detailView = (copy: boolean) =>
+    layersOf(detailKey).map(({ l, extra }) => {
+      const d = details[l.v]
+      if (!d?.lines.length || (copy && d.tone)) return null
+      const off = n.glyph ? 0 : ((DN - d.lines.length) * DETAIL_LH) / 2
+      return layer(
+        `d${l.v}`,
+        detailKey,
+        l,
+        extra,
+        d.lines.map((line, k) => (
+          <text key={k} className="si-detail" x={f(n.glyph ? n.glyph.textX : cx)} y={f(n.text.detailY[0] + off + k * DETAIL_LH)} textAnchor={n.glyph ? undefined : "middle"}>
+            {line}
+          </text>
+        )),
+        !copy && d.tone ? `si-t-${d.tone}` : undefined,
+      )
+    })
+  return (
+    <>
+      {tagView()}
+      {layersOf(labelKey).map(({ l, extra }) => {
+        const lines = labels[l.v] ?? n.label
+        const off = ((LN - lines.length) * LABEL_LH) / 2
+        return layer(
+          `l${l.v}`,
+          labelKey,
+          l,
+          extra,
+          lines.map((line, k) => (
+            <text key={k} className={n.shape === "pill" ? "si-label si-pill-label" : "si-label"} x={f(cx)} y={f(n.text.labelY[0] + off + k * LABEL_LH)} textAnchor="middle" style={flashFill(flash, "ink")}>
+              {line}
+              {smil?.(`flash:${n.id}`)}
+            </text>
+          )),
+        )
+      })}
+      {detailView(false)}
+      {tones.map((x) => (
+        <ToneG key={x.tone} id={n.id} {...x} smil={smil}>
+          {tagView()}
+          {detailView(true)}
+        </ToneG>
+      ))}
+      {n.glyph ? <NodeGlyph n={n} fr={fr} smil={smil} /> : null}
+    </>
+  )
+}
+
+/** A plain node's status glyph (story `status` on the node), like a row's. */
+function NodeGlyph({ n, fr, smil }: { n: SceneNode; fr?: Frame; smil?: Smil }) {
+  const u = useUnion()
+  const tl = useContext(TlCtx)
+  const g = n.glyph!
+  const sf = fr?.status?.[n.id]
+  if (u) {
+    const kinds = [...new Set((tl?.status?.[n.id] ?? []).map((e) => e.to))].filter((x) => x !== "none") as RowStatus[]
+    return (
+      <>
+        {kinds.map((k) => {
+          const o = sf?.s === k ? sf.o : sf?.prev?.s === k ? sf.prev.o : 0
+          return <StatusGlyph key={k} s={k} o={o} spin={sf?.s === k ? sf.spin : undefined} x={g.x} y={g.y} extra={o <= 0.001} smil={smil} hook={`${n.id}:${k}`} />
+        })}
+      </>
+    )
+  }
+  return (
+    <>
+      {sf?.prev ? <StatusGlyph s={sf.prev.s} o={sf.prev.o} spin={sf.prev.spin} x={g.x} y={g.y} /> : null}
+      {sf ? <StatusGlyph s={sf.s} o={sf.o} spin={sf.spin} draw={sf.draw} x={g.x} y={g.y} /> : null}
+    </>
+  )
+}
+
 /** Animated SVG: every glyph the row ever shows; the base frame's at its opacity, others as extras. */
 function StatusGlyphs({ k, r, sf, smil }: { k: string; r: SceneRow; sf?: StatusFrame; smil?: Smil }) {
   const tl = useContext(TlCtx)
@@ -959,6 +1170,7 @@ function GroupView({ g, fr, smil }: { g: SceneGroup; fr?: Frame; smil?: Smil }) 
   const labelText = g.composite ? g.label : g.label.toUpperCase()
   const v = fr?.el[g.id]
   const l = fr?.lvl?.[g.id] !== undefined || fr?.vis?.[g.id] !== undefined ? (fr?.lvl?.[g.id] ?? 1) * (fr?.vis?.[g.id] ?? 1) : undefined
+  const tones = toneLayers(useUnion(), useContext(TlCtx), fr, g.id)
   return (
     <g className={g.delta && !ch ? `si-grp si-d-${g.delta}` : "si-grp"} data-si={`group:${g.id}`} style={opStyle(v, l)} transform={v?.dy ? `translate(0 ${f(v.dy)})` : undefined}>
       {smil?.(`group:${g.id}`)}
@@ -976,6 +1188,15 @@ function GroupView({ g, fr, smil }: { g: SceneGroup; fr?: Frame; smil?: Smil }) 
         ) : null}
         {g.kind && !g.composite ? <tspan className="si-group-label" dx={8} opacity={0.7}>{`· ${g.kind.toUpperCase()}`}</tspan> : null}
       </text>
+      {tones.map((x) => (
+        // Toned group: border and label in the tone.
+        <ToneG key={x.tone} id={g.id} {...x} smil={smil}>
+          {g.bare ? null : <rect className={g.composite ? "si-group-composite" : "si-group"} x={g.x} y={g.y} width={g.w} height={g.h} rx={G.groupRadius} />}
+          <text className={g.composite ? "si-group-title" : "si-group-label"} x={f(g.x + 12)} y={f(g.y + (g.composite ? 16 : 15))}>
+            {labelText}
+          </text>
+        </ToneG>
+      ))}
     </g>
   )
 }
@@ -1005,6 +1226,7 @@ function EdgeView({ e, fr, smil, lvl }: { e: SceneEdge; fr?: Frame; smil?: Smil;
         : { strokeDasharray: `${f(L)} ${f(L)}`, strokeDashoffset: f(L * (1 - d)) }
     : undefined
   const ch = useChange(e.id, fr)
+  const tones = toneLayers(useUnion(), useContext(TlCtx), fr, e.id)
   return (
     <g className={ch ? "si-edge" : `si-edge${e.delta ? ` si-d-${e.delta}` : ""}${e.emphasis === "hero" ? " si-hero" : ""}`} data-si={`edge:${e.id}`} style={lvl !== undefined && lvl < 1 ? { opacity: +lvl.toFixed(3) } : undefined}>
       {smil?.(`edge:${e.id}`)}
@@ -1045,6 +1267,20 @@ function EdgeView({ e, fr, smil, lvl }: { e: SceneEdge; fr?: Frame; smil?: Smil;
         </g>
       ) : null}
       </DeltaLevel>
+      {tones.map((x) => (
+        // Toned edge: the wire (as drawn) and its heads in the tone.
+        <ToneG key={x.tone} id={e.id} {...x} smil={smil}>
+          <path className={cls} d={e.d} style={wireStyle}>
+            {smil?.(`wire:${e.id}`)}
+          </path>
+          {e.heads.map((h, k) => (
+            <g key={k} style={drawing ? { opacity: d >= 0.98 ? 1 : 0 } : undefined}>
+              {smil?.(`head:${e.id}`)}
+              <Head h={h} />
+            </g>
+          ))}
+        </ToneG>
+      ))}
     </g>
   )
 }
@@ -1055,15 +1291,27 @@ function LabelView({ e, fr, smil }: { e: SceneEdge; fr?: Frame; smil?: Smil }) {
   const d = fr?.draw[e.id]
   const o = d === undefined ? 1 : Math.max(0, Math.min(1, (d - 0.35) / 0.4))
   const ch = useChange(e.id, fr)
+  const tones = toneLayers(useUnion(), useContext(TlCtx), fr, e.id)
   const strike = <line className="si-strike" x1={f(l.x + l.w / 2 - textWidth(text, T.edgeLabel) / 2 - 1)} x2={f(l.x + l.w / 2 + textWidth(text, T.edgeLabel) / 2 + 1)} y1={f(l.y + l.h / 2)} y2={f(l.y + l.h / 2)} />
   return (
     <g className={e.delta && !ch ? `si-lbl si-d-${e.delta}` : "si-lbl"} data-si={`label:${l.id}`} data-box={`${l.x},${l.y},${l.w},${l.h}`} style={o < 1 ? { opacity: +o.toFixed(3) } : undefined}>
       {smil?.(`elabel:${e.id}`)}
-      <rect className={`si-pill si-on-${l.surface ?? "bg"}`} x={l.x} y={l.y} width={l.w} height={l.h} />
+      {e.labels ? <LabelVersions e={e} fr={fr} smil={smil} tones={tones} /> : <rect className={`si-pill si-on-${l.surface ?? "bg"}`} x={l.x} y={l.y} width={l.w} height={l.h} />}
       <DeltaLevel level={ch ? ch.level(deltaLevel(e.delta, e.emphasis)) : deltaLevel(e.delta, e.emphasis)} smil={ch?.union ? smil : undefined} hook={`llvl:${e.id}`}>
-      <text className="si-edge-label" x={f(l.x + l.w / 2)} y={f(l.y + l.h / 2 + 3.8)} textAnchor="middle">
-        {text}
-      </text>
+      {e.labels ? null : (
+        <text className="si-edge-label" x={f(l.x + l.w / 2)} y={f(l.y + l.h / 2 + 3.8)} textAnchor="middle">
+          {text}
+        </text>
+      )}
+      {e.labels
+        ? null
+        : tones.map((x) => (
+            <ToneG key={x.tone} id={e.id} {...x} smil={smil}>
+              <text className="si-edge-label" x={f(l.x + l.w / 2)} y={f(l.y + l.h / 2 + 3.8)} textAnchor="middle">
+                {text}
+              </text>
+            </ToneG>
+          ))}
       {e.delta === "removed" ? (
         ch ? (
           <ChangeLayer ch={ch} smil={smil} hook={`lstrike:${e.id}`}>
@@ -1075,6 +1323,47 @@ function LabelView({ e, fr, smil }: { e: SceneEdge; fr?: Frame; smil?: Smil }) {
       ) : null}
       </DeltaLevel>
     </g>
+  )
+}
+
+/**
+ * Edge label versions (pulses that `land` their label): each version a pill sized to its text in
+ * the slot, crossfading; a version's own tone, else the edge's tone copies.
+ */
+function LabelVersions({ e, fr, smil, tones }: { e: SceneEdge; fr?: Frame; smil?: Smil; tones: { tone: Tone; o: number; extra: boolean }[] }) {
+  const u = useUnion()
+  const tl = useContext(TlCtx)
+  const l = e.label!
+  const key = `${e.id}@elabel`
+  const cx = l.x + l.w / 2
+  const y = l.y + l.h / 2 + 3.8
+  const text = (s: string) => (
+    <text className="si-edge-label" x={f(cx)} y={f(y)} textAnchor="middle">
+      {s}
+    </text>
+  )
+  return (
+    <>
+      {unionLayers(u, tl, key, fr?.content?.[key] ?? [{ v: 0, o: 1 }]).map(({ l: ly, extra }) => {
+        const v = e.labels![ly.v]
+        if (!v?.text) return null
+        const w = textWidth(v.text, T.edgeLabel) + 2 * G.pillPadX
+        return (
+          <g key={ly.v} className={xcls(v.tone ? `si-t-${v.tone}` : undefined, extra)} data-v={ly.v} style={extra ? undefined : layerStyle(ly.o)} opacity={extra ? 0 : undefined}>
+            {smil?.(`layer:${key}:${ly.v}`)}
+            <rect className={`si-pill si-on-${l.surface ?? "bg"}`} x={f(cx - w / 2)} y={l.y} width={f(w)} height={l.h} />
+            {text(v.text)}
+            {v.tone
+              ? null
+              : tones.map((x) => (
+                  <ToneG key={x.tone} id={e.id} {...x} smil={smil}>
+                    {text(v.text)}
+                  </ToneG>
+                ))}
+          </g>
+        )
+      })}
+    </>
   )
 }
 
@@ -1118,21 +1407,166 @@ function FrameLabels({ fr, frame, smil }: { fr: SceneFrame; frame?: Frame; smil?
   )
 }
 
+const ADV_ANN = ANN.size * 0.6
+
+/** One version of an annotation's text: whole, per word (word typing) or clipped (char typing). */
+function AnnText({ a, v, layer, copy, typed, smil, cls }: { a: SceneAnnotation; v: number; layer: ContentLayer; copy: string; typed: Typed; smil?: Smil; cls: string }) {
+  const ver = a.versions[v]
+  if (!ver) return null
+  const mode = typed.get(`${a.id}|${v}`)
+  if (mode === "word") {
+    let i = 0
+    return (
+      <text className={cls} y={a.y}>
+        {[...ver.text.matchAll(/\S+/g)].map((m) => {
+          const k = i++
+          const o = layer.words?.[k] ?? 1
+          return (
+            <tspan key={m.index} x={f(a.x + m.index! * ADV_ANN)} fillOpacity={o < 1 ? +o.toFixed(3) : undefined}>
+              {m[0]}
+              {smil?.(`word:${a.id}:${v}:${k}`)}
+            </tspan>
+          )
+        })}
+      </text>
+    )
+  }
+  const text = (
+    <text className={cls} x={a.x} y={a.y}>
+      {ver.text}
+    </text>
+  )
+  if (mode !== "char") return text
+  const id = clipId(copy, "ann", a.id, v)
+  const n = ver.text.length
+  const ch = layer.chars?.[0] ?? n
+  return (
+    <g clipPath={`url(#${id})`}>
+      <clipPath id={id}>
+        <rect x={f(a.x)} y={f(a.y - ANN.size - 2)} width={f(ch >= n ? (n + 1) * ADV_ANN : ch * ADV_ANN)} height={ANN.size + 6}>
+          {smil?.(`clip:${a.id}:${v}:0`)}
+        </rect>
+      </clipPath>
+      {text}
+    </g>
+  )
+}
+
+/** A node annotation: one mono line above / below its node (versions, typing, tone layers). */
+function AnnotationView({ a, fr, smil, copy, typed }: { a: SceneAnnotation; fr?: Frame; smil?: Smil; copy: string; typed: Typed }) {
+  const u = useUnion()
+  const tl = useContext(TlCtx)
+  const own = fr?.el[a.id]
+  const node = fr?.el[a.on]
+  // It goes with its node (reveal, hide / show, act membership) and has channels of its own.
+  const o = (own?.o ?? 1) * (fr?.vis?.[a.id] ?? 1) * (node?.o ?? 1) * (fr?.vis?.[a.on] ?? 1)
+  const dy = (own?.dy ?? 0) + (node?.dy ?? 0)
+  const layers = fr?.content?.[a.id] ?? [{ v: 0, o: 1 }]
+  const tones = toneLayers(u, tl, fr, a.id)
+  return (
+    <g className="si-ann-g" data-si={`ann:${a.id}`} transform={dy ? `translate(0 ${f(dy)})` : undefined} style={o < 1 ? { opacity: +o.toFixed(3) } : undefined}>
+      {smil?.(`ann:${a.id}`)}
+      {unionLayers(u, tl, a.id, layers).map(({ l, extra }) => {
+        const ver = a.versions[l.v]
+        if (!ver) return null
+        return (
+          <g key={l.v} className={xcls(undefined, extra)} style={extra ? undefined : layerStyle(l.o)} opacity={extra ? 0 : undefined}>
+            {smil?.(`layer:${a.id}:${l.v}`)}
+            <AnnText a={a} v={l.v} layer={l} copy={copy} typed={typed} smil={smil} cls={`si-ann${ver.tone ? ` si-t-${ver.tone}` : ""}`} />
+            {tones.map((x) => (
+              <ToneG key={x.tone} id={a.id} {...x} smil={smil}>
+                <AnnText a={a} v={l.v} layer={l} copy={`${copy}t${x.tone}`} typed={typed} smil={smil} cls="si-ann" />
+              </ToneG>
+            ))}
+          </g>
+        )
+      })}
+      {fr?.caret
+        ?.filter((c) => c.target === a.id)
+        .map((c) => <rect key="caret" className="si-caret" x={f(a.x + c.col * ADV_ANN)} y={f(a.y - ANN.size + 1)} width={1.2} height={ANN.size + 1} />)}
+      {u && (tl?.typing ?? []).some((x) => x.target === a.id && x.by === "char") ? (
+        <rect className="si-caret si-x" x={a.x} y={f(a.y - ANN.size + 1)} width={1.2} height={ANN.size + 1} visibility="hidden">
+          {smil?.(`caret:${a.id}`)}
+        </rect>
+      ) : null}
+    </g>
+  )
+}
+
+/** A toast card: tone stripe, title (ink) and text (in its tone). */
+function ToastCard({ t, cls }: { t: SceneToast; cls?: string }) {
+  const tx = TOAST.padX + TOAST.stripe
+  return (
+    <g className={cls}>
+      <rect className="si-toast" x={0} y={0} width={t.w} height={t.h} rx={6} />
+      <rect className="si-toast-stripe" x={5} y={7} width={TOAST.stripe} height={t.h - 14} rx={1.5} />
+      {t.title ? (
+        <text className="si-toast-title" x={tx} y={TOAST.padY + TOAST.title * 0.8}>
+          {t.title}
+        </text>
+      ) : null}
+      <text className="si-toast-text" x={tx} y={t.title ? TOAST.padY + TOAST.title * 0.8 + TOAST.line : TOAST.padY + TOAST.text * 0.85}>
+        {t.text}
+      </text>
+    </g>
+  )
+}
+
+/** A story toast: fade + rise + scale in, fade out; tone layers (contagion). */
+function ToastView({ t, fr, smil }: { t: SceneToast; fr?: Frame; smil?: Smil }) {
+  const u = useUnion()
+  const tl = useContext(TlCtx)
+  const st = fr?.toasts?.[t.id]
+  if (!st && !u) return null
+  const tones = toneLayers(u, tl, fr, t.id)
+  const cx = t.x + t.w / 2
+  const cy = t.y + t.h / 2
+  const o = (st?.o ?? 0) * (fr?.vis?.[t.id] ?? 1)
+  const s = st?.s ?? 1
+  return (
+    <g className="si-toast-g" data-si={`toast:${t.id}`} opacity={o < 0.9995 ? +o.toFixed(3) : undefined}>
+      {smil?.(`toast:${t.id}`)}
+      <g transform={`translate(${f(cx)} ${f(cy + (st?.dy ?? 0))})`}>
+        {smil?.(`toastxy:${t.id}`)}
+        <g transform={s !== 1 ? `scale(${s})` : undefined}>
+          {smil?.(`toastsc:${t.id}`)}
+          <g transform={`translate(${f(-t.w / 2)} ${f(-t.h / 2)})`}>
+            <ToastCard t={t} cls={t.tone ? `si-t-${t.tone}` : undefined} />
+            {tones.map((x) => (
+              <ToneG key={x.tone} id={t.id} {...x} smil={smil}>
+                <ToastCard t={t} />
+              </ToneG>
+            ))}
+          </g>
+        </g>
+      </g>
+    </g>
+  )
+}
+
 /** Pure SVG view of a scene. Rendered on the server (static SVG) and hydrated in the viewer. */
 function PulseLayer({ fr }: { fr: Frame }) {
   if (!fr.pulses.length) return null
   return (
     <g className="si-pulses">
-      {fr.pulses.map((p) => (
-        <g key={p.id} data-si={`pulse:${p.id}`}>
-          {p.trail.map((t, k) => (
-            <path key={k} className="si-trail" d={t.d} style={{ opacity: t.o }} />
-          ))}
-          {p.halo && p.halo.o > 0.005 ? <circle className="si-halo" cx={p.x} cy={p.y} r={p.halo.r} style={{ opacity: p.halo.o }} /> : null}
-          {p.o > 0.005 && !p.ring ? <circle className="si-pulse" cx={p.x} cy={p.y} r={p.r} style={{ opacity: p.o }} /> : null}
-          {p.ring ? <circle className="si-ring-pulse" cx={p.ring.x} cy={p.ring.y} r={p.ring.r} style={{ opacity: p.ring.o, strokeWidth: p.ring.w }} /> : null}
-        </g>
-      ))}
+      {fr.pulses.map((p) => {
+        const t = p.tone ? ` si-t-${p.tone}` : ""
+        return (
+          <g key={p.id} data-si={`pulse:${p.id}`}>
+            {p.trail.map((x, k) => (
+              <path key={k} className={`si-trail${t}`} d={x.d} style={{ opacity: x.o }} />
+            ))}
+            {p.halo && p.halo.o > 0.005 ? <circle className={`si-halo${t}`} cx={p.x} cy={p.y} r={p.halo.r} style={{ opacity: p.halo.o }} /> : null}
+            {p.o > 0.005 && !p.ring ? <circle className={`si-pulse${t}`} cx={p.x} cy={p.y} r={p.r} style={{ opacity: p.o }} /> : null}
+            {p.ring ? <circle className={`si-ring-pulse${t}`} cx={p.ring.x} cy={p.ring.y} r={p.ring.r} style={{ opacity: p.ring.o, strokeWidth: p.ring.w }} /> : null}
+            {p.label ? (
+              <text className={`si-plabel${t}`} x={p.label.x} y={p.label.y} style={p.label.o < 1 ? { opacity: p.label.o } : undefined}>
+                {p.label.text}
+              </text>
+            ) : null}
+          </g>
+        )
+      })}
     </g>
   )
 }
@@ -1155,7 +1589,7 @@ function DiagramInner({ scene, style, copy: copy0 = "", idPrefix = "", className
   const fr =
     frame &&
     (has(frame.el) || has(frame.draw) || has(frame.grow) || frame.pulses.length || frame.glows.length || has(frame.flash) || has(frame.counters) ||
-      has(frame.lvl) || has(frame.vis) || has(frame.content) || has(frame.status) || has(frame.bars) || has(frame.lit) || has(frame.undraw) || has(frame.diff) || has(frame.delta) || has(frame.legend) || frame.veil || frame.caret?.length || frame.spot)
+      has(frame.lvl) || has(frame.vis) || has(frame.tone) || has(frame.litTone) || has(frame.content) || has(frame.status) || has(frame.bars) || has(frame.lit) || has(frame.undraw) || has(frame.diff) || has(frame.delta) || has(frame.legend) || frame.veil || frame.caret?.length || frame.spot || has(frame.toasts))
       ? frame
       : undefined
   // Ports follow their wire: the out port appears as the wire starts, the in port when it lands.
@@ -1279,9 +1713,19 @@ function DiagramInner({ scene, style, copy: copy0 = "", idPrefix = "", className
       </g>
       <g className="si-ports">
         {scene.ports.filter((p) => !p.covered).map((p) => (
-          <circle key={p.id} className={edgeDelta.get(p.edge) ? `si-port si-d-${edgeDelta.get(p.edge)}` : "si-port"} data-si={`port:${p.id}`} cx={p.x} cy={p.y} r={G.portRadius} style={portStyle(p)}>
-            {smil?.(`port:${p.id}`)}
-          </circle>
+          <Fragment key={p.id}>
+            <circle className={edgeDelta.get(p.edge) ? `si-port si-d-${edgeDelta.get(p.edge)}` : "si-port"} data-si={`port:${p.id}`} cx={p.x} cy={p.y} r={G.portRadius} style={portStyle(p)}>
+              {smil?.(`port:${p.id}`)}
+            </circle>
+            {toneLayers(union, scene.timeline, fr, p.edge).map((x) => (
+              // Toned edge: its ports in the tone.
+              <ToneG key={x.tone} id={p.edge} {...x} smil={smil}>
+                <circle className="si-port" cx={p.x} cy={p.y} r={G.portRadius} style={portStyle(p)}>
+                  {smil?.(`port:${p.id}`)}
+                </circle>
+              </ToneG>
+            ))}
+          </Fragment>
         ))}
       </g>
       <g className="si-labels">
@@ -1291,6 +1735,20 @@ function DiagramInner({ scene, style, copy: copy0 = "", idPrefix = "", className
             <LabelView key={e.id} e={e} fr={fr} smil={smil} />
           ))}
       </g>
+      {scene.annotations?.length ? (
+        <g className="si-anns">
+          {scene.annotations.map((a) => (
+            <AnnotationView key={a.id} a={a} fr={fr} smil={smil} copy={copy} typed={typed} />
+          ))}
+        </g>
+      ) : null}
+      {scene.toasts?.length && (union || fr?.toasts) ? (
+        <g className="si-toasts">
+          {scene.toasts.map((t) => (
+            <ToastView key={t.id} t={t} fr={fr} smil={smil} />
+          ))}
+        </g>
+      ) : null}
       {fr?.veil || (union && scene.timeline?.veil) ? <VeilLayer fr={fr} copy={copy} smil={smil} vb={vb} /> : null}
       {fr?.spot || union ? <SpotLayer fr={fr} copy={copy} smil={smil} /> : null}
       {fr ? <PulseLayer fr={fr} /> : null}

@@ -4,11 +4,15 @@
  * (so `recompilePace` reproduces it from the embedded steps).
  */
 import { geometry as G, story as S } from "../../theme/tokens.ts"
-import type { Scene, SceneNode } from "../scene.ts"
-import type { LevelRef, LineRef, RowStatus, SetRef, StatusRef, StoryStep, TypeRef, WireRef } from "../spec.ts"
+import type { Scene, SceneAnnotation, SceneNode } from "../scene.ts"
+import type { GlowRef, LevelRef, LineRef, RowStatus, SetRef, StatusRef, StoryStep, ToastRef, ToneRef, TypeRef, WireRef } from "../spec.ts"
+import { isTone, TONES, type Tone } from "../../theme/tones.ts"
+import { closest } from "../suggest.ts"
+import { setsDetail } from "../layout/storyscan.ts"
 import { boxOfRef, parseRef, signedLineOf } from "../anchor.ts"
 import { addedChars, hunkRowsOf } from "../layout/diffnode.ts"
 import { springSettle } from "./ease.ts"
+import { NEVER } from "./acts.ts"
 import type { Timeline, TimelineTyping } from "./types.ts"
 
 const REACT_SETTLE = springSettle(S.springs.react)
@@ -28,6 +32,16 @@ export const LIT_RISE = 0.3
 export const LIT_FALL = 0.45
 /** Caret stays this long after a char run (s). */
 export const CARET_LINGER = 0.3
+/** Tone crossfade (s): the old tone's layer out, the new one in. */
+export const TONE_FADE = 0.35
+/** Toast appear (fade + rise + scale) and dismiss / expiry fade (s). */
+export const TOAST_IN = 0.3
+export const TOAST_OUT = 0.25
+/** Annotation typing speed (chars / s): a chat line typing out. */
+export const ANN_CPS = 28
+
+/** A plain graph node: text drawn by `sizeNode` (not a panel / code / chip, not a pseudo-state). */
+export const isPlainNode = (n: SceneNode): boolean => !n.rows && !n.code && !["window", "chip", "dot", "bullseye", "choice", "bar"].includes(n.shape)
 
 const asList = <T>(x: T | T[] | undefined): T[] => (x === undefined ? [] : Array.isArray(x) ? x : [x])
 
@@ -37,14 +51,21 @@ export type RefKind =
   | { kind: "group"; id: string }
   | { kind: "row"; id: string; node: SceneNode; row: string }
   | { kind: "line"; id: string; node: SceneNode; line: number }
+  | { kind: "ann"; id: string; ann: SceneAnnotation }
+  | { kind: "toast"; id: string }
+  | { kind: "hud"; id: string }
   | { kind: "unknown"; id: string }
 
-/** Classify a reference: exact edge id first, then node / group, "a->b", rows and code lines. */
-export function classify(scene: Scene, id: string, resolveEdge: (ref: string) => string | undefined): RefKind {
+/** Classify a reference: exact edge id first, then node / group, "a->b", rows and code lines (and Phase B overlays). */
+export function classify(scene: Scene, id: string, resolveEdge: (ref: string) => string | undefined, hud?: ReadonlySet<string>): RefKind {
   if (scene.edges.some((e) => e.id === id)) return { kind: "edge", id }
   const n = scene.nodes.find((x) => x.id === id)
   if (n) return { kind: "node", id, node: n }
   if (scene.groups.some((g) => g.id === id)) return { kind: "group", id }
+  const ann = scene.annotations?.find((a) => a.id === id)
+  if (ann) return { kind: "ann", id, ann }
+  if (scene.toasts?.some((t) => t.id === id)) return { kind: "toast", id }
+  if (hud?.has(id)) return { kind: "hud", id }
   if (/->/.test(id)) {
     const e = resolveEdge(id)
     if (e) return { kind: "edge", id: e }
@@ -61,7 +82,7 @@ export function classify(scene: Scene, id: string, resolveEdge: (ref: string) =>
 }
 
 const what = (k: RefKind): string =>
-  k.kind === "node" ? (k.node.code ? "a code node" : k.node.rows ? "a panel" : k.node.shape === "chip" ? "a chip" : "a node") : k.kind === "row" ? "a panel row" : k.kind === "line" ? "a code line" : `a ${k.kind}`
+  k.kind === "ann" ? "an annotation" : k.kind === "hud" ? "a HUD metric" : k.kind === "toast" ? "a toast" : k.kind === "node" ? (k.node.code ? "a code node" : k.node.rows ? "a panel" : k.node.shape === "chip" ? "a chip" : "a node") : k.kind === "row" ? "a panel row" : k.kind === "line" ? "a code line" : `a ${k.kind}`
 
 export interface ContentOut {
   typing: TimelineTyping[]
@@ -71,17 +92,21 @@ export interface ContentOut {
   vis: Record<string, { t: number; to: 0 | 1 }[]>
   wires: Record<string, { t0: number; t1: number; on: boolean }[]>
   status: Record<string, { t: number; to: RowStatus }[]>
-  lit: Record<string, { t0: number; t1?: number }[]>
+  lit: Record<string, { t0: number; t1?: number; tone?: Tone }[]>
   applies: Record<string, { t0: number; t1: number; hunks: number[] }[]>
+  tones: Record<string, { t: number; to: Tone | null }[]>
+  toasts: Record<string, { t0: number; t1?: number }>
 }
 
 /** Mutable state across steps (step order). */
 export class Content {
-  readonly out: ContentOut = { typing: [], versions: {}, bars: {}, levels: {}, vis: {}, wires: {}, status: {}, lit: {}, applies: {} }
+  readonly out: ContentOut = { typing: [], versions: {}, bars: {}, levels: {}, vis: {}, wires: {}, status: {}, lit: {}, applies: {}, tones: {}, toasts: {} }
+  /** Tone per element as of the steps compiled so far (step order; for no-op warnings). */
+  private toneNow = new Map<string, Tone | null>()
   /** Diff nodes: hunks applied so far. */
   private applied = new Map<string, Set<number>>()
   private st = new Map<string, RowStatus>()
-  private lit = new Map<string, boolean>()
+  private lit = new Map<string, false | Tone | true>()
   private ver = new Map<string, number>()
   private count = new Map<string, number>()
   private typed = new Set<string>()
@@ -96,6 +121,8 @@ export class Content {
   readonly managed = new Set<string>()
   /** Rows named by a reveal somewhere in the story (type / status before it reveals them). */
   private revealedRows = new Set<string>()
+  /** HUD metric ids (`story.hud`). */
+  hud = new Set<string>()
 
   constructor(
     private scene: Scene,
@@ -161,10 +188,10 @@ export class Content {
     const sc = this.scene
     const ends: number[] = []
     const acts: string[] = []
-    const kind = (id: string) => classify(sc, id, this.resolve)
+    const kind = (id: string) => classify(sc, id, this.resolve, this.hud)
     const at = (key: string, list: unknown, k: number) => `${p}.${key}${Array.isArray(list) ? `[${k}]` : ""}`
     const implyAppear = (row: string) => {
-      if (appear[row] === undefined && this.revealedRows.has(row)) appear[row] = t0
+      if ((appear[row] === undefined || appear[row] >= NEVER) && this.revealedRows.has(row)) appear[row] = t0
     }
 
     // set / clear: new versions (crossfade).
@@ -175,9 +202,39 @@ export class Content {
       const pp = at("set", st.set, k)
       if (!s || typeof s !== "object" || typeof s.id !== "string") return
       const r = kind(s.id)
-      const fields = (["code", "text", "detail", "tag", "label"] as const).filter((f) => s[f] !== undefined)
+      const fields = (["code", "text", "detail", "tag", "label", "tone"] as const).filter((f) => s[f] !== undefined)
       if (!fields.length) return err(pp, `set "${s.id}" changes nothing`, `add "code", "text", "detail", "tag" or "label"`)
       setIds.add(s.id)
+      // Annotations: text / tone versions (crossfade).
+      if (r.kind === "ann") {
+        if (s.tone !== undefined && s.tone !== null && !isTone(s.tone)) return err(`${pp}.tone`, `unknown tone ${JSON.stringify(s.tone)}`, toneHint(s.tone))
+        const bad = (["code", "detail", "tag", "label"] as const).filter((f) => s[f] !== undefined)
+        if (bad.length) err(pp, `set "${bad[0]}" does not apply to annotation "${s.id}"`, `annotations take "text" and "tone"`)
+        if (s.text === undefined && s.tone === undefined) return
+        const v = this.next(s.id)
+        this.ver.set(s.id, v)
+        this.push(this.out.versions, s.id, { t: t0, v })
+        acts.push(`Set ${s.id}`)
+        ends.push(t0 + CROSSFADE)
+        return
+      }
+      // Plain graph nodes: label / detail (+ its tone) / tag versions, each crossfading on its own.
+      if (r.kind === "node" && isPlainNode(r.node) && s.code === undefined && s.text === undefined) {
+        if (sc.type === "sequence") return err(pp, `set on "${s.id}" needs a graph diagram`, "sequence participants keep their text")
+        if (s.tone !== undefined && s.tone !== null && !isTone(s.tone)) return err(`${pp}.tone`, `unknown tone ${JSON.stringify(s.tone)}`, toneHint(s.tone))
+        const bump = (key: string) => {
+          const v = this.next(key)
+          this.ver.set(key, v)
+          this.push(this.out.versions, key, { t: t0, v })
+        }
+        if (typeof s.label === "string") bump(`${s.id}@label`)
+        if (setsDetail(s)) bump(`${s.id}@detail`)
+        if (typeof s.tag === "string") bump(`${s.id}@tag`)
+        acts.push(`Set ${name(r.node)}`)
+        ends.push(t0 + CROSSFADE)
+        return
+      }
+      if (s.tone !== undefined) err(`${pp}.tone`, `set "tone" colours a plain node's detail line; "${s.id}" is ${r.kind === "unknown" ? "unknown" : what(r)}`, `colour elements with the step's "tone": { "ids": "${s.id}", "to": ... }`)
       if (s.code !== undefined) {
         if (r.kind === "node" && r.node.diff) err(pp, `"${s.id}" is a diff code node; set "code" does not apply to it`, `use "apply": "${s.id}" to play the change`)
         else if (r.kind === "node" && r.node.code) {
@@ -213,8 +270,8 @@ export class Content {
       const pp = at("clear", st.clear, k)
       if (typeof id !== "string") return
       const r = kind(id)
-      if (!((r.kind === "node" && r.node.code) || r.kind === "row"))
-        return err(pp, r.kind === "unknown" ? `unknown id "${id}"` : `clear takes a code node or a panel row, got "${id}" (${what(r)})`)
+      if (!((r.kind === "node" && r.node.code) || r.kind === "row" || r.kind === "ann"))
+        return err(pp, r.kind === "unknown" ? `unknown id "${id}"` : `clear takes a code node, a panel row or an annotation, got "${id}" (${what(r)})`)
       if (setIds.has(id)) return err(pp, `"${id}" is set and cleared in one step`, "use two steps")
       if (r.kind === "node" && r.node.diff) return err(pp, `"${id}" is a diff code node; clear does not apply to it`, `hide it with "hide", or dim it`)
       if ((this.ver.get(id) ?? 0) === -1) return warn(pp, `"${id}" is already cleared; clear has no effect`)
@@ -225,7 +282,7 @@ export class Content {
         const b = this.bar.get(id)
         if (b?.on) this.lineOff(id, t0)
       }
-      acts.push(`Clear ${r.kind === "row" ? rowName(r) : name((r as { node: SceneNode }).node)}`)
+      acts.push(`Clear ${r.kind === "row" ? rowName(r) : r.kind === "ann" ? id : name((r as { node: SceneNode }).node)}`)
       ends.push(t0 + CROSSFADE)
     })
 
@@ -236,6 +293,31 @@ export class Content {
       if (!o || typeof o.id !== "string") return
       const r = kind(o.id)
       const isCode = r.kind === "node" && !!r.node.code
+      if (r.kind === "ann") {
+        const v = this.ver.get(o.id) ?? 0
+        if (v < 0) return err(pp, `nothing to type: "${o.id}" was cleared`, `add "set": { "id": "${o.id}", "text": … } to this step`)
+        if (this.typed.has(`${o.id}|${v}`)) return warn(pp, `"${o.id}" is already typed`)
+        this.typed.add(`${o.id}|${v}`)
+        const text = r.ann.versions[v]?.text ?? ""
+        const by = o.by ?? "char"
+        const typing: TimelineTyping = { target: o.id, v, by, t0, t1: t0 }
+        if (by === "char") {
+          const cps = typeof o.cps === "number" && o.cps > 0 ? o.cps : ANN_CPS
+          const dur = typeof o.duration === "number" && o.duration > 0 ? o.duration : text.length / cps
+          typing.lines = [{ t0: r4(t0), t1: r4(t0 + dur), n: text.length, indent: 0 }]
+          typing.t1 = r4(t0 + dur)
+        } else {
+          const n = text.trim().split(/\s+/).filter(Boolean).length
+          const W = typeof o.duration === "number" && o.duration > 0 ? o.duration : Math.min(2.8, Math.max(0.3, 0.25 + 0.075 * n))
+          const fade = Math.min(WORD_FADE, W / 2)
+          typing.words = { n, lead: 0, fade, stagger: n > 1 ? r4((W - 1.5 * fade) / (n - 1)) : 0 }
+          typing.t1 = r4(t0 + W)
+        }
+        this.out.typing.push(typing)
+        acts.push(`Type ${o.id}`)
+        ends.push(typing.t1)
+        return
+      }
       if (!isCode && r.kind !== "row") {
         const rowEx = sc.nodes.find((n) => n.rows?.length)
         return err(pp, `type takes a code node or a panel row ("${rowEx ? `${rowEx.id}#${rowEx.rows![0].id}` : "panel#row"}"), got "${o.id}"`, r.kind === "unknown" ? "unknown id" : `"${o.id}" is ${what(r)}`)
@@ -354,8 +436,8 @@ export class Content {
     // Levels: dim / undim (dim channel), hide / show (visibility channel).
     const targetKey = (id: string, pp: string, verb: string): string | undefined => {
       const r = kind(id)
-      if (r.kind === "unknown" || r.kind === "line") {
-        err(pp, `unknown id "${id}"`, `${verb} takes node, group, edge or row ids`)
+      if (r.kind === "unknown" || r.kind === "line" || ((verb === "dim" || verb === "undim") && (r.kind === "ann" || r.kind === "toast" || r.kind === "hud"))) {
+        err(pp, r.kind === "unknown" || r.kind === "line" ? `unknown id "${id}"` : `${verb} does not take ${what(r)} ("${id}")`, `${verb} takes node, group, edge or row ids${verb === "hide" || verb === "show" ? ", annotations, toasts and HUD metrics" : ""}`)
         return undefined
       }
       return r.id
@@ -421,34 +503,101 @@ export class Content {
       const pp = at("status", st.status, k)
       if (!s || typeof s !== "object" || typeof s.id !== "string") return
       const r = kind(s.id)
-      if (r.kind !== "row") {
+      const onNode = r.kind === "node" && isPlainNode(r.node) && sc.type !== "sequence"
+      if (r.kind !== "row" && !onNode) {
         const rowEx = sc.nodes.find((n) => n.rows?.length)
-        return err(pp, `status takes a panel row ("${rowEx ? `${rowEx.id}#${rowEx.rows![0].id}` : "panel#row"}")`, r.kind === "unknown" ? `unknown id "${s.id}"` : `"${s.id}" is ${what(r)}`)
+        return err(pp, `status takes a panel row ("${rowEx ? `${rowEx.id}#${rowEx.rows![0].id}` : "panel#row"}") or a plain graph node`, r.kind === "unknown" ? `unknown id "${s.id}"${hintId(s.id, sc.nodes.map((n) => n.id))}` : `"${s.id}" is ${what(r)}`)
       }
-      if (!["none", "running", "done", "error"].includes(s.to as string)) return err(pp, `unknown row status ${JSON.stringify(s.to)}`, `use one of: none, running, done, error`)
-      implyAppear(s.id)
+      if (!["none", "running", "done", "error"].includes(s.to as string)) return err(pp, `unknown status ${JSON.stringify(s.to)}`, `use one of: none, running, done, error`)
+      if (r.kind === "row") implyAppear(s.id)
       if (this.status(s.id) === s.to) return warn(pp, `"${s.id}" is already ${s.to} here; status has no effect`)
       this.st.set(s.id, s.to)
       this.push(this.out.status, s.id, { t: t0, to: s.to })
-      acts.push(`${rowName(r)} ${s.to === "none" ? "cleared" : s.to}`)
+      acts.push(`${r.kind === "row" ? rowName(r) : name((r as { node: SceneNode }).node)} ${s.to === "none" ? "cleared" : s.to}`)
       ends.push(t0 + (s.to === "done" || s.to === "error" ? STATUS_DRAW : REACT_SETTLE))
     })
 
     // glow / unglow: persistent glow windows on nodes.
-    for (const [verb, on] of [["glow", true], ["unglow", false]] as const)
-      asList(st[verb]).forEach((id, k) => {
-        const pp = at(verb, st[verb], k)
+    // `glow` also takes { ids, tone }: a glow in the tone's colour (a new tone replaces a glow).
+    const glowObj = st.glow && typeof st.glow === "object" && !Array.isArray(st.glow) ? (st.glow as Exclude<GlowRef, string | string[]>) : undefined
+    const glowTone = glowObj?.tone !== undefined && isTone(glowObj.tone) ? glowObj.tone : undefined
+    if (glowObj?.tone !== undefined && !glowTone) err(`${p}.glow.tone`, `unknown tone ${JSON.stringify(glowObj.tone)}`, toneHint(glowObj.tone))
+    for (const [verb, on] of [["glow", true], ["unglow", false]] as const) {
+      const list = verb === "glow" && glowObj ? asList(glowObj.ids) : asList(st[verb] as string | string[] | undefined)
+      list.forEach((id, k) => {
+        const pp = verb === "glow" && glowObj ? `${p}.glow.ids${Array.isArray(glowObj.ids) ? `[${k}]` : ""}` : at(verb, st[verb], k)
         if (typeof id !== "string") return
         const r = kind(id)
-        if (r.kind !== "node") return err(pp, r.kind === "unknown" ? `unknown id "${id}"` : `${verb} takes node ids, got "${id}" (${what(r)})`, r.kind === "unknown" ? `${verb} takes node ids` : undefined)
+        if (r.kind !== "node") return err(pp, r.kind === "unknown" ? `unknown id "${id}"` : `${verb} takes node ids, got "${id}" (${what(r)})`, r.kind === "unknown" ? `${verb} takes node ids${hintId(id, sc.nodes.map((n) => n.id))}` : undefined)
         const lit = this.lit.get(id) ?? false
-        if (on && lit) return warn(pp, `"${id}" already glows here; glow has no effect`)
+        const want: true | Tone = glowTone ?? true
+        if (on && lit === want) return warn(pp, `"${id}" already glows here${glowTone ? ` (${glowTone})` : ""}; glow has no effect`)
         if (!on && !lit) return warn(pp, `"${id}" is not glowing here; unglow has no effect`)
-        this.lit.set(id, on)
-        if (on) this.push(this.out.lit, id, { t0 })
+        // A glow in another tone takes over: the old one falls as the new one rises.
+        if (on && lit) this.out.lit[id][this.out.lit[id].length - 1].t1 = t0
+        this.lit.set(id, on ? want : false)
+        if (on) this.push(this.out.lit, id, { t0, ...(glowTone ? { tone: glowTone } : {}) })
         else this.out.lit[id][this.out.lit[id].length - 1].t1 = t0
         ends.push(t0 + springSettle(on ? LIT_RISE : LIT_FALL))
       })
+    }
+
+    // tone: colour elements by what they are; `stagger` s between ids in list order.
+    asList(st.tone as ToneRef | ToneRef[] | undefined).forEach((ref, k) => {
+      const pp = at("tone", st.tone, k)
+      if (!ref || typeof ref !== "object") return err(pp, `"tone" must be { "ids": ..., "to": "note" | "warn" | "risk" | "good" | "neutral" | null }`)
+      if (sc.type === "sequence") return err(pp, `"tone" needs a graph diagram`, "sequence diagrams: give pulses a tone instead")
+      if (ref.to !== null && !isTone(ref.to)) return err(`${pp}.to`, `unknown tone ${JSON.stringify(ref.to)}`, toneHint(ref.to))
+      const stagger = typeof ref.stagger === "number" && ref.stagger > 0 ? ref.stagger : 0
+      let n = 0
+      asList(ref.ids).forEach((id, j) => {
+        const q = `${pp}.ids${Array.isArray(ref.ids) ? `[${j}]` : ""}`
+        if (typeof id !== "string") return
+        const r = kind(id)
+        if (r.kind !== "node" && r.kind !== "group" && r.kind !== "edge" && r.kind !== "ann" && r.kind !== "toast" && r.kind !== "hud")
+          return err(q, r.kind === "unknown" ? `unknown id "${id}"` : `tone takes node, group, edge, annotation, toast or HUD ids, got "${id}" (${what(r)})`, r.kind === "unknown" ? `tone takes node, group, edge, annotation, toast or HUD ids${hintId(id, [...sc.nodes.map((x) => x.id), ...sc.groups.map((x) => x.id), ...sc.edges.map((x) => x.id), ...(sc.annotations ?? []).map((x) => x.id), ...(sc.toasts ?? []).map((x) => x.id), ...this.hud])}` : undefined)
+        const key = r.id
+        const t = r4(t0 + n * stagger)
+        n++
+        if ((this.toneNow.get(key) ?? null) === ref.to) return warn(q, ref.to === null ? `"${id}" has no tone here; tone null has no effect` : `"${id}" is already ${ref.to} here; tone has no effect`)
+        this.toneEvent(key, t, ref.to)
+        ends.push(t + TONE_FADE)
+      })
+      if (n) acts.push(ref.to === null ? "Clear tone" : `Tone ${ref.to}`)
+    })
+
+    // dismiss, then toast: floating cards (slots from the layout); `for` = timed expiry.
+    if (st.dismiss !== undefined) {
+      const all = st.dismiss === "all"
+      const ids = all ? this.toastsUp(t0) : asList(st.dismiss as string | string[])
+      if (all && !ids.length) warn(`${p}.dismiss`, `no toast is up here; dismiss "all" has no effect`)
+      ids.forEach((id, k) => {
+        if (typeof id !== "string") return
+        const w = this.out.toasts[id]
+        const known = sc.toasts?.some((x) => x.id === id)
+        if (!known) return err(all ? `${p}.dismiss` : at("dismiss", st.dismiss, k), `unknown toast "${id}"`, `dismiss takes toast ids or "all"${hintId(id, (sc.toasts ?? []).map((x) => x.id))}`)
+        if (!w || w.t0 > t0 + 1e-9) return err(at("dismiss", st.dismiss, k), `toast "${id}" is not up yet`, "dismiss it in a later step")
+        if (w.t1 !== undefined && w.t1 <= t0 + 1e-9) return warn(at("dismiss", st.dismiss, k), `toast "${id}" is already gone; dismiss has no effect`)
+        w.t1 = t0
+        ends.push(t0 + TOAST_OUT)
+      })
+      if (ids.length) acts.push(all ? "Dismiss toasts" : `Dismiss ${ids.join(", ")}`)
+    }
+    asList(st.toast as ToastRef | ToastRef[] | undefined).forEach((x, k) => {
+      const pp = at("toast", st.toast, k)
+      if (!x || typeof x !== "object") return err(pp, `"toast" must be { "near": node, "text": ..., "title"?, "tone"?, "for"? }`)
+      if (sc.type === "sequence") return err(pp, `toasts need a graph diagram`)
+      if (!sc.nodes.some((n) => n.id === x.near)) return err(`${pp}.near`, `unknown node "${x.near}"`, `toasts float near a node${hintId(String(x.near), sc.nodes.map((n) => n.id))}`)
+      if (x.tone !== undefined && !isTone(x.tone)) err(`${pp}.tone`, `unknown tone ${JSON.stringify(x.tone)}`, toneHint(x.tone))
+      const slot = sc.toasts?.find((s) => s.step === i && s.k === k)
+      if (!slot) return
+      if (this.out.toasts[slot.id]) return err(`${pp}.id`, `duplicate toast id "${slot.id}"`, "each toast step needs its own id")
+      const ok = typeof x.for === "number" && Number.isFinite(x.for) && x.for > 0
+      if (x.for !== undefined && !ok) err(`${pp}.for`, `"for" must be seconds > 0`)
+      this.out.toasts[slot.id] = { t0, ...(ok ? { t1: r4(t0 + x.for!) } : {}) }
+      acts.push(`Toast ${x.title ?? x.text}`)
+      ends.push(t0 + TOAST_IN, ...(ok ? [t0 + x.for! + TOAST_OUT] : []))
+    })
 
     let focus: string | string[] | undefined
     if (typeof st.focus === "string") {
@@ -465,16 +614,59 @@ export class Content {
     return { ends, acts, focus }
   }
 
+  /**
+   * The step-order state (statuses, tones, levels, wires, …) at this point, for acts: a rewind or
+   * cut puts it back to the previous act's start. Version numbering (`count`) is not part of it.
+   */
+  snapshot(): () => void {
+    const maps = [this.toneNow, this.st, this.lit, this.ver, this.bar, this.lvl, this.shown, this.drawn, this.drawnBy] as Map<string, unknown>[]
+    const saved = maps.map((m) => new Map(m))
+    const applied = new Map([...this.applied].map(([k, v]) => [k, new Set(v)]))
+    const typed = new Set(this.typed)
+    const unwired = new Set(this.unwired)
+    return () => {
+      maps.forEach((m, k) => {
+        m.clear()
+        for (const [a, b] of saved[k]) m.set(a, b)
+      })
+      this.applied = new Map([...applied].map(([k, v]) => [k, new Set(v)]))
+      this.typed = new Set(typed)
+      this.unwired = new Set(unwired)
+    }
+  }
+
+  /** Toasts up at `t` (shown, not yet dismissed or expired), in order of appearance. */
+  toastsUp(t: number): string[] {
+    return Object.entries(this.out.toasts)
+      .filter(([, w]) => w.t0 <= t + 1e-9 && (w.t1 === undefined || w.t1 > t + 1e-9))
+      .map(([id]) => id)
+  }
+
+  /** A pulse lands its label on an edge at `t` (the next label version of that edge). */
+  landLabel(edge: string, t: number) {
+    const key = `${edge}@elabel`
+    const v = this.next(key)
+    this.ver.set(key, v)
+    this.push(this.out.versions, key, { t: r4(t), v })
+  }
+
+  /** Tone `to` on element `key` from time `t` (tone steps, pulse tint / stain). */
+  toneEvent(key: string, t: number, to: Tone | null) {
+    this.toneNow.set(key, to)
+    this.push(this.out.tones, key, { t: r4(t), to })
+  }
+
   /** Current status of a row (rest status before any step). */
   status(key: string): RowStatus {
     const s = this.st.get(key)
     if (s) return s
     const r = parseRef(key)
+    if (!r.anchor) return "none"
     return this.scene.nodes.find((x) => x.id === r.node)?.rows?.find((x) => x.id === r.anchor)?.status ?? "none"
   }
   /** Nodes still lit / rows still running at the end, and whether something ends hidden. */
   endState(): { lit: string[]; hidden: (key: string) => boolean } {
-    return { lit: [...this.lit].filter(([, on]) => on).map(([id]) => id), hidden: (key) => (this.shown.get(key) ?? 1) === 0 }
+    return { lit: [...this.lit].filter(([, on]) => on !== false).map(([id]) => id), hidden: (key) => (this.shown.get(key) ?? 1) === 0 }
   }
 
   private lineOff(id: string, t: number) {
@@ -495,7 +687,7 @@ export class Content {
     const has = (x: object) => Object.keys(x).length > 0
     return {
       ...(o.typing.length ? { typing: o.typing } : {}),
-      ...(has(o.versions) ? { versions: o.versions } : {}),
+      ...(has(o.versions) ? { versions: sortByT(o.versions) } : {}),
       ...(has(o.bars) ? { bars: o.bars } : {}),
       ...(has(o.levels) ? { levels: o.levels } : {}),
       ...(has(o.vis) ? { vis: o.vis } : {}),
@@ -503,11 +695,27 @@ export class Content {
       ...(has(o.status) ? { status: o.status } : {}),
       ...(has(o.lit) ? { lit: o.lit } : {}),
       ...(has(o.applies) ? { applies: o.applies } : {}),
+      ...(has(o.tones) ? { tones: sortByT(o.tones) } : {}),
+      ...(has(o.toasts) ? { toasts: o.toasts } : {}),
     }
   }
 }
 
 const r4 = (x: number) => Math.round(x * 1e4) / 1e4
+/** Events per key in time order (arrival-time events come after later steps' events); stable. */
+function sortByT<T extends { t: number }>(rec: Record<string, T[]>): Record<string, T[]> {
+  const out: Record<string, T[]> = {}
+  for (const [k, ev] of Object.entries(rec)) out[k] = ev.every((e, i) => i === 0 || ev[i - 1].t <= e.t) ? ev : [...ev].sort((a, b) => a.t - b.t)
+  return out
+}
+const toneHint = (x: unknown): string => {
+  const g = typeof x === "string" ? closest(x, TONES) : undefined
+  return g ? `did you mean "${g}"? (one of: ${TONES.join(", ")}, null)` : `use one of: ${TONES.join(", ")}, null`
+}
+const hintId = (id: string, ids: string[]): string => {
+  const g = closest(id, ids)
+  return g ? `; did you mean "${g}"?` : ""
+}
 /** Default typing speed of added lines during an `apply` (chars / s). */
 export const APPLY_CPS = 60
 type ApplyRef = string | { id: string; hunk?: number; cps?: number }

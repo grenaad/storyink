@@ -22,13 +22,16 @@ import { CARET_LINGER, SHIMMER_PERIOD, SPIN_PERIOD } from "../story/content.ts"
 import { SHIMMER, SPOT } from "../story/content-state.ts"
 import { STATUS_PATHS } from "./icons.ts"
 import type { Scene } from "../scene.ts"
-import type { Spec } from "../spec.ts"
+import type { RowStatus, Spec } from "../spec.ts"
 import { storyState } from "../story/state.ts"
-import type { Frame } from "../story/types.ts"
+import type { Frame, Timeline } from "../story/types.ts"
+import { ANN } from "../layout/overlays.ts"
 import { diagramCss, fontFaceCss } from "./css.ts"
 import { dashedLook, Diagram } from "./Diagram.tsx"
 import { diffGeom } from "../layout/diffnode.ts"
-import { isChangeScene, isRichScene, toScene } from "./index.tsx"
+import { textWidth } from "../layout/measure.ts"
+import { isChangeScene, isOverlayScene, isRichScene, isStoryTextScene, isToneScene, toScene } from "./index.tsx"
+import { tonePalette, toneInk, type Tone } from "../../theme/tones.ts"
 
 export interface AnimatedSvgOptions {
   /** Pinned theme (SVG-as-image never follows the page). Default "light". */
@@ -379,7 +382,14 @@ function richTracks(scene: Scene, c: Clock, add: (key: string, ...els: (ReactNod
   }
 
   // Char typing: exact per-character clip widths and the caret (from the run's own timing).
+  const anns = new Map((scene.annotations ?? []).map((a) => [a.id, a]))
+  const careted = new Set<string>()
   for (const run of tl.typing ?? []) {
+    const ann = anns.get(run.target)
+    if (ann) {
+      annTyping(c, add, ann, run, careted)
+      continue
+    }
     if (run.by !== "char") continue
     const isRow = run.target.includes("#")
     const [nid, rid] = run.target.split("#")
@@ -429,11 +439,14 @@ function richTracks(scene: Scene, c: Clock, add: (key: string, ...els: (ReactNod
     add(`barrect:${id}`, anim(c, "y", ab.map((v) => [v[0]]), PX), anim(c, "height", ab.map((v) => [v[1]]), PX))
   }
 
-  // Row statuses: glyph opacity, analytic spin, dash draw-on; shimmer.
-  for (const n of scene.nodes)
-    for (const r of n.rows ?? []) {
-      const key = `${n.id}#${r.id}`
-      const restS = r.status ?? "none"
+  // Row (and plain node) statuses: glyph opacity, analytic spin, dash draw-on; shimmer (rows).
+  const slots: { key: string; rest: RowStatus }[] = []
+  for (const n of scene.nodes) {
+    for (const r of n.rows ?? []) slots.push({ key: `${n.id}#${r.id}`, rest: r.status ?? "none" })
+    if (n.glyph) slots.push({ key: n.id, rest: "none" })
+  }
+  for (const { key, rest: restS } of slots) {
+    {
       const ev = tl.status?.[key] ?? []
       if (restS === "none" && !ev.length) continue
       const states = [{ t: 0, to: restS }, ...ev]
@@ -469,7 +482,7 @@ function richTracks(scene: Scene, c: Clock, add: (key: string, ...els: (ReactNod
           add(`draw:${key}:${g}`, d)
         }
       }
-      if (kinds.includes("running")) {
+      if (kinds.includes("running") && key.includes("#")) {
         add(`shim:${key}`, anim(c, "opacity", series((f) => [SHIMMER.peak * (f.status?.[key]?.shimmer?.a ?? 0)]), O))
         const pts: [number, Vec][] = []
         states.forEach((st, j) => {
@@ -485,9 +498,37 @@ function richTracks(scene: Scene, c: Clock, add: (key: string, ...els: (ReactNod
         }
       }
     }
+  }
 
-  // Persistent glows and the spotlight.
-  for (const id of Object.keys(tl.lit ?? {})) add(`lit:${id}`, anim(c, "opacity", series((f) => [f.lit?.[id] ?? 0]), O))
+  // Persistent glows (toned ones per tone) and the spotlight.
+  for (const [id, ws] of Object.entries(tl.lit ?? {})) {
+    if (ws.some((w) => !w.tone)) add(`lit:${id}`, anim(c, "opacity", series((f) => [f.lit?.[id] ?? 0]), O))
+    for (const t of new Set(ws.map((w) => w.tone).filter((x): x is Tone => !!x))) add(`lit:${id}:${t}`, anim(c, "opacity", series((f) => [f.litTone?.[id]?.[t] ?? 0]), O))
+  }
+  // Annotations (with their node) and toasts.
+  for (const a of scene.annotations ?? []) {
+    add(`ann:${a.id}`, anim(c, "opacity", series((f) => [(f.el[a.id]?.o ?? 1) * (f.vis?.[a.id] ?? 1) * (f.el[a.on]?.o ?? 1) * (f.vis?.[a.on] ?? 1)]), O), translate(c, series((f) => [0, (f.el[a.id]?.dy ?? 0) + (f.el[a.on]?.dy ?? 0)]), PX))
+  }
+  for (const t of scene.toasts ?? []) {
+    const cx = t.x + t.w / 2
+    const cy = t.y + t.h / 2
+    let last = { dy: 0, s: 1 }
+    const st = series((f) => {
+      const x = f.toasts?.[t.id]
+      if (x) last = x
+      return { o: (x?.o ?? 0) * (f.vis?.[t.id] ?? 1), dy: last.dy, s: last.s }
+    })
+    add(`toast:${t.id}`, anim(c, "opacity", st.map((x) => [x.o]), O))
+    add(`toastxy:${t.id}`, translate(c, st.map((x) => [cx, cy + x.dy]), PX))
+    const k = linearKeys(c, st.map((x) => [x.s]), 0.002)
+    if (k) {
+      c.count.n++
+      add(`toastsc:${t.id}`, <animateTransform attributeName="transform" type="scale" calcMode="linear" keyTimes={k.keyTimes} values={k.vals.map((v) => num(v[0])).join(";")} {...timing(c)} />)
+    }
+  }
+  // Tone layers: one opacity track per element and tone.
+  for (const [id, ev] of Object.entries(tl.tones ?? {}))
+    for (const t of new Set(ev.map((e) => e.to).filter((x): x is Tone => !!x))) add(`tone:${id}:${t}`, anim(c, "opacity", series((f) => [f.tone?.[id]?.[t] ?? 0]), O))
   if (tl.spot?.length) {
     let last = { x: tl.spot[0].x, y: tl.spot[0].y, r: tl.spot[0].r }
     const sp = series((f) => {
@@ -518,6 +559,34 @@ function richTracks(scene: Scene, c: Clock, add: (key: string, ...els: (ReactNod
     }
   }
   void ts
+}
+
+/**
+ * An annotation's typing: char clip width + caret, or per-word fill opacity. Sampled from the
+ * frames (not the run's own timing): act stories rewind and reset typing, which the frames know.
+ */
+function annTyping(c: Clock, add: (key: string, ...els: (ReactNode | null)[]) => void, a: NonNullable<Scene["annotations"]>[number], run: NonNullable<Timeline["typing"]>[number], careted: Set<string>): void {
+  const adv = ANN.size * 0.6
+  const layer = (f: Frame) => f.content?.[a.id]?.find((l) => l.v === run.v)
+  if (run.by === "word") {
+    for (let i = 0; i < run.words!.n; i++) add(`word:${a.id}:${run.v}:${i}`, anim(c, "fill-opacity", c.frames.map((f) => [layer(f)?.words?.[i] ?? 1]), 0.01))
+    return
+  }
+  const n = a.versions[run.v]?.text.length ?? 0
+  const width = (f: Frame) => {
+    const ch = layer(f)?.chars?.[0]
+    return num(ch === undefined || ch >= n ? (n + 1) * adv : ch * adv)
+  }
+  add(`clip:${a.id}:${run.v}:0`, discrete(c, "width", c.frames.map(width)))
+  // One caret track per annotation (its first char run).
+  if (careted.has(a.id)) return
+  careted.add(a.id)
+  const caret = (f: Frame) => f.caret?.find((x) => x.target === a.id)
+  add(
+    `caret:${a.id}`,
+    discrete(c, "visibility", c.frames.map((f) => (caret(f) ? "visible" : "hidden"))),
+    discrete(c, "x", c.frames.map((f) => num(a.x + (caret(f)?.col ?? 0) * adv))),
+  )
 }
 
 /** Change steps (delta-look fades, levels, legend items) and the veil. */
@@ -589,15 +658,15 @@ function hex(c: string): [number, number, number] {
 const toHex = (v: Vec) => `#${v.map((x) => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, "0")).join("")}`
 
 /** Diagram CSS with the theme's literal colours (no custom properties, no media queries). */
-export function pinnedCss(theme: ThemeName, rich = false, changes = false): string {
-  const p = { ...palettes[theme], ...(rich ? richPalettes[theme] : {}), ...(changes ? deltaPalettes[theme] : {}) } as Palette
+export function pinnedCss(theme: ThemeName, rich = false, changes = false, tones = false, overlays = false): string {
+  const p = { ...palettes[theme], ...(rich ? richPalettes[theme] : {}), ...(changes ? deltaPalettes[theme] : {}), ...(tones ? tonePalette(theme) : {}) } as Palette
   const sub = (s: string, accent?: string) =>
     s
       .replace(/var\(--si-accentFill\)/g, accent ? p[`${accent}Fill` as keyof Palette] : "")
       .replace(/var\(--si-accent\)/g, accent ? p[accent as keyof Palette] : "")
       .replace(/var\(--si-(\w+)\)/g, (_, k: string) => p[k as keyof Palette] ?? "")
   const out: string[] = []
-  for (const m of diagramCss(rich, changes).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+  for (const m of diagramCss(rich, changes, tones, overlays).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     const sel = m[1].trim()
     const body = m[2]
     if (body.trim().startsWith("--")) continue
@@ -613,7 +682,7 @@ export function pinnedCss(theme: ThemeName, rich = false, changes = false): stri
 
 // ---------------------------------------------------------------------------
 
-const HEADER = { pad: 22, title: 22, subtitle: 20, captions: 46, gap: 6 }
+const HEADER = { pad: 22, title: 22, subtitle: 20, captions: 46, gap: 6, hud: 34 }
 
 /** The story as a SMIL-animated, self-contained SVG. Deterministic: same input, same bytes. */
 export function renderAnimatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptions = {}): string {
@@ -632,11 +701,11 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
   const pal = palettes[theme]
   const tl = scene.timeline
   const vb = scene.viewBox
-  const style = [opts.font === "embed" ? fontFaceCss(COMMIT_MONO_400, COMMIT_MONO_700) : "", pinnedCss(theme, isRichScene(scene), isChangeScene(scene))].filter(Boolean).join("\n")
+  const tones = isToneScene(scene)
+  const style = [opts.font === "embed" ? fontFaceCss(COMMIT_MONO_400, COMMIT_MONO_700) : "", pinnedCss(theme, isRichScene(scene), isChangeScene(scene), tones, isOverlayScene(scene))].filter(Boolean).join("\n")
 
   // Header: title, subtitle, caption slot (there is no HTML around an <img>).
-  const hasCaptions = !!tl?.captions.length
-  const headH = HEADER.pad + HEADER.title + (scene.subtitle ? HEADER.subtitle : 0) + (hasCaptions ? HEADER.captions : 0) + HEADER.gap
+  const headH = animatedHeaderHeight(scene)
   const X = vb.x + 32
   const titleY = vb.y - headH + HEADER.pad + 16
   const subY = titleY + HEADER.subtitle
@@ -669,7 +738,7 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
     const PX = 0.3
 
     // Change scenes use the union mode too (their stories mix 0.4 steps: wire, dim, undim...).
-    const rich = isRichScene(scene) || isChangeScene(scene)
+    const rich = isRichScene(scene) || isChangeScene(scene) || isStoryTextScene(scene)
     // Reveals.
     const nodes = new Map(scene.nodes.map((n) => [n.id, n]))
     const groups = new Set(scene.groups.map((g) => g.id))
@@ -744,14 +813,16 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
       const amp = got.map((x) => [x ? x.a / S.glow.alpha : 0])
       const id = `g${j}`
       const list = glowsByNode.get(g.node) ?? []
+      // A toned pulse's arrival glow: the tone's ink, normal blend, no theme gain (as the HTML).
+      const tc = g.tone ? toneInk(theme, g.tone) : undefined
       list.push(
-        <g key={id} className="si-x" opacity={0} style={pal.glowBlend !== "normal" ? { mixBlendMode: pal.glowBlend as never } : undefined}>
+        <g key={id} className="si-x" opacity={0} style={!tc && pal.glowBlend !== "normal" ? { mixBlendMode: pal.glowBlend as never } : undefined}>
           {anim(c, "opacity", amp, O)}
           <radialGradient id={id} gradientUnits="userSpaceOnUse" cx={num(g.cx - n.x)} cy={num(g.cy - n.y)} r={num(rs[rs.length - 1][0])}>
             {anim(c, "r", rs, 0.5)}
-            <stop offset="0" stopColor={pal.glowCrest} stopOpacity={num(Math.min(1, gain * S.glow.alpha))} />
-            <stop offset="0.45" stopColor={pal.glow} stopOpacity={num(Math.min(1, gain * S.glow.alpha * 0.45))} />
-            <stop offset="1" stopColor={pal.glow} stopOpacity={0} />
+            <stop offset="0" stopColor={tc ?? pal.glowCrest} stopOpacity={num(Math.min(1, tc ? TONED_GLOW * S.glow.alpha : gain * S.glow.alpha))} />
+            <stop offset="0.45" stopColor={tc ?? pal.glow} stopOpacity={num(Math.min(1, (tc ? TONED_GLOW : gain) * S.glow.alpha * 0.45))} />
+            <stop offset="1" stopColor={tc ?? pal.glow} stopOpacity={0} />
           </radialGradient>
           <rect width={n.w} height={n.h} fill={`url(#${id})`} />
           <rect x={0.75} y={0.75} width={n.w - 1.5} height={n.h - 1.5} fill="none" stroke={`url(#${id})`} strokeWidth={1.5} opacity={0.4} />
@@ -799,6 +870,7 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
       const arrive = p.points[p.points.length - 1]
       const pos = got.map((x, i): Vec => (x ? [x.x, x.y] : ts[i] < p.t0 ? [start.x, start.y] : [arrive.x, arrive.y]))
       const route = p.points.map((q, i) => `${i ? "L" : "M"}${num(q.x)} ${num(q.y)}`).join("")
+      const tcls = p.tone ? ` si-t-${p.tone}` : ""
       const big = num(p.length + 100)
       const kids: ReactNode[] = []
       for (let k = 0; k < 3; k++) {
@@ -814,7 +886,7 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
         })
         if (!seg.some((q) => q.o > 0)) continue
         kids.push(
-          <path key={`t${k}`} className="si-trail" d={route} opacity={0} strokeDasharray={`0 ${big}`}>
+          <path key={`t${k}`} className={`si-trail${tcls}`} d={route} opacity={0} strokeDasharray={`0 ${big}`}>
             {anim(c, "opacity", seg.map((q) => [q.o]), O)}
             {anim(c, "stroke-dasharray", seg.map((q) => [q.s1 - q.s0]), PX, (v) => `${num(v[0])} ${big}`)}
             {anim(c, "stroke-dashoffset", seg.map((q) => [-q.s0]), PX)}
@@ -826,7 +898,7 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
       const haloR = got.map((x) => [(hr = x?.halo ? x.halo.r : hr)])
       if (haloO.some((v) => v[0] > 0))
         kids.push(
-          <circle key="h" className="si-halo" cx={num(start.x)} cy={num(start.y)} r={num(haloR[haloR.length - 1][0])} opacity={0}>
+          <circle key="h" className={`si-halo${tcls}`} cx={num(start.x)} cy={num(start.y)} r={num(haloR[haloR.length - 1][0])} opacity={0}>
             {anim(c, "opacity", haloO, O)}
             {anim(c, "r", haloR, PX)}
           </circle>,
@@ -836,7 +908,7 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
       const dotR = got.map((x) => [(dr = x ? x.r : dr)])
       const last = pos[pos.length - 1]
       kids.push(
-        <circle key="d" className="si-pulse" cx={num(last[0])} cy={num(last[1])} r={num(S.pulse.dot)} opacity={0}>
+        <circle key="d" className={`si-pulse${tcls}`} cx={num(last[0])} cy={num(last[1])} r={num(S.pulse.dot)} opacity={0}>
           {anim(c, "opacity", dotO, O)}
           {anim(c, "r", dotR, PX)}
           {anim(c, "cx", pos.map((v) => [v[0]]), PX)}
@@ -855,11 +927,32 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
           return [rr, rw]
         })
         kids.push(
-          <circle key="r" className="si-ring-pulse" cx={num(arrive.x)} cy={num(arrive.y)} r={num(ring[ring.length - 1][0])} strokeWidth={num(ring[ring.length - 1][1])} opacity={0}>
+          <circle key="r" className={`si-ring-pulse${tcls}`} cx={num(arrive.x)} cy={num(arrive.y)} r={num(ring[ring.length - 1][0])} strokeWidth={num(ring[ring.length - 1][1])} opacity={0}>
             {anim(c, "opacity", ringO, O)}
             {anim(c, "r", ring.map((v) => [v[0]]), PX)}
             {anim(c, "stroke-width", ring.map((v) => [v[1]]), 0.1)}
           </circle>,
+        )
+      }
+      if (p.label) {
+        // Payload label: left edge / baseline / opacity tracks (hidden outside the flight).
+        let lx = start.x
+        let ly = start.y
+        const lab = got.map((x) => {
+          if (x?.label) {
+            lx = x.label.x
+            ly = x.label.y
+          }
+          return [lx, ly, x?.label?.o ?? 0]
+        })
+        const lastL = lab[lab.length - 1]
+        kids.push(
+          <text key="l" className={`si-plabel${tcls}`} x={num(lastL[0])} y={num(lastL[1])} opacity={0}>
+            {p.label}
+            {anim(c, "opacity", lab.map((v) => [v[2]]), O)}
+            {anim(c, "x", lab.map((v) => [v[0]]), PX)}
+            {anim(c, "y", lab.map((v) => [v[1]]), PX)}
+          </text>,
         )
       }
       overlay.push(<g key={`p${j}`}>{kids}</g>)
@@ -877,13 +970,86 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
       })
       caps.push(
         <text key={`c${i}`} className="si-cap" x={X} y={y[y.length - 1]} opacity={0}>
-          {clip(cap.text)}
+          {cap.em ? emSpans(clip(cap.text), cap.em, cap.tone ?? "note") : clip(cap.text)}
           {anim(c, "opacity", o, O)}
           {discrete(c, "y", y)}
         </text>,
       )
     })
-    map.set("overlay", [<g key="pl" className="si-pulses">{overlay}</g>, ...caps])
+    // Acts: a cut dips the diagram (a background veil), and the act chip sits right in the header row.
+    const actEls: ReactNode[] = []
+    if (tl.acts) {
+      const dip = frames.map((f) => [1 - (f.act?.dip ?? 1)])
+      if (dip.some((v) => v[0] > 0.005))
+        actEls.push(
+          <rect key="dip" className="si-bg" x={vb.x} y={vb.y} width={vb.w} height={vb.h} opacity={0}>
+            {anim(c, "opacity", dip, O)}
+          </rect>,
+        )
+      const texts = [...new Set(frames.flatMap((f) => (f.act?.chip ?? []).map((x) => x.text)))]
+      const right = vb.x + vb.w - 32
+      texts.forEach((text, j) => {
+        const o = frames.map((f) => [f.act?.chip.find((x) => x.text === text)?.o ?? 0])
+        const any = frames.flatMap((f) => f.act?.chip ?? []).find((x) => x.text === text)!
+        const w = textWidth(text, 12)
+        const lastO = o[o.length - 1][0]
+        actEls.push(
+          <g key={`chip${j}`} className="si-act-chip" opacity={num(lastO)}>
+            {anim(c, "opacity", o, O)}
+            {any.rewind ? null : <circle cx={num(right - w - 10)} cy={num(titleY - 4.5)} r={4} fill={any.tone ? toneInk(theme, any.tone) : pal.inkMuted} />}
+            <text x={num(right)} y={num(titleY)} textAnchor="end" style={{ fontSize: "12px", fill: any.rewind ? pal.inkMuted : pal.ink }}>
+              {text}
+            </text>
+          </g>,
+        )
+      })
+    }
+    // HUD metrics: a row of their own at the bottom of the header (values switch by visibility,
+    // colour layers crossfade by opacity).
+    const hudEls: ReactNode[] = []
+    if (tl.hud?.length) {
+      const y = vb.y - HEADER.gap - 9
+      let right = vb.x + vb.w - 32
+      let left = X
+      tl.hud.forEach((h, j) => {
+        const raw = series((f) => f.counters[h.id] ?? "")
+        const vals = [...new Set(raw)]
+        const widest = Math.max(...vals.map((v) => textWidth(v, 22)))
+        const labelW = textWidth(`${h.label}:`, 13)
+        const w = labelW + 8 + widest
+        const x0 = h.at === "bottom-left" ? left : right - w
+        if (h.at === "bottom-left") left += w + 28
+        else right -= w + 28
+        const tones = [...new Set((tl.tones?.[h.id] ?? []).map((e) => e.to).filter((x): x is Tone => !!x))]
+        const sum = (f: Frame) => Object.values(f.tone?.[h.id] ?? {}).reduce((a: number, b) => a + (b ?? 0), 0)
+        const lay: { tone?: Tone; o: Vec[] }[] = [{ ...(h.tone ? { tone: h.tone } : {}), o: series((f) => [Math.max(0, 1 - sum(f))]) }, ...tones.map((t) => ({ tone: t, o: series((f) => [f.tone?.[h.id]?.[t] ?? 0]) }))]
+        const final = raw[raw.length - 1]
+        const vis = series((f) => [(f.el[h.id]?.o ?? 1) * (f.vis?.[h.id] ?? 1)])
+        hudEls.push(
+          <g key={`hud${j}`} className="si-hud" opacity={num(vis[vis.length - 1][0])}>
+            {anim(c, "opacity", vis, O)}
+            <text x={num(x0)} y={num(y)} style={{ fontSize: "13px", fill: pal.inkMuted }}>
+              {`${h.label}:`}
+            </text>
+            {lay.map((l, k) => {
+              const lo = l.o[l.o.length - 1][0]
+              return (
+                <g key={k} opacity={num(lo)}>
+                  {anim(c, "opacity", l.o, O)}
+                  {vals.map((v, i) => (
+                    <text key={i} x={num(x0 + w)} y={num(y)} textAnchor="end" visibility={v === final ? "visible" : "hidden"} style={{ fontSize: "22px", fontWeight: 700, fill: l.tone ? toneInk(theme, l.tone) : pal.ink }}>
+                      {v}
+                      {discrete(c, "visibility", raw.map((x) => (x === v ? "visible" : "hidden")))}
+                    </text>
+                  ))}
+                </g>
+              )
+            })}
+          </g>,
+        )
+      })
+    }
+    map.set("overlay", [...(actEls.length ? [actEls[0]] : []), <g key="pl" className="si-pulses">{overlay}</g>, ...caps, ...actEls.slice(1), ...hudEls].filter((x) => x !== undefined))
     smil = (key) => {
       const v = map.get(key)
       return v && v.length ? v.map((e, i) => <Fragment key={i}>{e}</Fragment>) : undefined
@@ -913,8 +1079,8 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
       {smil?.(key)}
     </>
   ) : smil?.(key))
-  const richScene = isRichScene(scene) || isChangeScene(scene)
-  const union = richScene ? { pin: { ...pal, ...richPalettes[theme] } as unknown as Record<string, string> } : undefined
+  const richScene = isRichScene(scene) || isChangeScene(scene) || isStoryTextScene(scene)
+  const union = richScene ? { pin: { ...pal, ...richPalettes[theme], ...(tones ? tonePalette(theme) : {}) } as unknown as Record<string, string> } : undefined
   let markup = renderToStaticMarkup(<Diagram scene={scene} style={`${style}\n${extraCss}`} frame={base} smil={smilWithHead} {...(union ? { union } : {})} />)
   // Rich scenes animate opacity on elements whose base opacity is inline style; SMIL animates the
   // presentation attribute, which an inline style would override: move it to the attribute.
@@ -928,7 +1094,28 @@ export function animatedSvg(spec: Spec | Scene | unknown, opts: AnimatedSvgOptio
   return { svg, bytes: new TextEncoder().encode(svg).length, duration: tl?.duration ?? 0, cycle, autoStory: auto, animations: count.n }
 }
 
+/** Toned glows: peak alpha of the tone ink (matches Diagram.tsx). */
+const TONED_GLOW = 0.9
+
+/** Caption text with `*emphasis*` ranges as accent tspans (literal tone colour from the pinned CSS). */
+function emSpans(text: string, em: [number, number][], tone: Tone): ReactNode[] {
+  const out: ReactNode[] = []
+  let at = 0
+  em.forEach(([a, b], k) => {
+    if (a >= text.length) return
+    if (a > at) out.push(text.slice(at, a))
+    out.push(
+      <tspan key={k} className={`si-em si-t-${tone}`}>
+        {text.slice(a, Math.min(b, text.length))}
+      </tspan>,
+    )
+    at = Math.min(b, text.length)
+  })
+  if (at < text.length) out.push(text.slice(at))
+  return out
+}
+
 /** Header height the animated SVG adds above the diagram (for cropping in parity checks). */
 export function animatedHeaderHeight(scene: Scene): number {
-  return HEADER.pad + HEADER.title + (scene.subtitle ? HEADER.subtitle : 0) + (scene.timeline?.captions.length ? HEADER.captions : 0) + HEADER.gap
+  return HEADER.pad + HEADER.title + (scene.subtitle ? HEADER.subtitle : 0) + (scene.timeline?.captions.length ? HEADER.captions : 0) + (scene.timeline?.hud?.length ? HEADER.hud : 0) + HEADER.gap
 }

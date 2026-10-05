@@ -5,3 +5,4 @@ src/generated
 .DS_Store
 examples/changes/out
 examples/pages/out
+examples/stories/out

@@ -39,7 +39,36 @@ export function toScene(input: Spec | Scene | unknown): Scene {
 
 /** Does the scene use 0.4 rich nodes (their CSS / palette is only emitted then)? */
 export function isRichScene(scene: Scene): boolean {
-  return scene.nodes.some((n) => n.shape === "window" || n.shape === "chip" || n.muted) || scene.groups.some((g) => g.bare)
+  return scene.nodes.some((n) => n.shape === "window" || n.shape === "chip" || n.muted || n.glyph) || scene.groups.some((g) => g.bare)
+}
+
+/** Does the scene use story tones (toned layers / pulses / glows, pulse labels, caption emphasis)? */
+export function isToneScene(scene: Scene): boolean {
+  const tl = scene.timeline
+  return (
+    isOverlayScene(scene) ||
+    (!!tl &&
+      (!!tl.tones ||
+        tl.pulses.some((p) => p.tone || p.label) ||
+        Object.values(tl.lit ?? {}).some((ws) => ws.some((w) => w.tone)) ||
+        tl.captions.some((c) => c.em) ||
+        !!tl.acts)) ||
+    scene.nodes.some((n) => n.details?.some((d) => d.tone)) ||
+    scene.edges.some((e) => e.labels?.some((l) => l.tone))
+  )
+}
+
+/** Does the scene use Phase B overlays (annotations, toasts, HUD metrics)? */
+export function isOverlayScene(scene: Scene): boolean {
+  return !!scene.annotations?.length || !!scene.toasts?.length || !!scene.timeline?.hud?.length
+}
+
+/**
+ * Does the story change plain graph nodes / edges (tones, text versions, status glyphs, landed
+ * labels)? The animated SVG then renders every layer (union mode), like rich scenes.
+ */
+export function isStoryTextScene(scene: Scene): boolean {
+  return isToneScene(scene) || isOverlayScene(scene) || scene.nodes.some((n) => n.details || n.tags || n.glyph || (n.labels && n.shape !== "window" && n.shape !== "chip")) || scene.edges.some((e) => e.labels)
 }
 
 /** Does the scene use change-diagram fields (their CSS / palette is only emitted then)? */
@@ -76,7 +105,8 @@ export function renderSvg(spec: Spec | Scene | unknown, opts: SvgOptions = {}): 
   const scene = toScene(spec)
   const rich = isRichScene(scene)
   const changes = isChangeScene(scene)
-  const style = [opts.font === false ? "" : fontCss(), themeCss("svg.storyink", opts.theme, rich, changes), diagramCss(rich, changes)].filter(Boolean).join("\n")
+  const tones = isToneScene(scene)
+  const style = [opts.font === false ? "" : fontCss(), themeCss("svg.storyink", opts.theme, rich, changes, tones), diagramCss(rich, changes, tones, isOverlayScene(scene))].filter(Boolean).join("\n")
   const tl = scene.timeline
   const t = !tl || opts.t === undefined || opts.t === "end" ? (tl?.duration ?? 0) : opts.t
   const markup = renderToStaticMarkup(<Diagram scene={scene} style={style} frame={storyState(scene, tl, t)} {...(opts.idPrefix ? { idPrefix: opts.idPrefix } : {})} />)
@@ -101,7 +131,7 @@ export function renderHtml(spec: Spec | Scene | unknown, opts: HtmlOptions = {})
   const scene = toScene(spec)
   const body = renderToString(<App scene={scene} />)
   // Narration rail / change drawer rules (and the code + delta palette the drawer's diffs use).
-  const ui = { narrate: hasNarration(scene), drawer: hasNarration(scene) || hasDrawer(scene) }
+  const ui = { narrate: hasNarration(scene), drawer: hasNarration(scene) || hasDrawer(scene), ...(scene.timeline?.acts ? { acts: true } : {}), ...(scene.timeline?.hud ? { hud: true } : {}) }
   const data = escapeJson(JSON.stringify({ version: VERSION, scene }))
   const viewer = opts.viewer === false ? "" : `<script id="storyink-viewer">${VIEWER_JS.replace(/<\/script/gi, "<\\/script")}</script>`
   return `<!doctype html>
@@ -112,8 +142,8 @@ export function renderHtml(spec: Spec | Scene | unknown, opts: HtmlOptions = {})
 <meta name="generator" content="storyink ${VERSION}">
 <title>${escapeHtml(scene.title)}</title>
 <style id="storyink-font">${fontCss()}</style>
-<style id="storyink-theme">${themeCss(":root", undefined, isRichScene(scene) || ui.drawer, isChangeScene(scene) || ui.drawer)}</style>
-<style id="storyink-diagram-css">${diagramCss(isRichScene(scene), isChangeScene(scene))}</style>
+<style id="storyink-theme">${themeCss(":root", undefined, isRichScene(scene) || ui.drawer, isChangeScene(scene) || ui.drawer, isToneScene(scene))}</style>
+<style id="storyink-diagram-css">${diagramCss(isRichScene(scene), isChangeScene(scene), isToneScene(scene), isOverlayScene(scene))}</style>
 <style id="storyink-viewer-css">${viewerCss(ui)}${scene.timeline && Object.keys(scene.timeline.counters).length ? ROLLING_CSS : ""}</style>
 <script>${BOOT}</script>
 </head>

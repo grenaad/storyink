@@ -18,9 +18,12 @@ export interface SnapshotOptions {
   width?: number
   /**
    * Contact sheet: true / "themes" (default) = themes side by side;
-   * "beats" = one tile per story step plus the final frame (per theme); false = none.
+   * "beats" = one tile per story step plus the final frame (per theme); "acts" = one tile per
+   * act at its settled end, side by side (act stories, per theme); false = none.
    */
-  sheet?: boolean | "themes" | "beats"
+  sheet?: boolean | "themes" | "beats" | "acts"
+  /** Act stories: the `at` captures show the settled end of this act (`#act=<id>`) instead of a time. */
+  act?: string
   /** Story times to capture: seconds or "end" (default ["end"]). */
   at?: (number | "end")[]
   /** Motion mode for the `at` captures: "reduced" captures stepped (settled-step) frames. Beat sheets are unaffected. */
@@ -78,7 +81,7 @@ export interface Preview {
 }
 
 export interface Capture {
-  theme: ThemeName | "sheet" | "beats"
+  theme: ThemeName | "sheet" | "beats" | "acts"
   /** Story time captured ("end" = final frame). */
   at?: number | "end"
   png: string
@@ -103,6 +106,8 @@ export interface SnapshotReceipt {
   sheet?: Capture
   /** Beat sheets, one per theme. */
   beats?: Capture[]
+  /** Act sheets (problem | fix), one per theme. */
+  acts?: Capture[]
   /** Compact previews (JPEG, longest side ≤ maxSize) for inline image results. */
   previews?: Preview[]
   story?: { duration: number; steps: number }
@@ -124,7 +129,7 @@ export interface SnapshotResult {
 
 const HARD_TIMEOUT = 15_000
 
-type SnapScene = { viewBox: Box; title: string; subtitle?: string; timeline?: { duration: number; steps: unknown[] } }
+type SnapScene = { viewBox: Box; title: string; subtitle?: string; timeline?: { duration: number; steps: unknown[]; acts?: { id: string; label: string }[] } }
 
 /** Page HTML (`type: "page"`): its figures' scenes, or undefined for a single-diagram page. */
 /** Page HTML: the whole `#storyink-page-data` (slides / scrolly for storytelling captures). */
@@ -281,7 +286,9 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   const tl = pinPace !== undefined ? recompilePace(scene as unknown as Scene, pinPace) : scene.timeline
   const headerH = (scene.subtitle ? 128 : 100) + (tl ? 54 : 0)
   const ats: (number | "end")[] = opts.at?.length ? opts.at : opts.t ? [opts.t === "end" ? "end" : Number(opts.t)] : ["end"]
-  const tq = (at: number | "end") => (tl ? `&t=${at === "end" ? "end" : +at.toFixed(3)}` : "")
+  const actId = opts.act && tl?.acts?.some((a) => a.id === opts.act) ? opts.act : undefined
+  if (opts.act && !actId) return { code: 1, error: `unknown act "${opts.act}"${tl?.acts ? ` (acts: ${tl.acts.map((a) => a.id).join(", ")})` : " (the story has no acts)"}` }
+  const tq = (at: number | "end") => (tl ? (actId && at === "end" ? `&act=${encodeURIComponent(actId)}` : `&t=${at === "end" ? "end" : +at.toFixed(3)}`) : "")
   const mq = opts.motion ? `&motion=${opts.motion}` : ""
   const follow = opts.camera === "follow" && !!tl
   const cq = follow ? "&camera=follow" : ""
@@ -289,7 +296,7 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   const dq = `${opts.rail ? "&rail=1" : ""}${opts.drawer ? `&drawer=${encodeURIComponent(opts.drawer)}` : ""}`
   /** Rail / drawer captures show the page viewport (stage + side column), 16:9 at the follow width. */
   const panes = !!(opts.rail || opts.drawer)
-  const sheetMode = opts.sheet === false ? false : opts.sheet === "beats" ? "beats" : "themes"
+  const sheetMode = opts.sheet === false ? false : opts.sheet === "beats" ? "beats" : opts.sheet === "acts" ? (tl?.acts ? "acts" : false) : "themes"
   const W = Math.round(Math.max(500, opts.width ?? Math.min(1600, vb.w + 64)))
   const s = Math.min(1, (W - 64) / vb.w)
   const H = Math.round(headerH + vb.h * s + 64 + 8)
@@ -332,6 +339,7 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   const captures: Capture[] = []
   let sheetCap: Capture | undefined
   let beatCaps: Capture[] = []
+  const actCaps: Capture[] = []
   let previews: Preview[] = []
   let beatCount: number | undefined
 
@@ -403,6 +411,12 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
           out.push({ path: partFile(k, n), ...r, shows: `beat tiles ${a + 1}–${b + 1} of ${tileCount} (part ${k + 1}/${n}), ${theme}` })
         }
       }
+    } else if (sheetMode === "acts" && tl?.acts) {
+      const colW = Math.max(500, Math.min(1000, vb.w + 48))
+      const sw = colW * tl.acts.length
+      const sh = Math.round(headerH + 46 + (vb.h * (colW - 48)) / vb.w + 36)
+      const r = await shootSmall(`theme=${theme}&chrome=0&sheet=acts`, sw, sh, partFile(0, 1), maxSize, maxBytes)
+      out.push({ path: partFile(0, 1), ...r, shows: `${tl.acts.map((a) => a.label).join(" | ")}: each act's settled end, ${theme}` })
     } else if (sheetCap && sheetMode === "themes") {
       const colW = Math.max(500, Math.min(1000, vb.w + 48))
       const sw = colW * themes.length
@@ -421,7 +435,7 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
   try {
     for (const theme of themes)
       for (const at of ats) {
-        const tag = `${at === "end" ? "" : `.t${+at.toFixed(2)}`}${opts.motion === "reduced" ? ".reduced" : ""}${follow ? ".follow" : ""}${opts.rail ? ".rail" : ""}${opts.drawer ? ".drawer" : ""}`
+        const tag = `${at === "end" ? (actId ? `.act-${actId.replace(/[^\w-]/g, "_")}` : "") : `.t${+at.toFixed(2)}`}${opts.motion === "reduced" ? ".reduced" : ""}${follow ? ".follow" : ""}${opts.rail ? ".rail" : ""}${opts.drawer ? ".drawer" : ""}`
         const png = path.join(outDir, `${base}.${theme}${tag}.png`)
         const [cw, ch] = follow || panes ? [FW, Math.round(FW * 0.5625)] : [W, H]
         const ms = await shoot(`theme=${theme}&chrome=0${tq(at)}${mq}${cq}${dq}`, png, cw, ch)
@@ -490,6 +504,18 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
       }
     }
     beatCaps = beats
+    if (sheetMode === "acts" && tl?.acts) {
+      // One tile per act side by side (each tile as wide as a themes-sheet column).
+      const n = tl.acts.length
+      const colW = Math.max(500, Math.min(1000, vb.w + 48))
+      const sw = colW * n
+      const sh = Math.round(headerH + 46 + (vb.h * (colW - 48)) / vb.w + 36)
+      for (const theme of themes) {
+        const png = path.join(outDir, `${base}.acts.${theme}.png`)
+        const ms = await shoot(`theme=${theme}&chrome=0&sheet=acts`, png, sw, sh)
+        actCaps.push({ theme: "acts", png, sha256: sha256(png), bytes: fs.statSync(png).size, width: sw * scale, height: sh * scale, ms })
+      }
+    }
     if (tl) beatCount = beatTimes(tl as never).length
 
     if (sheetMode === "themes" && themes.length > 1) {
@@ -538,6 +564,7 @@ export async function snapshot(htmlPath: string, opts: SnapshotOptions = {}): Pr
     captures,
     ...(sheetCap ? { sheet: sheetCap } : {}),
     ...(beatCaps.length ? { beats: beatCaps } : {}),
+    ...(actCaps.length ? { acts: actCaps } : {}),
     ...(previews.length ? { previews } : {}),
     ...(tl ? { story: { duration: tl.duration, steps: tl.steps.length } } : {}),
     ...(lint ? { lint } : {}),

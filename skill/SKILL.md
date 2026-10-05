@@ -199,6 +199,24 @@ speed. Finish with spinners `done` and glows `unglow`ed: the final frame is the 
 
 Max 3 passes. Stills can't show smoothness or real-time pacing: say so when reporting.
 
+**Problem → fix recipe** (one stage, "before" then "after"; example
+`examples/stories/secret-broker.architecture.json`):
+
+| Problem | Fix |
+| --- | --- |
+| Two diagrams side by side lose the "same request" | `story.acts: [{ id: "before", label, tone: "risk" }, { id: "after", label, tone: "good" }]`; the fix starts with `{ "act": "after" }` (default `enter: "rewind"`: act 1 plays backwards, the topology morphs in place) |
+| The fix adds / removes a node | `in: ["after"]` on the new node / edges (or `delta: added / removed`); positions are shared, the old wire runs through the new node's slot |
+| Colour is decoration | tones carry meaning: pulse `tone` (`note` request, `warn` pending, `risk` leak, `good` safe) + `label`, `tint` on arrival, `stain` on the path; `tone` steps with `stagger` for a contagion sweep |
+| The pain is invisible | `toast` near the node (`title` + `text`, escalating `warn` → `risk`, several piling up); `dismiss: "all"` before the act ends (or `for: s`), else a warning |
+| "It leaked" is abstract | an annotation on the victim node, `type`d in `risk`; in the fix act `set` the **same** annotation to the safe value in `good` (same slot, opposite tone) |
+| No number to compare | `story.hud: [{ id, label }]` + `counter` steps (prompts 1 → 4 in act 1; the rewind resets it; `tone` it `good` at 0 at the end) |
+| The takeaway gets lost | exactly one caption with `*emphasis*` (drawn in the act's tone) |
+
+Replay the **same** first request in the fix act (same labels, same order) so the reader compares
+like with like. Check with `--sheet acts` (the problem | fix diptych, HUD values in the tile
+captions) and `--sheet beats` in both themes, plus `at` frames on the toast pile and the typed
+annotation.
+
 **Animated SVG** for READMEs, PR comments and docs, where only an `<img>` is allowed (no script):
 `storyink_render` with `animatedSvg: "both"` (CLI `--animated-svg x.svg --theme both`) writes
 `x.light.svg` + `x.dark.svg` (SMIL, loops; `once: true` plays once). Paste the returned snippet:

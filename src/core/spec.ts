@@ -1,3 +1,5 @@
+import type { Tone } from "../theme/tones.ts"
+export type { Tone } from "../theme/tones.ts"
 /** storyink diagram spec (JSON). See docs/spec.md and schema/storyink.schema.json. */
 import type { DiffFile, Hunk } from "./diff/types.ts"
 
@@ -174,6 +176,8 @@ export interface GraphNode {
   stat?: ChangeStat
   /** One line: what changed and why (auto captions, drawer). */
   summary?: string
+  /** Act stories: the acts this node is on stage in (default: all; `delta` decides when set). */
+  in?: string[]
 }
 
 export interface NodeCounter {
@@ -197,6 +201,16 @@ export type PulseRef =
       reverse?: boolean
       /** Start this many seconds after the step. */
       delay?: number
+      /** Colour of the dot, halo, trail, arrival ring and glow (what the data is). */
+      tone?: Tone
+      /** Payload text riding with the dot (≤ 32 chars). */
+      label?: string
+      /** `"edge"`: on arrival the label stays as the arriving edge's label. */
+      land?: "edge"
+      /** On arrival the target node takes the pulse's tone. */
+      tint?: boolean
+      /** Each wire of the route keeps the pulse's tone once the dot has passed it. */
+      stain?: boolean
     }
 /** Typewriter target: a code node or a panel row ("node#row"). */
 export type TypeRef = string | { id: string; by?: "char" | "word"; cps?: number; duration?: number }
@@ -205,9 +219,19 @@ export type LineRef = string | { id: string; lines?: number | [number, number]; 
 /** Story `apply` on a diff code node: all its (remaining) hunks, or one (1-based); `cps` = typing speed of added lines. */
 export type ApplyRef = string | { id: string; hunk?: number; cps?: number }
 export interface StatusRef {
+  /** A panel row ("panel#row") or a plain graph node (glyph at the start of its detail line). */
   id: string
   to: RowStatus
 }
+/** Story `tone`: colour elements by what they are (crossfade, `stagger` s between ids in order). */
+export interface ToneRef {
+  ids: string | string[]
+  /** null clears back to the rest look. */
+  to: Tone | null
+  stagger?: number
+}
+/** Story `glow`: ids, or `{ ids, tone }` for a glow in a tone's colour. */
+export type GlowRef = string | string[] | { ids: string | string[]; tone?: Tone }
 export type LevelRef = string | string[] | { ids: string[]; to?: number }
 export interface SetRef {
   id: string
@@ -216,6 +240,8 @@ export interface SetRef {
   detail?: string
   tag?: string
   label?: string
+  /** Plain graph nodes: the detail line's tone (wins over the node's tone); null = untoned. */
+  tone?: Tone | null
 }
 export type WireRef = string | { edge: string; duration?: number }
 
@@ -256,9 +282,11 @@ export interface StoryStep {
   wire?: WireRef | WireRef[]
   /** Retract an edge (source end first). */
   unwire?: WireRef | WireRef[]
-  /** Persistent glow on / off (nodes). */
-  glow?: string | string[]
+  /** Persistent glow on / off (nodes); `{ ids, tone }` glows in a tone. */
+  glow?: GlowRef
   unglow?: string | string[]
+  /** Tone nodes, groups and edges (tinted face, toned stroke / tag / detail; null clears). */
+  tone?: ToneRef | ToneRef[]
   /** Camera focus + spotlight target override: one id, or several (their union box). */
   focus?: string | string[]
   /**
@@ -271,6 +299,61 @@ export interface StoryStep {
   apply?: ApplyRef | ApplyRef[]
   /** Narration for the HTML viewer's rail (the animated SVG falls back to it as a caption). */
   narrate?: Narrate
+  /** Floating toast cards near a node (placed at layout time, never over nodes / labels / annotations / other toasts). */
+  toast?: ToastRef | ToastRef[]
+  /** Dismiss toasts by id, or "all" that are up. */
+  dismiss?: string | string[]
+  /** Act stories: this step starts that act (a chapter; implies `stop` = the act label). */
+  act?: string
+  /** How the act enters (acts after the first): "rewind" (default), "cut" or "continue". */
+  enter?: ActEnter
+}
+
+/** A story toast: a small floating card near a node (title in ink, text in its tone). */
+export interface ToastRef {
+  /** Default `toast-<step>-<k>` (1-based step). */
+  id?: string
+  near: string
+  title?: string
+  text: string
+  tone?: Tone
+  /** Seconds until it fades by itself (else until `dismiss`). */
+  for?: number
+}
+
+/** A node annotation: one mono line just above / below the node, left-aligned with it. */
+export interface Annotation {
+  id: string
+  on: string
+  side?: "top" | "bottom"
+  text: string
+  tone?: Tone
+  /** Act stories: the acts it is on stage in (default: its node's). */
+  in?: string[]
+}
+
+/** A stage metric ("prompts: 4"), driven by `counter` steps. */
+export interface HudItem {
+  id: string
+  label: string
+  value?: number
+  tone?: Tone
+  prefix?: string
+  suffix?: string
+  at?: "top-right" | "bottom-left"
+}
+
+/** How an act enters: rewind the previous act, cut back to its start, or continue from its end. */
+export type ActEnter = "rewind" | "cut" | "continue"
+export const ACT_ENTERS = ["rewind", "cut", "continue"] as const
+
+/** A story act (problem → fix): a scenario on the same stage. */
+export interface StoryAct {
+  id: string
+  /** Chip text ("raw CLI"). */
+  label: string
+  /** Chip dot and caption emphasis colour. */
+  tone?: Tone
 }
 
 /** A cite: `text` (found in the body, in order) linked to an element id, `node#row`, or a file `path` / `path#L12` / `path#L12-20`. */
@@ -314,6 +397,10 @@ export interface Story {
   spotlight?: boolean | "veil"
   /** Loop reset effect in the HTML viewer. */
   rewind?: "tape" | "glitch"
+  /** Acts (2–6): one stage, several scenarios (problem → rewind → fix). Graph diagrams only. */
+  acts?: StoryAct[]
+  /** Stage metrics ("label: value"), driven by `counter` steps. */
+  hud?: HudItem[]
 }
 
 export type StoryMotion = "full" | "reduced" | "system"
@@ -332,6 +419,8 @@ export interface GraphGroup {
   bare?: boolean
   /** What the change did to this group. */
   delta?: Delta
+  /** Act stories: the acts this group is on stage in. */
+  in?: string[]
 }
 
 /** Diagram-level presentation options. */
@@ -353,6 +442,8 @@ export interface GraphEdge {
   emphasis?: Emphasis
   files?: FileRefLike[]
   summary?: string
+  /** Act stories: the acts this edge is on stage in. */
+  in?: string[]
 }
 
 export interface GraphSpec extends Common {
@@ -362,6 +453,8 @@ export interface GraphSpec extends Common {
   nodes: GraphNode[]
   edges?: GraphEdge[]
   groups?: GraphGroup[]
+  /** One-line node annotations (story: reveal / type / set / clear / tone / hide / show). */
+  annotations?: Annotation[]
 }
 
 /** A message reference: 0-based index into `messages`, or a message id. */

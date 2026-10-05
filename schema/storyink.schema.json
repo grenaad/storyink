@@ -412,7 +412,26 @@
                         ]
                       },
                       "glow": {
-                        "$ref": "#/$defs/refs"
+                        "description": "Persistent glow on nodes; { ids, tone } glows in a tone's colour.",
+                        "oneOf": [
+                          { "$ref": "#/$defs/refs" },
+                          {
+                            "type": "object",
+                            "required": ["ids"],
+                            "additionalProperties": false,
+                            "properties": {
+                              "ids": { "$ref": "#/$defs/refs" },
+                              "tone": { "$ref": "#/$defs/tone" }
+                            }
+                          }
+                        ]
+                      },
+                      "tone": {
+                        "description": "Colour nodes, groups and edges by what they are (0.35 s crossfade; persists into the final frame).",
+                        "oneOf": [
+                          { "$ref": "#/$defs/toneRef" },
+                          { "type": "array", "items": { "$ref": "#/$defs/toneRef" } }
+                        ]
                       },
                       "unglow": {
                         "$ref": "#/$defs/refs"
@@ -434,6 +453,25 @@
                       },
                       "narrate": {
                         "$ref": "#/$defs/narrate"
+                      },
+                      "act": {
+                        "type": "string",
+                        "description": "Act stories: this step starts that act (a chapter; implies stop = the act label)."
+                      },
+                      "enter": {
+                        "enum": ["rewind", "cut", "continue"],
+                        "description": "How the act enters (acts after the first): rewind (default) plays the previous act backwards to its start, cut dips to it, continue goes on from its end; then the morph."
+                      },
+                      "toast": {
+                        "description": "Show toasts (title in ink, text in its tone): fade + rise + scale in. A toast still up when its act or the story ends is a warning.",
+                        "oneOf": [
+                          { "$ref": "#/$defs/toastRef" },
+                          { "type": "array", "items": { "$ref": "#/$defs/toastRef" } }
+                        ]
+                      },
+                      "dismiss": {
+                        "description": "Fade toasts out: ids, or \"all\" that are up.",
+                        "anyOf": [{ "const": "all" }, { "$ref": "#/$defs/refs" }]
                       }
                     }
                   }
@@ -458,6 +496,46 @@
                 "glitch"
               ],
               "description": "Loop reset effect in the HTML viewer."
+            },
+            "acts": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 6,
+              "description": "Graph diagrams: one stage, several scenarios (problem → rewind → fix). Steps name the act they start with \"act\"; elements say \"in\" (or their delta decides).",
+              "items": {
+                "type": "object",
+                "required": ["id", "label"],
+                "additionalProperties": false,
+                "properties": {
+                  "id": { "type": "string" },
+                  "label": { "type": "string", "description": "Act chip text." },
+                  "tone": {
+                    "$ref": "#/$defs/tone",
+                    "description": "Chip dot and caption emphasis colour."
+                  }
+                }
+              }
+            },
+            "hud": {
+              "type": "array",
+              "description": "HUD metrics: big mono \"label: value\" numbers pinned to the stage (HTML: below the act chip; animated SVG: a header row). Driven by `counter` steps ({ id: hudId, to }); `tone`, `reveal`, `hide` and `show` take HUD ids (a revealed HUD is hidden until its step).",
+              "items": {
+                "type": "object",
+                "required": ["id", "label"],
+                "additionalProperties": false,
+                "properties": {
+                  "id": { "$ref": "#/$defs/id" },
+                  "label": { "type": "string" },
+                  "value": { "type": "number", "description": "Start value (default 0)." },
+                  "tone": { "$ref": "#/$defs/tone" },
+                  "prefix": { "type": "string" },
+                  "suffix": { "type": "string" },
+                  "at": {
+                    "enum": ["top-right", "bottom-left"],
+                    "description": "Default top-right."
+                  }
+                }
+              }
             }
           }
         }
@@ -1820,7 +1898,8 @@
               "files": { "$ref": "#/$defs/files" },
               "stat": { "$ref": "#/$defs/stat" },
               "diff": { "$ref": "#/$defs/diff" },
-              "summary": { "type": "string", "description": "One line: what changed and why." }
+              "summary": { "type": "string", "description": "One line: what changed and why." },
+              "in": { "$ref": "#/$defs/actIds" }
             }
           }
         },
@@ -1866,7 +1945,8 @@
               "delta": { "$ref": "#/$defs/delta" },
               "emphasis": { "$ref": "#/$defs/emphasis" },
               "files": { "$ref": "#/$defs/files" },
-              "summary": { "type": "string", "description": "One line: what changed and why." }
+              "summary": { "type": "string", "description": "One line: what changed and why." },
+              "in": { "$ref": "#/$defs/actIds" }
             }
           }
         },
@@ -1907,7 +1987,28 @@
                 "type": "boolean",
                 "description": "Label only, no box (a column heading)."
               },
-              "delta": { "$ref": "#/$defs/delta" }
+              "delta": { "$ref": "#/$defs/delta" },
+              "in": { "$ref": "#/$defs/actIds" }
+            }
+          }
+        },
+        "annotations": {
+          "type": "array",
+          "description": "Node annotations: one mono line just above (default) or below a node, left-aligned with it; the layout reserves its room. Story steps reveal / hide / show / type / set (text, tone) / clear / tone them by id (ids share the node namespace).",
+          "items": {
+            "type": "object",
+            "required": ["id", "on", "text"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "on": { "type": "string", "description": "The node it belongs to." },
+              "side": { "enum": ["top", "bottom"], "description": "Default top." },
+              "text": {
+                "type": "string",
+                "description": "One short line (typed when a step `type`s it; hidden until then)."
+              },
+              "tone": { "$ref": "#/$defs/tone" },
+              "in": { "$ref": "#/$defs/actIds" }
             }
           }
         }
@@ -2292,6 +2393,27 @@
               "type": "number",
               "minimum": 0,
               "description": "Start this many seconds after the step."
+            },
+            "tone": {
+              "$ref": "#/$defs/tone",
+              "description": "Colour of the dot, halo, trail, arrival ring and glow."
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Payload text riding with the dot (mono, tag-sized; clipped to 32 chars)."
+            },
+            "land": {
+              "const": "edge",
+              "description": "With a label: on arrival the label stays as the arriving edge's label."
+            },
+            "tint": {
+              "type": "boolean",
+              "description": "With a tone: the target node takes the tone on arrival."
+            },
+            "stain": {
+              "type": "boolean",
+              "description": "With a tone: each wire of the route keeps the tone once the dot has passed it."
             }
           }
         }
@@ -2336,7 +2458,7 @@
         {
           "type": "string",
           "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:\\-]*#([1-9][0-9]*(-[1-9][0-9]*)?|[+-][1-9][0-9]*)$",
-      "description": "\"code#3\" / \"code#2-4\" (display lines); diff nodes also \"code#+14\" (head line) / \"code#-13\" (base line)."
+          "description": "\"code#3\" / \"code#2-4\" (display lines); diff nodes also \"code#+14\" (head line) / \"code#-13\" (base line)."
         },
         {
           "type": "object",
@@ -2382,7 +2504,8 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "$ref": "#/$defs/ref"
+          "$ref": "#/$defs/ref",
+          "description": "A panel row (\"panel#row\") or a plain graph node (glyph at the start of its detail line)."
         },
         "to": {
           "$ref": "#/$defs/rowStatus"
@@ -2414,6 +2537,10 @@
         },
         "label": {
           "type": "string"
+        },
+        "tone": {
+          "oneOf": [{ "$ref": "#/$defs/tone" }, { "type": "null" }],
+          "description": "Plain graph nodes: the detail line's tone (null = untoned)."
         }
       }
     },
@@ -2439,6 +2566,62 @@
           }
         }
       ]
+    },
+    "actIds": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" },
+      "description": "Act stories: the acts this element is on stage in (default: every act; delta removed = the first act only, added = every act but the first)."
+    },
+    "tone": {
+      "description": "What the data is: note (blue), warn (gold), risk (rose), good (sage), neutral (ink). Same names as page tones.",
+      "enum": ["neutral", "note", "good", "warn", "risk"]
+    },
+    "toneRef": {
+      "type": "object",
+      "required": ["ids", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "ids": {
+          "description": "Node, group or edge ids (\"a->b\" works for edges), in stagger order.",
+          "oneOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+          ]
+        },
+        "to": {
+          "description": "The tone, or null to clear back to the rest look.",
+          "oneOf": [{ "$ref": "#/$defs/tone" }, { "type": "null" }]
+        },
+        "stagger": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 5,
+          "description": "Seconds between ids (a contagion sweep)."
+        }
+      }
+    },
+    "toastRef": {
+      "type": "object",
+      "required": ["near", "text"],
+      "additionalProperties": false,
+      "description": "A floating card near a node (placed at layout time, never over nodes / groups / edge labels / annotations / other toasts up at the same time).",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id",
+          "description": "Default toast-<step>-<k> (1-based)."
+        },
+        "near": { "type": "string" },
+        "title": { "type": "string" },
+        "text": { "type": "string" },
+        "tone": { "$ref": "#/$defs/tone" },
+        "for": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 60,
+          "description": "Seconds until it fades by itself (else until dismissed)."
+        }
+      }
     }
   }
 }

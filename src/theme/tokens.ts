@@ -10,6 +10,8 @@
  * reimplementation; nothing is copied from the original site.
  */
 
+import { tonePalette } from "./tones.ts"
+
 export type ThemeName = "light" | "dark"
 
 export const ACCENTS = ["rose", "blue", "gold", "sage", "plain"] as const
@@ -410,7 +412,7 @@ export const geometry = {
 export const story = {
   beats: { react: 0.3, step: 0.8, settle: 1.2, read: 1 },
   springs: { react: 0.3, smooth: 0.45, word: 0.16 },
-  pulse: { gather: 0.34, flight: 0.9, flightMin: 0.45, flightMax: 1.6, pxPerSecond: 520, ring: 0.72, cooling: 1.1, dot: 4, halo: 18 },
+  pulse: { gather: 0.34, flight: 0.9, flightMin: 0.45, flightMax: 1.6, pxPerSecond: 520, labelRead: 0.6, labelPerChar: 0.05, labelFlightMin: 1.2, labelFlightMax: 3.2, ring: 0.72, cooling: 1.1, dot: 4, halo: 18 },
   glow: { duration: 1.2, alpha: 0.28, minGap: 1 / 3 },
   flash: { decay: 1.6 },
   reveal: { rise: 6, opacityDelay: 0.075 },
@@ -437,13 +439,18 @@ export const motion = {
 }
 
 /** CSS custom property name for a palette key. */
-export const cssVar = (key: keyof Palette | keyof RichPalette | keyof DeltaPalette): string => `--si-${key}`
+export const cssVar = (key: PaletteKey): string => `--si-${key}`
 /** `var(--si-key)` reference. */
-export const v = (key: keyof Palette | keyof RichPalette | keyof DeltaPalette): string => `var(${cssVar(key)})`
+export const v = (key: PaletteKey): string => `var(${cssVar(key)})`
+/** Any diagram palette key (tone keys: `toneNote`, `toneNoteTint`, …). */
+export type PaletteKey = keyof Palette | keyof RichPalette | keyof DeltaPalette | `tone${string}`
 
-/** Custom properties for a theme; `rich` adds the rich-node palette, `changes` the delta palette. */
-export function paletteCss(theme: ThemeName, rich = false, changes = false): string {
-  const p: Record<string, string> = { ...palettes[theme], ...(rich ? richPalettes[theme] : {}), ...(changes ? deltaPalettes[theme] : {}) }
+/**
+ * Custom properties for a theme; `rich` adds the rich-node palette, `changes` the delta palette,
+ * `tones` the story tone palette.
+ */
+export function paletteCss(theme: ThemeName, rich = false, changes = false, tones = false): string {
+  const p: Record<string, string> = { ...palettes[theme], ...(rich ? richPalettes[theme] : {}), ...(changes ? deltaPalettes[theme] : {}), ...(tones ? tonePalette(theme) : {}) }
   return Object.keys(p).map((k) => `${cssVar(k as keyof Palette)}:${p[k]};`).join("")
 }
 
@@ -451,13 +458,13 @@ export function paletteCss(theme: ThemeName, rich = false, changes = false): str
  * CSS for both themes. `scope` is the selector that carries the variables.
  * With `fixed`, only that theme is emitted (no media query).
  */
-export function themeCss(scope: string, fixed?: ThemeName, rich = false, changes = false): string {
-  if (fixed) return `${scope}{${paletteCss(fixed, rich, changes)}color-scheme:${fixed};}`
+export function themeCss(scope: string, fixed?: ThemeName, rich = false, changes = false, tones = false): string {
+  if (fixed) return `${scope}{${paletteCss(fixed, rich, changes, tones)}color-scheme:${fixed};}`
   // Custom properties inherit, so the nearest `[data-theme]` ancestor wins.
   return [
-    `${scope}{${paletteCss("light", rich, changes)}color-scheme:light;}`,
-    `@media (prefers-color-scheme: dark){${scope}{${paletteCss("dark", rich, changes)}color-scheme:dark;}}`,
-    `${scope}[data-theme="light"],${scope} [data-theme="light"]{${paletteCss("light", rich, changes)}color-scheme:light;}`,
-    `${scope}[data-theme="dark"],${scope} [data-theme="dark"]{${paletteCss("dark", rich, changes)}color-scheme:dark;}`,
+    `${scope}{${paletteCss("light", rich, changes, tones)}color-scheme:light;}`,
+    `@media (prefers-color-scheme: dark){${scope}{${paletteCss("dark", rich, changes, tones)}color-scheme:dark;}}`,
+    `${scope}[data-theme="light"],${scope} [data-theme="light"]{${paletteCss("light", rich, changes, tones)}color-scheme:light;}`,
+    `${scope}[data-theme="dark"],${scope} [data-theme="dark"]{${paletteCss("dark", rich, changes, tones)}color-scheme:dark;}`,
   ].join("\n")
 }

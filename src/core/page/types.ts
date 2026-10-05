@@ -2,8 +2,8 @@
 import type { DiffFile } from "../diff/types.ts"
 import type { ChangeMeta, CodeLang, Delta, Spec } from "../spec.ts"
 
-export const TONES = ["neutral", "note", "good", "warn", "risk"] as const
-export type Tone = (typeof TONES)[number]
+import type { Tone } from "../../theme/tones.ts"
+export { TONES, type Tone } from "../../theme/tones.ts"
 export const CALLOUT_TONES = ["note", "good", "warn", "risk"] as const
 export type CalloutTone = (typeof CALLOUT_TONES)[number]
 export const SEVERITIES = ["low", "medium", "high", "critical"] as const

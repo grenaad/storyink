@@ -1,3 +1,4 @@
+import type { Tone } from "../theme/tones.ts"
 import type { Accent } from "../theme/tokens.ts"
 import type { ArrowMode, ChangeMeta, ChangeStat, CodeLang, Delta, DiagramType, Direction, EdgeStyle, Emphasis, FileRef, FrameKind, IconName, MessageKind, RowStatus } from "./spec.ts"
 
@@ -117,7 +118,18 @@ export interface SceneNode extends Box {
   stack?: number
   /** Label versions (story `set` label); [0] = spec. */
   labels?: string[][]
+  /** Plain nodes: detail versions (story `set` detail / tone); [0] = spec. The slot fits every version. */
+  details?: { lines: string[]; tone?: Tone }[]
+  /** Plain nodes: tag versions (story `set` tag, uppercase); [0] = spec ("" = none). */
+  tags?: string[]
+  /**
+   * Plain nodes with a story `status`: the glyph slot at the start of the detail line (centre), and
+   * the left edge of the (then left-aligned) detail text.
+   */
+  glyph?: { x: number; y: number; textX: number }
   delta?: Delta
+  /** Act stories: the acts this element is on stage in (absent = every act). */
+  acts?: string[]
   /** The kind's accent when the delta replaced it (the before look of a `change` step). */
   accent0?: Accent
   stat?: ChangeStat
@@ -167,6 +179,8 @@ export interface SceneGroup extends Box {
   /** Label only, no box. */
   bare?: boolean
   delta?: Delta
+  /** Act stories: the acts this element is on stage in (absent = every act). */
+  acts?: string[]
 }
 
 export interface Arrowhead {
@@ -197,6 +211,8 @@ export interface SceneEdge {
   arrow: ArrowMode
   heads: Arrowhead[]
   label?: SceneLabel
+  /** Label versions (pulses that `land` their label here); [0] = spec ("" = none). The slot fits the widest. */
+  labels?: { text: string; tone?: Tone }[]
   message?: MessageKind
   /** Sequence number (autonumber). */
   seq?: number
@@ -204,6 +220,8 @@ export interface SceneEdge {
   fromAnchor?: string
   toAnchor?: string
   delta?: Delta
+  /** Act stories: the acts this element is on stage in (absent = every act). */
+  acts?: string[]
   emphasis?: Emphasis
   summary?: string
   files?: FileRef[]
@@ -262,10 +280,40 @@ export interface Scene {
   change?: ChangeMeta
   /** Change legend band above the diagram (deltas present, in legend order). */
   legend?: SceneLegend
+  /** Node annotations (one mono line above / below a node); only when the spec has them. */
+  annotations?: SceneAnnotation[]
+  /** Story toast slots (placed at layout time); only when the story has toasts. */
+  toasts?: SceneToast[]
   /** Compiled storyboard, when the spec has a story. */
   timeline?: import("./story/types.ts").Timeline
   /** Embedded hunks (`--changes`), carried for the HTML viewer's drawer; only when the spec has them. */
   changes?: import("./spec.ts").EmbeddedChanges
+}
+
+/** A node annotation: text baseline at (x, y); the box (x, y0, w, h) is reserved by the layout. */
+export interface SceneAnnotation {
+  id: string
+  on: string
+  side: "top" | "bottom"
+  x: number
+  /** Baseline. */
+  y: number
+  /** Reserved box (every version fits). */
+  box: Box
+  /** [0] = spec, then each story `set` with text / tone, in step order. */
+  versions: { text: string; tone?: Tone }[]
+  acts?: string[]
+}
+
+/** A toast card slot: a story toast step (step index, k-th toast of the step). */
+export interface SceneToast extends Box {
+  id: string
+  step: number
+  k: number
+  near: string
+  title?: string
+  text: string
+  tone?: Tone
 }
 
 export interface SceneBand extends Box {

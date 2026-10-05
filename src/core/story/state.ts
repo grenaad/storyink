@@ -1,9 +1,12 @@
 import { story as S } from "../../theme/tokens.ts"
 import type { Pt, Scene } from "../scene.ts"
-import { clamp01, easeOutCubic, inOutCubic, react, smooth, smoothstep, spring, springSettle } from "./ease.ts"
+import { textWidth } from "../layout/measure.ts"
+import { clamp01, easeOutCubic, inOutCubic, pulseEase, react, smooth, smoothstep, spring, springSettle } from "./ease.ts"
 import type { Frame, GlowFrame, PulseFrame, Timeline } from "./types.ts"
 import { composeTitle, contentEvents, readTime, truncate } from "./compile.ts"
 import { contentFrame } from "./content-state.ts"
+import { CHIP_FADE, REWIND_CHIP } from "./acts.ts"
+import type { Tone } from "../../theme/tones.ts"
 
 export interface StateOptions {
   /** Reduced motion: springs become steps, no pulses or glows. */
@@ -53,6 +56,106 @@ function subPath(points: Pt[], s0: number, s1: number): string {
   return out.map((p, i) => `${i ? "L" : "M"}${r2(p.x)} ${r2(p.y)}`).join("")
 }
 
+/**
+ * Pulse label timing (s) and geometry (px): fade-in after departure, fade-out after arrival,
+ * offset from the wire, font size, gap kept from node boxes, and the minimum arc length of an
+ * intermediate-node handoff (old hop fades out, next hop fades in).
+ */
+export const PULSE_LABEL = { fadeIn: 0.15, fadeOut: 0.2, above: 9, right: 9, size: 10, gap: 8, handoff: 24 } as const
+
+/** Share of horizontal travel (1 = horizontal, 0 = vertical) of `points` over arc lengths [lo, hi]. */
+function horizontality(points: Pt[], lo: number, hi: number): number {
+  let dx = 0
+  let dy = 0
+  let acc = 0
+  for (let i = 1; i < points.length; i++) {
+    const q0 = points[i - 1]
+    const q1 = points[i]
+    const L = Math.hypot(q1.x - q0.x, q1.y - q0.y)
+    const a0 = acc
+    acc += L
+    if (L <= 0 || acc < lo || a0 > hi) continue
+    const frac = (Math.min(acc, hi) - Math.max(a0, lo)) / L
+    dx += Math.abs(q1.x - q0.x) * frac
+    dy += Math.abs(q1.y - q0.y) * frac
+  }
+  return dx + dy > 1e-6 ? dx / (dx + dy) : 1
+}
+
+/**
+ * Per hop, the arc-length window [a, b] where the label's footprint clears both end boxes:
+ * half the label width (+gap) on a horizontal run, a text line (+gap) on a vertical one, judged
+ * by the wire's direction over its first / last 40 px. A hop too short for that pins the label at
+ * its midpoint (it may then touch a box: unavoidable without leaving the wire). Without
+ * `points` the route is taken as horizontal (compile-time estimates).
+ */
+export function pulseLabelWindows(label: string, length: number, spans: { s0: number; s1: number }[], points?: Pt[]): { a: number; b: number }[] {
+  const w = textWidth(label, PULSE_LABEL.size)
+  const clear = (h: number) => PULSE_LABEL.gap + (w / 2) * h + (PULSE_LABEL.size + 2) * (1 - h)
+  const hops = spans.length ? spans : [{ s0: 0, s1: length }]
+  return hops.map((sp) => {
+    const a = sp.s0 + clear(points ? horizontality(points, sp.s0, Math.min(sp.s1, sp.s0 + 40)) : 1)
+    const b = sp.s1 - clear(points ? horizontality(points, Math.max(sp.s0, sp.s1 - 40), sp.s1) : 1)
+    if (a <= b) return { a, b }
+    const m = (sp.s0 + sp.s1) / 2
+    return { a: m, b: m }
+  })
+}
+
+/**
+ * Where the label sits for a dot at arc length `s`: the dot clamped into the current hop's
+ * window (held at the source side until the dot catches up, then following it, then held at
+ * the destination side while the dot arrives). Between hops (the dot crossing a node, or the
+ * first `handoff` px past it) the label fades out at the old hop's end and back in on the new
+ * hop, never drawn across the node. `o` is that handoff opacity; `follow` = moving with the dot.
+ */
+export function pulseLabelAnchor(windows: { a: number; b: number }[], spans: { s0: number; s1: number }[], s: number): { s: number; o: number; follow: boolean } {
+  const at = (k: number) => {
+    const { a, b } = windows[k]
+    return { s: Math.min(b, Math.max(a, s)), o: 1, follow: s > a && s < b }
+  }
+  for (let k = 1; k < windows.length; k++) {
+    const h0 = spans[k - 1].s1
+    const h1 = Math.max(spans[k].s0, h0 + PULSE_LABEL.handoff)
+    if (s < h0) return at(k - 1)
+    if (s < h1) {
+      const u = (s - h0) / (h1 - h0)
+      return u < 0.5 ? { ...at(k - 1), o: 1 - smoothstep(u * 2), follow: false } : { ...at(k), o: smoothstep(u * 2 - 1), follow: false }
+    }
+  }
+  return at(windows.length - 1)
+}
+
+/**
+ * The payload label of a pulse from departure until just after arrival: horizontal text above a
+ * horizontal wire and right of a vertical one (blended through corners by the local direction),
+ * placed by `pulseLabelAnchor`. Fades in over `fadeIn` from departure, stays fully visible through
+ * the dot's contact with the destination box, then fades out over `fadeOut` after arrival (with
+ * `land: "edge"` that fade is the handoff to the edge label). `x` is the left edge, `y` the baseline.
+ */
+export function pulseLabel(p: Timeline["pulses"][number], t: number): PulseFrame["label"] | undefined {
+  if (!p.label || t < p.tf0 || t >= p.tf1 + PULSE_LABEL.fadeOut) return undefined
+  const fin = clamp01((t - p.tf0) / PULSE_LABEL.fadeIn)
+  const fout = t <= p.tf1 ? 1 : 1 - clamp01((t - p.tf1) / PULSE_LABEL.fadeOut)
+  const s = t >= p.tf1 ? p.length : pulseEase(p, (t - p.tf0) / (p.tf1 - p.tf0)) * p.length
+  const anc = pulseLabelAnchor(pulseLabelWindows(p.label, p.length, p.spans, p.points), p.spans, s)
+  const o = r2(smoothstep(fin) * smoothstep(fout) * anc.o)
+  if (o <= 0.005) return undefined
+  const at = pointAt(p.points, anc.s)
+  // Orientation over a ±40 px window (integrated, so the label glides around corners).
+  const h = horizontality(p.points, anc.s - 40, anc.s + 40)
+  const w = textWidth(p.label, PULSE_LABEL.size)
+  const cap = PULSE_LABEL.size * 0.36
+  const xH = at.x - w / 2
+  const yH = at.y - PULSE_LABEL.above
+  const xV = at.x + PULSE_LABEL.right
+  const yV = at.y + cap
+  // Through a corner the label rises first, then slides over, so it never sits on the dot.
+  const hy = smoothstep(h * 2)
+  const hx = smoothstep(h * 2 - 1)
+  return { text: p.label, x: r2(xV + (xH - xV) * hx), y: r2(yV + (yH - yV) * hy), o }
+}
+
 /** The resting frame: everything shown, nothing moving. Equals the static diagram. */
 export function restFrame(t = 0): Frame {
   return { t, el: {}, grow: {}, draw: {}, pulses: [], glows: [], flash: {}, counters: {}, captions: [], settled: true }
@@ -82,6 +185,107 @@ export function counterValue(c: Timeline["counters"][string], t: number, reduced
  */
 export function storyState(scene: Scene, tl: Timeline | undefined, t: number, opts: StateOptions = {}): Frame {
   if (!tl) return restFrame(t)
+  if (tl.acts?.length) return actState(scene, tl, t, opts)
+  return baseState(scene, tl, t, opts)
+}
+
+const segCache = new WeakMap<Timeline, Timeline[]>()
+
+/** The timeline as act k sees it: the persistent channels of its segment (`acts[j].state`, nearest j ≤ k). */
+export function actTimeline(tl: Timeline, k: number): Timeline {
+  let list = segCache.get(tl)
+  if (!list) {
+    list = []
+    let cur = tl
+    for (const a of tl.acts ?? []) {
+      if (a.state) cur = { ...tl, ...a.state }
+      list.push(cur)
+    }
+    segCache.set(tl, list)
+  }
+  return list[Math.max(0, Math.min(k, list.length - 1))] ?? tl
+}
+
+/**
+ * The settled end of an act (`#act=`, `--act`, `#sheet=acts`): its last beat's tile time (settled,
+ * caption on) before the next act's transition; the last act = the story's end. Undefined for an
+ * unknown act.
+ */
+export function actEndTime(tl: Timeline, id: string): number | undefined {
+  const acts = tl.acts ?? []
+  const k = acts.findIndex((a) => a.id === id)
+  if (k < 0) return undefined
+  if (k === acts.length - 1) return tl.duration
+  const next = acts[k + 1].t0
+  const tiles = beatTimes(tl, Infinity).filter((b) => b.t < next - 1e-6 && b.t >= acts[k].t0 - 1e-6)
+  return tiles.length ? tiles[tiles.length - 1].t : Math.max(acts[k].t0, next - 0.001)
+}
+
+/** Index of the act in effect at `t` (its transition included). */
+export function actIndexAt(tl: Timeline, t: number): number {
+  const acts = tl.acts ?? []
+  let k = 0
+  for (let j = 1; j < acts.length; j++) if (acts[j].t0 <= t + 1e-9) k = j
+  return k
+}
+
+/**
+ * Act stories: inside a rewind window the frame is the previous act at an earlier time (played
+ * backwards, eased; no captions); inside a cut, its end then its start under a dip; elsewhere
+ * the act's own segment. Plus the act chip.
+ */
+function actState(scene: Scene, tl: Timeline, t: number, opts: StateOptions): Frame {
+  const acts = tl.acts!
+  const k = actIndexAt(tl, t)
+  const a = acts[k]
+  const reduced = opts.reduced === true || opts.stepped === true
+  const win = a.rewind ?? a.cut
+  let frame: Frame
+  let rewind: number | undefined
+  let dip: number | undefined
+  if (win && t < win.t1 - 1e-9 && !opts.stepped) {
+    const u = clamp01((t - win.t0) / Math.max(1e-6, win.t1 - win.t0))
+    let m: number
+    if (a.rewind) {
+      m = reduced ? win.from0 : win.from1 - inOutCubic(u) * (win.from1 - win.from0)
+      rewind = r2(u)
+    } else {
+      m = u < 0.5 && !reduced ? win.from1 : win.from0
+      dip = reduced ? 1 : r2(Math.abs(1 - 2 * u))
+    }
+    frame = baseState(scene, actTimeline(tl, k - 1), m, { ...opts, captionBeat: undefined })
+    frame.t = t
+    frame.captions = []
+    frame.settled = false
+  } else frame = baseState(scene, actTimeline(tl, k), t, opts)
+  frame.act = { k, id: a.id, chip: actChip(tl, t, reduced), ...(rewind !== undefined ? { rewind } : {}), ...(dip !== undefined && dip < 1 ? { dip } : {}) }
+  return frame
+}
+
+/** Chip layers at `t`: "● label" per act, "◀◀ rewind" during rewinds, crossfading. */
+export function actChip(tl: Timeline, t: number, reduced = false): NonNullable<Frame["act"]>["chip"] {
+  type C = { text: string; tone?: Tone; rewind?: boolean }
+  const seq: { t: number; c: C }[] = []
+  for (const [j, a] of (tl.acts ?? []).entries()) {
+    const c: C = { text: a.label, ...(a.tone ? { tone: a.tone } : {}) }
+    if (j === 0) seq.push({ t: -Infinity, c })
+    else if (a.rewind) {
+      seq.push({ t: a.rewind.t0, c: { text: REWIND_CHIP, rewind: true } })
+      seq.push({ t: a.rewind.t1, c })
+    } else if (a.cut) seq.push({ t: (a.cut.t0 + a.cut.t1) / 2, c })
+    else seq.push({ t: a.t0, c })
+  }
+  let j = 0
+  for (let x = 1; x < seq.length; x++) if (seq[x].t <= t + 1e-9) j = x
+  const cur = seq[j]
+  const f = reduced || j === 0 ? 1 : smoothstep((t - cur.t) / CHIP_FADE)
+  const out: NonNullable<Frame["act"]>["chip"] = []
+  if (f < 1 && j > 0) out.push({ ...seq[j - 1].c, o: r2(1 - f) })
+  out.push({ ...cur.c, o: r2(f) })
+  return out.filter((x) => x.o > 0.005 || x === out[out.length - 1])
+}
+
+function baseState(scene: Scene, tl: Timeline, t: number, opts: StateOptions = {}): Frame {
   const reduced = opts.reduced === true || opts.stepped === true
   // Completion clock: in stepped mode, draws finish as of the end of the step in effect.
   let tc = t
@@ -110,7 +314,7 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
     if (reduced) v = step(tc - d.t1)
     else if (d.mode === "flight" && d.pulse) {
       const p = pulseById.get(d.pulse)!
-      const u = inOutCubic((t - p.tf0) / (p.tf1 - p.tf0))
+      const u = pulseEase(p, (t - p.tf0) / (p.tf1 - p.tf0))
       const s = t < p.tf0 ? 0 : u * p.length
       v = clamp01((s - (d.s0 ?? 0)) / Math.max(1e-6, (d.s1 ?? 0) - (d.s0 ?? 0)))
     } else v = smooth(t - d.t0)
@@ -153,7 +357,7 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
         pf.halo = { r: r2(S.pulse.halo - (S.pulse.halo - S.pulse.dot) * e), o: r2(0.5 * Math.sin(Math.PI * e)) }
       } else if (t < p.tf1 - 1e-6) {
         // (Within 1 µs of arrival counts as landed: step times are rounded to the ms.)
-        const s = inOutCubic((t - p.tf0) / (p.tf1 - p.tf0)) * p.length
+        const s = pulseEase(p, (t - p.tf0) / (p.tf1 - p.tf0)) * p.length
         const at = pointAt(p.points, s)
         pf.x = r2(at.x)
         pf.y = r2(at.y)
@@ -187,7 +391,12 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
           })
         }
       }
-      if (pf.o > 0 || pf.ring || pf.trail.length) frame.pulses.push(pf)
+      if (p.tone) pf.tone = p.tone
+      if (p.label) {
+        const L = pulseLabel(p, t)
+        if (L) pf.label = L
+      }
+      if (pf.o > 0 || pf.ring || pf.trail.length || pf.label) frame.pulses.push(pf)
     }
 
     // Flood glows and arrival flashes.
@@ -203,7 +412,7 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
       const Sz = Math.min(Math.max(box.w, box.h) * 1.15, Math.min(box.w, box.h) * 2.6)
       const amp = smoothstep(u / 0.06) * (1 - smoothstep((u - 0.55) / 0.45))
       if (amp < 0.005) continue
-      const gf: GlowFrame = { id: `${g.node}@${g.t}`, node: g.node, cx: r2(g.cx), cy: r2(g.cy), r: r2(Sz * (0.12 + 0.6 * easeOutCubic(u))), a: r2(S.glow.alpha * amp) }
+      const gf: GlowFrame = { id: `${g.node}@${g.t}`, node: g.node, cx: r2(g.cx), cy: r2(g.cy), r: r2(Sz * (0.12 + 0.6 * easeOutCubic(u))), a: r2(S.glow.alpha * amp), ...(g.tone ? { tone: g.tone } : {}) }
       frame.glows.push(gf)
     }
   }
@@ -231,7 +440,7 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
       const dim = 1 - (1 - S.dimSuperseded) * (reduced ? 1 : react(t - c.t0))
       const gone = reduced ? 0 : 1 - smoothstep((t - c.t0 - 0.9) / 0.4)
       const o = r2(dim * gone)
-      if (o > 0.01) frame.captions.push({ i: cur - 1, text: prev.text, o, words: prev.text.split(/\s+/).map(() => 1), current: false })
+      if (o > 0.01) frame.captions.push({ i: cur - 1, text: prev.text, o, words: prev.text.split(/\s+/).map(() => 1), current: false, ...(prev.em ? { em: prev.em } : {}), ...(prev.tone ? { tone: prev.tone } : {}) })
     }
     frame.captions.push({
       i: cur,
@@ -239,13 +448,15 @@ export function storyState(scene: Scene, tl: Timeline | undefined, t: number, op
       o: r2(fadeOut),
       words: words.map((_, i) => r2(reduced ? 1 : spring(t - c.t0 - i * stagger, f))),
       current: true,
+      ...(c.em ? { em: c.em } : {}),
+      ...(c.tone ? { tone: c.tone } : {}),
     })
   }
   if (opts.captionBeat !== undefined) {
     // Step moves: the target beat's caption, whole, at once.
     const k = opts.captionBeat === null ? -1 : captionForBeat(tl, opts.captionBeat)
     const c = k >= 0 ? tl.captions[k] : undefined
-    frame.captions = c ? [{ i: k, text: c.text, o: 1, words: c.text.split(/\s+/).map(() => 1), current: true }] : []
+    frame.captions = c ? [{ i: k, text: c.text, o: 1, words: c.text.split(/\s+/).map(() => 1), current: true, ...(c.em ? { em: c.em } : {}), ...(c.tone ? { tone: c.tone } : {}) }] : []
   }
   return frame
 }

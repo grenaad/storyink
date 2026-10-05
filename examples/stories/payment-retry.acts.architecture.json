@@ -1,0 +1,340 @@
+{
+  "$schema": "../../schema/storyink.schema.json",
+  "type": "architecture",
+  "title": "A soft decline should not lose the order",
+  "subtitle": "Today vs. with a retry queue: the same checkout, before and after the change",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "shop",
+      "kind": "client",
+      "label": "checkout",
+      "detail": "cart $42.00"
+    },
+    {
+      "id": "orders",
+      "kind": "service",
+      "label": "order service",
+      "detail": "idle",
+      "files": [
+        "src/orders/charge.ts"
+      ]
+    },
+    {
+      "id": "payments",
+      "kind": "external",
+      "label": "payments API"
+    },
+    {
+      "id": "cancel",
+      "kind": "function",
+      "label": "cancel order",
+      "detail": "on any decline",
+      "delta": "removed",
+      "summary": "Soft declines no longer cancel the order"
+    },
+    {
+      "id": "retry",
+      "kind": "queue",
+      "label": "retry queue",
+      "detail": "backoff 30 s",
+      "delta": "added",
+      "summary": "Soft declines are retried with backoff"
+    },
+    {
+      "id": "db",
+      "kind": "database",
+      "label": "orders db"
+    }
+  ],
+  "edges": [
+    {
+      "from": "shop",
+      "to": "orders"
+    },
+    {
+      "from": "orders",
+      "to": "payments"
+    },
+    {
+      "from": "orders",
+      "to": "cancel",
+      "delta": "removed"
+    },
+    {
+      "from": "orders",
+      "to": "retry",
+      "delta": "added"
+    },
+    {
+      "from": "retry",
+      "to": "payments",
+      "delta": "added"
+    },
+    {
+      "from": "orders",
+      "to": "db"
+    }
+  ],
+  "story": {
+    "acts": [
+      {
+        "id": "today",
+        "label": "today",
+        "tone": "risk"
+      },
+      {
+        "id": "fix",
+        "label": "with a retry queue",
+        "tone": "good"
+      }
+    ],
+    "steps": [
+      {
+        "caption": "A customer pays $42",
+        "pulse": {
+          "route": [
+            "shop->orders",
+            "orders->payments"
+          ],
+          "tone": "note",
+          "label": "charge $42.00"
+        },
+        "status": {
+          "id": "orders",
+          "to": "running"
+        },
+        "set": {
+          "id": "orders",
+          "detail": "charging…",
+          "tone": "warn"
+        }
+      },
+      {
+        "caption": "The bank answers with a *soft decline*: try again later",
+        "pulse": {
+          "edge": "orders->payments",
+          "reverse": true,
+          "tone": "warn",
+          "label": "soft decline",
+          "tint": true
+        },
+        "toast": {
+          "near": "payments",
+          "title": "Soft decline",
+          "text": "try again later · code 51",
+          "tone": "warn",
+          "for": 2.6
+        }
+      },
+      {
+        "caption": "Today any decline cancels the order",
+        "pulse": {
+          "edge": "orders->cancel",
+          "tone": "risk",
+          "label": "order.cancelled",
+          "tint": true
+        },
+        "status": {
+          "id": "orders",
+          "to": "error"
+        },
+        "set": {
+          "id": "orders",
+          "detail": "order lost",
+          "tone": "risk"
+        },
+        "counter": {
+          "id": "lost",
+          "to": 1
+        },
+        "type": {
+          "id": "log",
+          "cps": 26
+        },
+        "tone": {
+          "ids": "lost",
+          "to": "risk"
+        }
+      },
+      {
+        "caption": "…and the customer sees an error",
+        "pulse": {
+          "edge": "shop->orders",
+          "reverse": true,
+          "tone": "risk",
+          "label": "402 payment failed",
+          "tint": true,
+          "stain": true
+        },
+        "set": {
+          "id": "shop",
+          "detail": "payment failed",
+          "tone": "risk"
+        },
+        "toast": {
+          "id": "failed",
+          "near": "shop",
+          "title": "Payment failed",
+          "text": "your order was cancelled",
+          "tone": "risk",
+          "for": 3.2
+        }
+      },
+      {
+        "act": "fix",
+        "caption": "Now with a retry queue for soft declines"
+      },
+      {
+        "caption": "The same $42 charge, the same soft decline",
+        "pulse": [
+          {
+            "route": [
+              "shop->orders",
+              "orders->payments"
+            ],
+            "tone": "note",
+            "label": "charge $42.00"
+          },
+          {
+            "edge": "orders->payments",
+            "reverse": true,
+            "tone": "warn",
+            "label": "soft decline",
+            "tint": true,
+            "delay": 1.4
+          }
+        ],
+        "status": {
+          "id": "orders",
+          "to": "running"
+        },
+        "set": {
+          "id": "orders",
+          "detail": "charging…",
+          "tone": "warn"
+        }
+      },
+      {
+        "caption": "The order waits in the queue instead of failing",
+        "pulse": {
+          "edge": "orders->retry",
+          "tone": "warn",
+          "label": "retry in 30 s",
+          "tint": true
+        },
+        "set": {
+          "id": "orders",
+          "detail": "pending retry",
+          "tone": "warn"
+        },
+        "toast": {
+          "near": "retry",
+          "title": "Retry scheduled",
+          "text": "in 30 s · attempt 2 of 3",
+          "tone": "warn",
+          "for": 2.6
+        }
+      },
+      {
+        "caption": "The retry goes through",
+        "pulse": [
+          {
+            "edge": "retry->payments",
+            "tone": "warn",
+            "label": "retry charge"
+          },
+          {
+            "edge": "orders->payments",
+            "reverse": true,
+            "tone": "good",
+            "label": "approved",
+            "tint": true,
+            "stain": true,
+            "delay": 1.1
+          }
+        ]
+      },
+      {
+        "caption": "The order is saved: *no lost sale*",
+        "pulse": [
+          {
+            "edge": "orders->db",
+            "tone": "good",
+            "label": "INSERT order",
+            "tint": true,
+            "stain": true
+          },
+          {
+            "edge": "shop->orders",
+            "reverse": true,
+            "tone": "good",
+            "label": "201 paid",
+            "tint": true,
+            "stain": true,
+            "delay": 0.5
+          }
+        ],
+        "status": {
+          "id": "orders",
+          "to": "done"
+        },
+        "set": [
+          {
+            "id": "orders",
+            "detail": "paid",
+            "tone": "good"
+          },
+          {
+            "id": "shop",
+            "detail": "order confirmed",
+            "tone": "good"
+          },
+          {
+            "id": "log",
+            "text": "log ▸ order #1042 paid on retry 2",
+            "tone": "good"
+          }
+        ],
+        "tone": [
+          {
+            "ids": [
+              "retry",
+              "orders->retry",
+              "retry->payments"
+            ],
+            "to": "good",
+            "stagger": 0.15
+          },
+          {
+            "ids": "lost",
+            "to": "good"
+          }
+        ],
+        "toast": {
+          "near": "shop",
+          "title": "Order confirmed ✓",
+          "text": "receipt sent",
+          "tone": "good",
+          "for": 2.8
+        }
+      }
+    ],
+    "hud": [
+      {
+        "id": "lost",
+        "label": "lost orders",
+        "value": 0
+      }
+    ]
+  },
+  "annotations": [
+    {
+      "id": "log",
+      "on": "orders",
+      "side": "bottom",
+      "text": "log ▸ order #1042 cancelled",
+      "tone": "risk"
+    }
+  ]
+}

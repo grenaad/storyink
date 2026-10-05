@@ -12,7 +12,7 @@ import { hasNarration } from "../story/narrate.ts"
 import { diagramCss, viewerCss } from "../render/css.ts"
 import { hasDrawer } from "../render/Drawer.tsx"
 import { diffViewCss } from "../render/DiffView.tsx"
-import { fontCss, isChangeScene, isRichScene, StoryinkError } from "../render/index.tsx"
+import { fontCss, isChangeScene, isOverlayScene, isRichScene, isToneScene, StoryinkError } from "../render/index.tsx"
 import { Blocks, type RenderCtx } from "./blocks.tsx"
 import { pageCss, pageThemeCss } from "./css.ts"
 import { scrollyCss, slidesCss } from "./css-story.ts"
@@ -194,6 +194,8 @@ export function renderPageHtml(input: unknown, opts: PageHtmlOptions = {}): stri
   const list = [...scenes.values()]
   const rich = list.some(isRichScene)
   const change = list.some(isChangeScene)
+  const tones = list.some(isToneScene)
+  const overlays = list.some(isOverlayScene)
   const narrate = list.some(hasNarration)
   const drawer = narrate || list.some(hasDrawer)
   const counters = list.some((s) => s.timeline && Object.keys(s.timeline.counters).length)
@@ -220,7 +222,9 @@ export function renderPageHtml(input: unknown, opts: PageHtmlOptions = {}): stri
     JSON.stringify({ version: VERSION, figures, ...(page.changes ? { changes: page.changes } : {}), ...(scrollies.size ? { scrolly } : {}), slides: slideData }),
   )
   const viewer = opts.viewer === false ? "" : `<script id="storyink-viewer">${VIEWER_JS.replace(/<\/script/gi, "<\\/script")}</script>`
-  const vcss = viewerCss({ narrate, drawer, page: true })
+  const acts = [...scenes.values()].some((sc) => !!sc.timeline?.acts)
+  const hud = [...scenes.values()].some((sc) => !!sc.timeline?.hud)
+  const vcss = viewerCss({ narrate, drawer, page: true, ...(acts ? { acts } : {}), ...(hud ? { hud } : {}) })
   return `<!doctype html>
 <html lang="en" class="si-noscript si-page"${opts.theme ? ` data-theme="${opts.theme}"` : ""}>
 <head>
@@ -229,9 +233,9 @@ export function renderPageHtml(input: unknown, opts: PageHtmlOptions = {}): stri
 <meta name="generator" content="storyink ${VERSION}">
 <title>${escapeHtml(page.title)}</title>
 <style id="storyink-font">${fontCss()}</style>
-<style id="storyink-theme">${themeCss(":root", undefined, true, true)}
+<style id="storyink-theme">${themeCss(":root", undefined, true, true, tones)}
 ${pageThemeCss()}</style>
-<style id="storyink-diagram-css">${diagramCss(rich, change)}</style>
+<style id="storyink-diagram-css">${diagramCss(rich, change, tones, overlays)}</style>
 <style id="storyink-viewer-css">${vcss}${counters ? ROLLING_CSS : ""}</style>
 <style id="storyink-page-css">${diffViewCss()}
 ${pageCss()}

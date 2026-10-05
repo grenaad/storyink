@@ -8,6 +8,7 @@ import type { Scene, SceneBadge, SceneNode } from "../scene.ts"
 import type { ChangeStat, Delta, FileRef, FileRefLike, Spec } from "../spec.ts"
 import { isSequence } from "../spec.ts"
 import { r2, snap, textWidth } from "./measure.ts"
+import { withoutDeltaLook } from "../story/acts.ts"
 
 export const BADGE_TEXT: Record<Delta, string> = { added: "NEW", modified: "CHANGED", removed: "REMOVED", unchanged: "" }
 /** Legend order. */
@@ -139,6 +140,7 @@ export function specHasChanges(spec: Spec): boolean {
  * (the viewBox grows upward by `legendH`, wider if the legend needs it).
  */
 export function applyChanges(scene: Scene, spec: Spec): void {
+  spec = withoutDeltaLook(spec)
   if (!specHasChanges(spec)) return
   const src = isSequence(spec)
     ? spec.messages.map((m, k) => ({ id: m.id ?? `msg-${k}`, e: m }))

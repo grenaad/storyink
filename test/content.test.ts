@@ -282,7 +282,7 @@ describe("step-level validation", () => {
     expect(errs([{ show: "s" }])).toEqual([`warning: "s" is not hidden here; show has no effect`])
     expect(errs([{ focus: "zz" }])).toEqual([`error: unknown id "zz"`])
     expect(errs([{ focus: "c#2" }])).toEqual([])
-    expect(errs([{ status: { id: "c", to: "done" } }])).toEqual([`error: status takes a panel row ("p#r1")`])
+    expect(errs([{ status: { id: "c", to: "done" } }])).toEqual([`error: status takes a panel row ("p#r1") or a plain graph node`])
     expect(errs([{ wire: "nope" }])[0]).toMatch(/^error: unknown edge "nope"/)
     expect(errs([{ dim: ["p#r1", "e1", "c"], hide: "c->k" }])).toEqual([])
   })

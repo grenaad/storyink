@@ -1,4 +1,5 @@
 /** Page stylesheet (`#storyink-page-css`). Tones reuse the delta palette; both themes via variables. */
+import { TONE_SOURCE, toneRef } from "../../theme/tones.ts"
 import { fonts, page as P, pagePalettes, type ThemeName, type as T, v } from "../../theme/tokens.ts"
 
 const vars = (t: ThemeName) =>
@@ -17,13 +18,10 @@ export function pageThemeCss(fixed?: ThemeName): string {
   ].join("\n")
 }
 
-const TONE: Record<string, [string, string]> = {
-  neutral: [v("inkMuted"), v("panelAlt")],
-  note: ["var(--sp-note)", "var(--sp-noteFill)"],
-  good: [v("deltaAdded"), v("deltaAddedFill")],
-  warn: [v("deltaModified"), v("deltaModifiedFill")],
-  risk: [v("deltaRemoved"), v("deltaRemovedFill")],
-}
+/** Page tones: ink and fill from the shared tone table (`theme/tones.ts`). */
+const TONE: Record<string, [string, string]> = Object.fromEntries(
+  (["neutral", "note", "good", "warn", "risk"] as const).map((t) => [t, [toneRef(TONE_SOURCE[t].ink), toneRef(TONE_SOURCE[t].fill)]]),
+)
 
 export function pageCss(): string {
   const serif = fonts.serif

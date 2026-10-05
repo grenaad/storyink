@@ -16,6 +16,7 @@ function typeOk(t: string, v: unknown): boolean {
   if (t === "number") return typeof v === "number"
   if (t === "string") return typeof v === "string"
   if (t === "boolean") return typeof v === "boolean"
+  if (t === "null") return v === null
   return false
 }
 
@@ -71,6 +72,7 @@ const ex = path.join(import.meta.dir, "..", "examples")
 const files = [
   ...fs.readdirSync(ex).filter((f) => f.endsWith(".json")).map((f) => path.join(ex, f)),
   ...fs.readdirSync(path.join(ex, "changes")).filter((f) => f.endsWith(".json") && !f.endsWith(".changes.json")).map((f) => path.join(ex, "changes", f)),
+  ...fs.readdirSync(path.join(ex, "stories")).filter((f) => f.endsWith(".json")).map((f) => path.join(ex, "stories", f)),
   path.join(import.meta.dir, "fixtures", "openwick-architecture.json"),
   ...fs.readdirSync(path.join(ex, "pages")).filter((f) => f.endsWith(".page.json")).map((f) => path.join(ex, "pages", f)),
 ]
@@ -105,6 +107,18 @@ describe("JSON schema", () => {
     expect(bad({ nodes: [{ id: "a" }], edges: [{ from: "a", to: "a", emphasis: "loud" }] })).toBe(true)
     expect(bad({ nodes: [{ id: "a" }], change: { branch: "x" } })).toBe(true)
     expect(check(root, { type: "sequence", title: "s", participants: [{ id: "a", delta: "removed" }], messages: [{ from: "a", to: "a", delta: "added", emphasis: "muted", files: ["x"] }] })).toEqual([])
+  })
+
+  test("tones: pulse options, tone steps, toned glow, set tone", () => {
+    const spec = (steps: unknown[]) => ({ type: "dataflow", title: "t", nodes: [{ id: "a" }, { id: "b" }], edges: [{ from: "a", to: "b" }], story: { steps } })
+    const ok = (steps: unknown[]) => check(root, spec(steps)).length === 0
+    expect(ok([{ pulse: { edge: "a->b", tone: "note", label: "GET /", land: "edge", tint: true, stain: true } }])).toBe(true)
+    expect(ok([{ tone: { ids: ["a", "a->b"], to: "risk", stagger: 0.1 } }, { tone: [{ ids: "a", to: null }] }])).toBe(true)
+    expect(ok([{ glow: { ids: "a", tone: "warn" } }, { set: { id: "a", detail: "x", tone: "good" } }, { set: { id: "a", tone: null } }])).toBe(true)
+    expect(ok([{ pulse: { edge: "a->b", tone: "blue" } }])).toBe(false)
+    expect(ok([{ pulse: { edge: "a->b", land: "node" } }])).toBe(false)
+    expect(ok([{ tone: { ids: "a" } }])).toBe(false)
+    expect(ok([{ tone: { ids: "a", to: "risky" } }])).toBe(false)
   })
 
   test("pages: accepts blocks, rejects bad block shapes", () => {

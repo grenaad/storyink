@@ -99,10 +99,15 @@ export function stepFocus(scene: Scene, tl: Timeline, i: number, pad: number = C
     if (n) return { x: n.x, y: n.y, w: n.w, h: n.h }
     const e = scene.edges.find((x) => x.id === id)
     if (e) return union([ptsBox(e.points)!, ...(e.label ? [e.label] : [])])
+    const a = scene.annotations?.find((x) => x.id === id)
+    if (a) return a.box
+    const ts = scene.toasts?.find((x) => x.id === id)
+    if (ts) return { x: ts.x, y: ts.y, w: ts.w, h: ts.h }
     const p = scene.lifelines.find((x) => x.participant === id)
     if (p) return { x: p.x, y: p.y1, w: 0, h: p.y2 - p.y1 }
-    // Rows, code lines ("node#row", "code#3"), label targets ("node@label").
-    return boxOfRef(scene, id.replace(/@label$/, ""))
+    // Rows, code lines ("node#row", "code#3"), version targets ("node@label", "node@detail", "edge@elabel").
+    if (/@\w+$/.test(id)) return boxOf(id.replace(/@\w+$/, ""))
+    return boxOfRef(scene, id)
   }
   const pad1 = (b: Box) => ({ x: b.x - pad, y: b.y - pad, w: b.w + 2 * pad, h: b.h + 2 * pad })
   if (st.focus) {
@@ -131,6 +136,9 @@ export function stepFocus(scene: Scene, tl: Timeline, i: number, pad: number = C
   for (const [id, ev] of Object.entries(tl.wires ?? {})) if (ev.some((e) => inStep(e.t0))) add(boxOf(id))
   for (const [id, e] of Object.entries(tl.changes ?? {})) if (inStep(e.t0)) add(boxOf(id))
   for (const [id, ev] of Object.entries(tl.applies ?? {})) if (ev.some((e) => inStep(e.t0))) add(boxOf(id))
+  for (const [id, ev] of Object.entries(tl.tones ?? {})) if (ev.some((e) => inStep(e.t))) add(boxOf(id))
+  for (const [id, ev] of Object.entries(tl.status ?? {})) if (!id.includes("#") && ev.some((e) => inStep(e.t))) add(boxOf(id))
+  for (const [id, w] of Object.entries(tl.toasts ?? {})) if (inStep(w.t0)) add(boxOf(id))
   const u = union(boxes)
   if (!u) return undefined
   return pad1(u)

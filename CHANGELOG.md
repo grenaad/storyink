@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.6.0
+
+- **Payload label track** — a pulse label now appears at departure parked clear of the source box,
+  holds until the dot catches up, moves with the dot, parks clear of the destination box and stays
+  fully visible until the dot touches it, then fades out over 0.2 s after arrival (was: faded out
+  before arrival and near every box). Multi-hop routes hand off between hops with a short fade
+  instead of drawing over the intermediate node. One rule (`pulseLabelWindows` /
+  `pulseLabelAnchor`) drives playback, the animated SVG and the labelled flight timing, whose
+  legible share is now the share where the label follows the dot.
+- **Readable payload labels in flight** — a pulse with a `label` now flies slower and at a steady
+  cruise (not `inOutCubic`), so its text stays legible while it travels: reading budget 0.6 s +
+  0.05 s per character over the legible share of the flight, clamped to 1.2–3.2 s, never faster
+  than before. An explicit pulse `duration` still wins; unlabelled pulses are unchanged
+  (byte-identical output). Shared by playback, step moves, snapshots and the animated SVG.
+- **Tones: colour carries meaning** — five tones (`note` blue · `warn` gold · `risk` rose · `good`
+  sage · `neutral` ink), one source shared with page tones (`theme/tones.ts`). Pulses take
+  `tone`, a payload `label` (mono, rides beside the dot, fades clear of nodes; layer gaps widen for
+  it), `land: "edge"` (the label stays as the arriving edge's label), `tint` (the target takes the
+  tone on arrival) and `stain` (each wire keeps the tone once the dot has passed). New `tone` step
+  field `{ ids, to, stagger? }` for nodes (all kinds), groups and edges: tinted face, toned
+  stroke / tag / detail, toned wire / ports / label, toned group border; 0.35 s crossfade; `to:
+  null` clears; `stagger` sweeps. `set` works on plain graph nodes (`label`, `detail`, `tag`, and a
+  detail-line `tone`), `status` on plain nodes draws the glyph at the start of the detail line;
+  boxes fit every version (no resize mid-story). `glow: { ids, tone }` glows in a tone. Caption
+  `*emphasis*` in the accent (`\*` literal). Timeline `tones`, frame `tone` / `litTone`, pulse
+  `tone` / `label`, caption `em`; HTML viewer, static SVG, snapshots, beat sheets and the
+  animated SVG (opacity-only tone layers) agree. Diagnostics with did-you-mean (tones, ids, pulse
+  fields), warnings for clipped labels, `tint` / `stain` without a tone, `land` without a label,
+  no-op tones, plain nodes still running at the end. Schema, docs ("Tones"), example
+  `examples/stories/request-colours.dataflow.json`. Specs without these features render
+  byte-identically.
+- **Acts: problem → rewind → fix** — `story.acts` (2–6 `{ id, label, tone? }`) and step fields
+  `act` / `enter` (`rewind` default · `cut` · `continue`) tell several scenarios on one stage
+  (graph diagrams). Elements say `in: [acts]`, or `delta` decides (removed → first act, added →
+  later acts); act stories drop the delta look. Positions are shared; each edge is routed only
+  against the boxes it coexists with, so a first-act wire runs straight through the slot of a
+  node the fix inserts (lint ignores pairs that never coexist). A rewind plays the previous act
+  backwards (eased, `clamp(len / 4, 0.6, 1.5)` s, captions hidden; HTML glitch + blur, plain in
+  the animated SVG), a cut dips; then a morph retracts leaving wires, fades leaving boxes, reveals
+  entering ones and draws entering wires. Later acts start from the previous act's start state.
+  Act chip ("● label", "◀◀ rewind") on the HTML stage and in the animated SVG header. `#act=<id>`,
+  `#sheet=acts`, `snapshot --act / --sheet acts` (tool `act`, `sheet: "acts"`), `render --svg
+  --act`. Timeline `acts`, frame `act`. Diagnostics with did-you-mean. Examples
+  `examples/stories/secret-broker.architecture.json` and
+  `examples/stories/payment-retry.acts.architecture.json`.
+- **Overlays: annotations, toasts, HUD** — `annotations: [{ id, on, side?, text, tone?, in? }]`:
+  one mono line on a node's left edge, above or below it, its room reserved by the layout (edge
+  labels avoid it); story `reveal` / `hide` / `show` / `type` (char or word, caret) / `set` (`text`,
+  `tone`) / `clear` / `tone` take annotation ids; a typed-first annotation is hidden until typed.
+  Step `toast` (`{ id?, near, title?, text, tone?, for? }`) and `dismiss` (ids or `"all"`):
+  floating cards placed deterministically at layout time (above the anchor, then shifted, then a
+  row higher, then below; never over nodes, groups, edge labels, annotations or toasts up at the
+  same time; the viewBox grows to fit), fade + rise + scale in, fade out; `tone` steps reach them;
+  warnings for toasts still up when an act or the story ends. `story.hud: [{ id, label, value?,
+  tone?, prefix?, suffix?, at? }]`: stage metrics driven by `counter` steps, toned and revealed
+  like elements; HTML stage overlay below the act chip, a header row in the animated SVG, a line on
+  beat / act sheet tiles. Rewinds and act resets cover all three. Timeline `toasts` / `hud`, frame
+  `toasts`; schema, docs ("Annotations", "Toasts", "HUD metrics"). The secret-broker and
+  payment-retry examples use them; `bun run gallery:stories` builds a local showcase
+  (`examples/stories/out/index.html`). Specs without these features render byte-identically.
+
 ## 0.5.0
 
 - **Scrollytelling and slides: viewer** — figure API `beats()` and `moveTo({ beat } | { t },

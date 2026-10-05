@@ -221,19 +221,113 @@ viewer). A pulse may also be `{ "edge", "reverse": true }` (travels to → from)
 | step field | meaning |
 | ---------- | ------- |
 | `type`     | typewriter on a `code` node or a panel row `node#row`: id or `{ id, by?, cps?, duration? }`. Code types by `char` (default 90 chars/s, `cps` overrides, `duration` fixes the total; a caret follows); rows type by `word` (words fade in, 0.3–2.8 s). Typing speed is **not** scaled by `pace` (pace only sets the reading holds between beats); a beat's stop waits for its typing. Typing a row also reveals it. |
-| `set`      | swap content with a 0.25 s crossfade: `{ id, code? }` on a code node, `{ id, text?, detail?, tag? }` on a row, `{ id, label? }` on a panel, code or chip node (header / chip label). Set + `type` in the same step starts the new version empty and types it. |
+| `set`      | swap content with a 0.25 s crossfade: `{ id, code? }` on a code node, `{ id, text?, detail?, tag? }` on a row, `{ id, label? }` on a panel, code or chip node (header / chip label), `{ id, label?, detail?, tag?, tone? }` on a plain graph node (see [Tones](#tones-colour-carries-meaning)). Set + `type` in the same step starts the new version empty and types it. |
 | `clear`    | fade a code node's / row's content out (type again only after a `set`). |
 | `line`     | active-line bar on a code node: `"code#2"`, `"code#2-4"`, `{ id, lines }`, or `{ id, off: true }`. |
-| `status`   | `{ id: "node#row", to }` with `none` `running` (spinner + shimmer sweep over the text) `done` (check draws on) `error` (cross). |
+| `status`   | `{ id: "node#row", to }` with `none` `running` (spinner + shimmer sweep over the text) `done` (check draws on) `error` (cross). Also `{ id: "<plain node>", to }`: the glyph at the start of the node's detail line. |
 | `dim` / `undim` | lower to a level (`"x"`, a list, or `{ ids, to }`; default 0.42) / back to 1. Nodes, groups, edges, rows. Independent of visibility: a dimmed thing that is hidden and shown again comes back dimmed. |
 | `hide` / `show` | take a visible thing away / bring it back (fade). Unlike `reveal`, which marks something as *new* (absent until its step, with a rise), `hide`/`show` act on things already in the diagram and can repeat. |
 | `wire` / `unwire` | draw an edge on at wire speed (hidden before the step) / retract it source end first; `"edge"` or `{ edge, duration }`. |
-| `glow` / `unglow` | persistent glow on a node until `unglow` (a pulse's arrival glow is separate and brief). |
+| `glow` / `unglow` | persistent glow on a node until `unglow` (a pulse's arrival glow is separate and brief). `{ "ids", "tone" }` glows in a tone's colour; a glow in another tone takes over from the current one. |
+| `tone`     | colour elements by what they are: `{ ids, to, stagger? }` or a list (see [Tones](#tones-colour-carries-meaning)). |
 | `focus`    | an id, or a list of ids (their union box), the follow camera, the spotlight and the veil aim at for this step. |
 | `change`   | change diagrams: apply these elements' delta look with motion (see [Change stories](#change-stories)). |
 
 Mistakes are diagnostics with a hint, never crashes: typing a cleared target, a line past the
 program's last line, `undim` on something not dimmed, a status that doesn't change, and so on.
+
+#### Tones (colour carries meaning)
+
+Colour says what the data is. Five **tones**, the same names and colours as page tones:
+`note` (blue: a request, data in flight) · `warn` (gold: pending, processing) · `risk` (rose: a
+failure, a leak) · `good` (sage: approved, done) · `neutral` (ink). Diagrams use the tone's ink
+and a **tint** (the ink mixed into the node face, ~16 % light / 20 % dark), in both themes'
+house style.
+
+```jsonc
+"steps": [
+  { "caption": "A *request* leaves the browser",
+    "pulse": { "route": ["client->gateway", "gateway->orders"], "tone": "note", "label": "POST /orders" } },
+  { "status": { "id": "orders", "to": "running" },
+    "set": { "id": "orders", "detail": "charging card…", "tone": "warn" },
+    "pulse": { "edge": "orders->payments", "tone": "warn", "label": "charge $42.00", "tint": true } },
+  { "tone": { "ids": ["payments", "orders->payments", "orders->alerts"], "to": "risk", "stagger": 0.15 } },
+  { "pulse": { "route": ["client->gateway", "gateway->orders"], "reverse": true, "tone": "good",
+               "label": "201 Created", "stain": true, "land": "edge" } }
+]
+```
+
+**Pulse options** (object form; all optional; `edge`, `route`, lists, `reverse`, `delay` as before):
+
+| field   | meaning |
+| ------- | ------- |
+| `tone`  | dot, halo, trail, arrival ring and arrival glow in the tone (absent: the usual pulse ink). |
+| `label` | payload text riding with the dot: mono, 10 px, horizontal, above a horizontal wire and right of a vertical one (it glides around corners), in the tone (muted ink without one). Placement follows the **label track** (below): it appears at departure parked clear of the source box, follows the dot, parks clear of the destination box and stays fully visible until the dot touches it, then fades out over 0.2 s. Over 32 chars it is clipped with "…" (warning). Layer gaps widen to give labelled wires room. Sequence messages take `tone` and `label` too. A labelled pulse flies slower so the label can be read in flight (see **Labelled pulse timing** below). |
+| `land: "edge"` | with a `label`: on arrival the label becomes the arriving edge's label (crossfading with any label it had; part of the end state). The layout reserves the label slot for the widest version. |
+| `tint: true` | with a `tone`: on arrival the target node takes the tone (a tone event at the arrival time). |
+| `stain: true` | with a `tone`: each wire of the route keeps the tone from the moment the dot leaves it, until a later stain or `tone` changes it. |
+
+**Label track.** Per hop the label has a window of arc lengths where its footprint clears both end
+boxes: half its width + 8 px on a horizontal run, a text line (12 px) + 8 px on a vertical one,
+judged by the wire's direction over the hop's first / last 40 px. The label sits at the dot's
+position clamped into the current hop's window: held at the source side (fading in over 0.15 s
+from departure) until the dot catches up, then moving with the dot, then held at the destination
+side while the dot arrives; at full opacity through contact; fading out over 0.2 s after arrival
+(with `land: "edge"` that fade overlaps the edge label's crossfade in). Between hops (the dot
+crossing an intermediate node, at least 24 px of travel) the label fades out at the old hop's end
+and back in on the next hop, never drawn across the node. A hop too short for the label's window
+pins it at the hop's midpoint, where it may touch a box. Playback, snapshots and the animated SVG
+share this one rule. Reduced motion has no flights and so no labels.
+
+**Labelled pulse timing.** Unlabelled pulses keep their flight: route length / 520 px/s, clamped
+to 0.45–1.6 s, eased with `inOutCubic`. A pulse with a `label` instead *cruises* (speed ramps up
+over the first 20 % of the flight, holds, ramps down over the last 20 %) and gets a reading
+budget of **0.6 s + 0.05 s per shown character** (after clipping to 32). The flight is that budget
+divided by the share of the flight in which the label moves with the dot (inside a hop's label-track
+window, not held and not mid-handoff), clamped to **1.2–3.2 s** and never faster
+than the unlabelled flight. Short wires therefore slow most; long wires barely change; a wire too
+short for the label to ever follow the dot uses 1.2 s (the label is held, still readable). An explicit `duration` always wins. The flight is part of
+the compiled timeline, so playback, step moves, rewinds, snapshots and the animated SVG share it;
+`pace` still scales only the reading holds between beats, not flights.
+
+**`tone` step field**: `{ "ids": id | [ids], "to": tone | null, "stagger"?: s }` or a list.
+Targets: graph nodes (every kind, panels / code / chips too), groups and edges (`"a->b"` works).
+A toned node gets a tinted face, a stroke, ink bar, tag and detail line in the tone; its label
+stays ink. A toned edge: wire, heads, ports and label. A group: border and label. `to: null`
+clears back to the rest look. Changes crossfade over 0.35 s (the old tone's layer out, the new
+one in); `stagger` delays each id after the first in list order (a contagion sweep). Tones
+persist into the final frame. Sequence diagrams: an error (tone the pulses instead).
+
+**`set` and `status` on plain graph nodes.** `set: { id, label?, detail?, tag?, tone? }` crossfades
+(0.25 s) each field on its own. `tone` colours only the detail line (it wins over the node's tone
+for that line); a `set` with only a `tone` keeps the text, a new `detail` without a `tone` is
+untoned. `status: { id: "<node>", to }` draws the row glyphs (spinner / check / cross) at the
+start of the detail line; a node the story gives a status has its detail line left-aligned after a
+reserved glyph slot. Boxes are sized for every version the story sets (and the detail line exists
+if any version has one), so nothing resizes mid-story. Panels / code / chips keep their own `set`
+fields (rows, code, label); `detail` / `tag` / `tone` on them are errors.
+
+**Toned glow.** `glow: { "ids": [...], "tone": "warn" }`: a persistent glow in the tone's ink with a
+toned rim; string / list forms are unchanged.
+
+**Caption emphasis.** `*phrase*` in a `caption` draws that phrase in the accent colour (`note`;
+an act's tone once acts exist); `\*` is a literal asterisk, an unpaired `*` stays as is. Beat
+tiles, scrubber labels, `__storyink.steps` and narration fallbacks show the text without the
+asterisks.
+
+Diagnostics: unknown tones and ids get a did-you-mean; `tint` / `stain` without a `tone` and
+`land` without a `label` warn; a clipped label warns; a `tone` that changes nothing warns; a plain
+node still `running` at the end warns; unknown pulse fields warn with a did-you-mean.
+
+**Under the hood** (all pure functions of time, so the viewer, snapshots, beat sheets, the follow
+camera and the animated SVG agree): `timeline.tones[id] = [{ t, to }]` (tone steps, tints and
+stains, time-sorted) → `frame.tone[id][tone]` layer opacities (`toneFrame`); pulses carry `tone` /
+`label` → `frame.pulses[].tone` / `.label`; landed labels are label versions `"<edge>@elabel"` and
+plain-node text versions `"<node>@label|@detail|@tag"` in `timeline.versions`; node statuses in
+`timeline.status["<node>"]`; toned glows are `lit` windows with a `tone` → `frame.litTone`;
+caption emphasis is `captions[].em` (char ranges of the plain text). The renderer draws one layer
+per element and tone the story uses (`si-tone si-t-<tone>`), whose opacity is the only animated
+property in the SMIL output. Specs without tones render byte-identically (no tone CSS / palette).
 
 A step **ends** when its reveals settle (react spring, 0.53 s), its pulses arrive (gather 0.34 s
 + flight 0.45–1.6 s by path length), or its caption's reading time (0.25 s + 0.075 s/word, 1–3 s)
@@ -276,6 +370,141 @@ reader can take in what it did, without slowing the animation itself:
 sources, then pulse breadth-first waves and reveal what they reach (edges into a group enter its
 entry states, notes appear with their target); sequences pulse every message in order, with
 activations, frames and notes following their messages.
+
+### Acts: problem → rewind → fix (`story.acts`)
+
+One stage, several scenarios. The first act shows the problem; a **rewind** plays it backwards to
+its start, the topology changes in place (wires retract, a node appears in the gap, new wires draw)
+and the same request is replayed through the fix. Graph diagrams only (a sequence with `acts` is an
+error).
+
+```jsonc
+"story": {
+  "acts": [ { "id": "before", "label": "raw CLI", "tone": "risk" },
+            { "id": "after",  "label": "with broker", "tone": "good" } ],
+  "steps": [ /* act 1 starts at step 0 */ …,
+             { "act": "after", "enter": "rewind", "caption": "Same request, with a broker" }, … ]
+}
+```
+
+- **`acts`**: 2–6 `{ id, label, tone? }` with unique ids. `label` is the act chip's text; `tone`
+  colours the chip's dot and the caption `*emphasis*` of that act's steps.
+- **`act`** (step field) starts that act: acts start in declared order, each once; the first act
+  starts at step 0 unless a step names it there. Steps belong to the act most recently started.
+  The entry step is a chapter (its `stop` defaults to the act label).
+- **`enter`** (acts after the first): `"rewind"` (default) · `"cut"` · `"continue"`.
+- **Membership**: any node, group or edge may say **`in: [actIds]`**. Without `in`, an element with
+  `delta: "removed"` is in the first act only, `delta: "added"` in every act but the first, anything
+  else in every act. An edge is also limited to the acts both its ends are in. In act stories the
+  delta *look* is off (no ghosts, badges, delta colours or legend; tones carry the meaning); `delta`
+  still feeds summaries, the drawer and narration. Membership composes with `reveal`, `hide` /
+  `show` and `wire` (those act within the acts where the element exists).
+- **Layout**: node and group positions come from one layout of every act, so nothing moves between
+  acts. Each edge is **routed against only the boxes that coexist with it** (on stage in one of
+  its acts): a first-act wire `agent → cli` runs straight through the slot of an after-only node
+  placed between them. Browser lint ignores pairs that never share an act. Specs without acts
+  route exactly as before.
+- **Transitions** (compiled into the timeline, so the viewer, snapshots, beat sheets, the follow
+  camera and the animated SVG agree):
+  - `rewind`: after the previous act's last beat settles (and its reading hold), a window of
+    `clamp((actEnd − actStart) / 4, 0.6, 1.5)` s plays the previous act **backwards** to its start
+    (eased): the frame at time t is the story state at the mapped earlier time, so pulses fly back
+    and tones, text and statuses revert. Captions are hidden in the window. The HTML viewer adds
+    the glitch and blur of the R rewind; the animated SVG plays the plain reverse.
+  - `cut`: a 0.4 s dip (the diagram fades out and back in) to the previous act's start.
+  - `continue`: no reset.
+  - Then the **morph**: leaving wires retract (0.5 s), leaving nodes / groups fade (0.35 s),
+    entering ones reveal (fade + rise, 0.53 s), entering wires draw on (0.6 s) once both ends show;
+    empty stages are skipped. Elements a step of the new act reveals are left to that step. The
+    entry step's own events and caption follow; the rewind + morph are its beat (camera focus: the
+    leaving and entering elements).
+  - After a rewind or cut the act starts from the previous act's **start state**: the steps of
+    the undone act no longer count (its tones, statuses, text versions, counters, reveals and
+    wires are gone), while `continue` keeps everything.
+- **Act chip**: "● label" (dot in the act tone, mono) pinned to the HTML stage's top-right corner
+  (not affected by pan / zoom), "◀◀ rewind" (muted) during a rewind, 0.25 s crossfade; in the
+  animated SVG right-aligned in the header row.
+- **Exports**: `#act=<id>` seeks (paused) to the act's settled end; `#sheet=acts` shows one tile
+  per act side by side (the problem | fix diptych). `storyink snapshot --act <id>` and
+  `--sheet acts` (tool `storyink_snapshot` `act`, `sheet: "acts"`); `storyink render --svg out.svg
+  --act <id>` writes that act's settled end as the static SVG.
+- **Timeline**: `timeline.acts = [{ id, label, tone?, t0, t1, body, enter?, rewind?: { t0, t1,
+  from0, from1 }, cut?: {…}, morph?: { t0, t1 }, state? }]` (`state`: the act's persistent
+  channels, with undone steps moved to "never"); frames carry `act: { k, id, chip, rewind?, dip? }`.
+- **Diagnostics**: unknown act ids in `in` / `act` / `enter` (did-you-mean), acts out of order or
+  started twice, an edge never on stage (error), an act that never starts or has no steps, `enter`
+  on a step that starts no later act, and `change` steps in act stories (warnings).
+
+### Annotations (`annotations`)
+
+A single mono line (tag-sized) attached to a node, left-aligned with its left edge, just above
+(`side: "top"`, default) or below its box. Graph diagrams.
+
+```jsonc
+"annotations": [ { "id": "chat", "on": "agent", "text": "chat ▸ sk-live-7Hq2…", "tone": "risk" } ]
+```
+
+- `{ id, on: nodeId, side?: "top" | "bottom", text, tone?, in?: [acts] }`. Ids share the node
+  namespace. Muted ink without a tone.
+- **Room**: the layout reserves the line's band around the node (both sides, so centres stay
+  aligned) and wide enough for every version, so it never overlaps nodes, groups or edge labels
+  (labels avoid it); wires still attach to the node face. Nothing resizes mid-story.
+- **Story**: `reveal`, `hide` / `show`, `tone`, `type` (`{ id, by?: "char" | "word", cps? }`; char
+  by default, 28 chars/s, with a caret), `set` (`{ id, text?, tone? }`; a new text is untoned unless
+  the set gives a tone; 0.25 s crossfade) and `clear` take annotation ids. An annotation whose
+  first appearance is a `type` is hidden until then (typing starts empty).
+- **Acts**: an annotation follows its node's acts unless it says `in`; it comes and goes with the
+  morph. After a rewind its text is back to the act's start (a typed line is empty again), so a
+  later act can `set` the same slot to the opposite tone — the before / after in one place.
+- It goes with its node (reveal, hide / show).
+
+### Toasts (`toast`, `dismiss`)
+
+Small floating cards near a node: the title in ink, the text in its tone, a tone stripe.
+
+```jsonc
+{ "toast": { "id": "p1", "near": "cli", "title": "Allow access?", "text": "vault CLI wants 1 secret", "tone": "warn" } }
+{ "toast": { "near": "broker", "title": "approved once ✓", "text": "no more prompts", "tone": "good", "for": 2.8 } }
+{ "dismiss": "all" }
+```
+
+- `toast`: `{ id?, near: nodeId, title?, text, tone?, for?: s }` or a list. The default id is
+  `toast-<step>-<k>` (1-based). `for` fades it by itself after that many seconds; otherwise it stays
+  until a `dismiss` names it (ids, or `"all"` up at that moment).
+- **Placement** is deterministic and done by the layout over the story's toast steps in order
+  (visibility simulated by step order and dismissals; a `for` toast counts as up until dismissed
+  or its act ends, so slots never collide): candidate slots above the anchor first (centred, then
+  shifted left / right by card width + gap, then a row higher), then below; never over nodes,
+  groups (other than the anchor's), edge labels, annotations or toasts up at the same time. The
+  viewBox grows to fit them, so the fit and follow cameras include them. Slots are stored on the
+  scene (`scene.toasts`).
+- **Motion**: appear = fade + 4 px rise + scale 0.96 → 1 (0.3 s); dismiss / expiry = fade
+  (0.25 s). Reduced motion shows them settled.
+- `tone` steps take toast ids (a contagion sweep turns them rose too); `hide` / `show` too.
+- **Acts**: a toast belongs to the act it appears in; a rewind plays it backwards and the next act
+  starts without it (after a rewind / cut). A toast still up when its act ends or at the end of the
+  story is a **warning** (the static diagram would show it).
+- Timeline `toasts: { [id]: { t0, t1? } }`; frames carry `toasts: { [id]: { o, dy, s } }`.
+
+### HUD metrics (`story.hud`)
+
+Big mono `label: value` numbers on the stage — the metric that drops between the problem and the
+fix ("prompts: 4" → "prompts: 0").
+
+```jsonc
+"story": { "hud": [ { "id": "prompts", "label": "prompts", "value": 0 } ], "steps": [ …,
+  { "counter": { "id": "prompts", "to": 1 } }, …, { "tone": { "ids": "prompts", "to": "good" } } ] }
+```
+
+- `{ id, label, value?: number (default 0), tone?, prefix?, suffix?, at?: "top-right" |
+  "bottom-left" }`. Ids share the element namespace.
+- Driven by the existing **`counter`** step (`{ id: hudId, to }`; rolling value like node
+  counters). `tone`, `reveal`, `hide` / `show` take HUD ids (a revealed HUD is hidden until its
+  step). A rewind reverses it like anything else; after it the value is back to the act's start.
+- **Where**: the HTML viewer pins it to the stage (not affected by pan / zoom), top-right below the
+  act chip (or bottom-left); beat / act sheet tiles show it in their caption line; the animated
+  SVG gives it a header row of its own. The static SVG (no header) does not show it.
+- Timeline `hud: [{ id, label, value, tone?, prefix?, suffix?, at }]`; values in `counters[id]`.
 
 ### Motion mode (`story.motion`)
 
